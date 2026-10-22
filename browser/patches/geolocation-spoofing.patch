@@ -84,7 +84,10 @@ diff --git a/dom/system/NetworkGeolocationProvider.sys.mjs b/dom/system/NetworkG
 index 2dc54dc968..5bf84686ce 100644
 --- a/dom/system/NetworkGeolocationProvider.sys.mjs
 +++ b/dom/system/NetworkGeolocationProvider.sys.mjs
-@@ -483,28 +483,63 @@ NetworkGeolocationProvider.prototype = {
+@@ -480,34 +480,57 @@ NetworkGeolocationProvider.prototype = {
+       return;
+     }
+ 
      // From here on, do a network geolocation request //
      let url = Services.urlFormatter.formatURLPref("geo.provider.network.url");
  
@@ -94,11 +97,6 @@ index 2dc54dc968..5bf84686ce 100644
 +    let latitude = ChromeUtils.camouGetDouble("geolocation:latitude", DEFAULT_DEG);
 +    let longitude = ChromeUtils.camouGetDouble("geolocation:longitude", DEFAULT_DEG);
 +    let accuracy = ChromeUtils.camouGetDouble("geolocation:accuracy", 0);
-+
-+    let countDecimalPlaces = (num) => {
-+      if (Math.floor(num) === num) return 0;
-+      return num.toString().split(".")[1].length || 0;
-+    }
 +
      let result;
      try {
@@ -111,15 +109,8 @@ index 2dc54dc968..5bf84686ce 100644
 +        ChromeUtils.camouDebug(
 +          `Use Camoufox geo: ${latitude}:${longitude} accuracy:${accuracy}`
 +        );
-+        // If accuracy is not set, calculate it using decimal precision
-+        if (!accuracy) {
-+          let latPrecision = countDecimalPlaces(latitude);
-+          let lonPrecision = countDecimalPlaces(longitude);
-+          let precision = Math.min(latPrecision, lonPrecision);
-+
-+          // Estimate accuracy in meters
-+          accuracy = (111320 * Math.cos(latitude * Math.PI / 180)) / Math.pow(10, precision);
-+        }
++        // An accuracy of 0 is estimated from the coordinates'
++        // precision (GeolocationCoordinates::Accuracy).
 +        newLocation = new NetworkGeoPositionObject(
 +          latitude,
 +          longitude,
@@ -166,3 +157,66 @@ index 2dc54dc968..5bf84686ce 100644
        if (this.listener) {
          this.listener.update(newLocation);
        }
+ 
+       ensureCachedResponse();
+       gCachedResponse.store(newLocation, data.wifiAccessPoints);
+diff --git a/dom/geolocation/GeolocationCoordinates.cpp b/dom/geolocation/GeolocationCoordinates.cpp
+--- a/dom/geolocation/GeolocationCoordinates.cpp
++++ b/dom/geolocation/GeolocationCoordinates.cpp
+@@ -3,12 +3,16 @@
+  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+ 
+ #include "mozilla/dom/GeolocationCoordinates.h"
+ 
+ #include "mozilla/dom/GeolocationCoordinatesBinding.h"
+ #include "mozilla/dom/GeolocationPosition.h"
++#include "nsString.h"
++
++#include <algorithm>
++#include <cmath>
+ 
+ namespace mozilla::dom {
+ 
+ NS_IMPL_CYCLE_COLLECTION_WRAPPERCACHE(GeolocationCoordinates, mPosition)
+ NS_IMPL_CYCLE_COLLECTING_ADDREF(GeolocationCoordinates)
+ NS_IMPL_CYCLE_COLLECTING_RELEASE(GeolocationCoordinates)
+@@ -50,15 +54,38 @@ JSObject* GeolocationCoordinates::WrapObject(
+     return rv;                                                 \
+   }
+ 
+ GENERATE_COORDS_WRAPPED_GETTER(Latitude)
+ GENERATE_COORDS_WRAPPED_GETTER(Longitude)
+ GENERATE_COORDS_WRAPPED_GETTER_NULLABLE(Altitude)
+-GENERATE_COORDS_WRAPPED_GETTER(Accuracy)
+ GENERATE_COORDS_WRAPPED_GETTER_NULLABLE(AltitudeAccuracy)
+ GENERATE_COORDS_WRAPPED_GETTER_NULLABLE(Heading)
+ GENERATE_COORDS_WRAPPED_GETTER_NULLABLE(Speed)
+ 
+ #undef GENERATE_COORDS_WRAPPED_GETTER
+ #undef GENERATE_COORDS_WRAPPED_GETTER_NULLABLE
+ 
++// Camoufox: no device reports an accuracy of 0, which is what a position given
++// without one carries (Playwright's geolocation option, or geolocation:* without
++// geolocation:accuracy). Estimate it from the coordinates' precision: the width
++// of their last decimal place, a degree of longitude being 111,320 m at the
++// equator.
++double GeolocationCoordinates::Accuracy() const {
++  double rv;
++  mCoords->GetAccuracy(&rv);
++  if (rv > 0) {
++    return rv;
++  }
++  auto decimals = [](double aValue) {
++    nsAutoCString digits;
++    digits.AppendFloat(aValue);
++    int32_t dot = digits.FindChar('.');
++    return dot == kNotFound ? 0 : int32_t(digits.Length()) - dot - 1;
++  };
++  const double latitude = Latitude();
++  const int32_t precision =
++      std::min(decimals(latitude), decimals(Longitude()));
++  return 111320 * std::cos(latitude * 3.141592653589793 / 180) /
++         std::pow(10, precision);
++}
++
+ }  // namespace mozilla::dom
