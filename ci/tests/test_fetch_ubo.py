@@ -84,6 +84,37 @@ def test_packaging_bundles_it_where_the_launchers_look():
     assert fetch_ubo.ADDON_DIR.replace("\\", "/") == "addons/UBO"
 
 
+def test_ubo_policy_keeps_every_setting_and_uses_only_bundled_lists():
+    policies_path = BROWSER_ROOT / "settings" / "distribution" / "policies.json"
+    duplicates = []
+
+    def unique_pairs(pairs):
+        out = {}
+        for key, value in pairs:
+            if key in out:
+                duplicates.append(key)
+            out[key] = value
+        return out
+
+    policies = json.loads(policies_path.read_text(encoding="utf-8"), object_pairs_hook=unique_pairs)
+    assert not duplicates, f"duplicate JSON keys: {duplicates}"
+    ubo = policies["policies"]["3rdparty"]["Extensions"][GUID]
+    assert ubo["userSettings"] == [["autoUpdate", "false"]]
+    assert ubo["advancedSettings"] == [["suspendUntilListsAreLoaded", "false"]]
+    assert ubo["toOverwrite"]["filterLists"] == [
+        "user-filters",
+        "ublock-filters",
+        "ublock-badware",
+        "ublock-privacy",
+        "ublock-unbreak",
+        "ublock-quick-fixes",
+        "easylist",
+        "easyprivacy",
+        "urlhaus-1",
+        "plowe-0",
+    ]
+
+
 def test_a_release_bundles_the_ubo_its_tests_ran_with():
     """One resolve per build, handed to the package and the release notes."""
     workflows = REPO_ROOT / ".github" / "workflows"

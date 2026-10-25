@@ -257,6 +257,20 @@ rules:
       except_paths: ["python/pyproject.toml"]
       allowed_forms: ["-e ../../../python", "-e ./python", "-e python"]
 
+  - id: ubo-lists-pinned-to-bundled
+    title: uBlock Origin selects only the filter lists bundled with its release
+    check: manual   # ci/tests/test_fetch_ubo.py
+    evidence:
+      - "camoufox-free#211: a de-DE first run selected a regional list that was not bundled"
+      - "uBO platform/common/vapi-background.js holds tab requests while suspendDepth is nonzero"
+      - "uBO src/js/storage.js suspends network access in loadFilterLists() on Firefox"
+    rationale: >-
+      Every Camoufox launch starts with a fresh profile. A regional list makes
+      the first page wait on a CDN, while all ten default lists are already in
+      the bundled extension. Managed storage pins selection to those ten lists;
+      autoUpdate and suspendUntilListsAreLoaded remain in the same 3rdparty
+      object, because duplicate JSON keys would silently discard one policy.
+
   # -------------------------------------------------------------------------
   # Measurement
   # -------------------------------------------------------------------------

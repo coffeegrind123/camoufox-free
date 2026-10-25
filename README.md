@@ -66,7 +66,9 @@ For an identity whose OS is not the host's. Offered upstream in
   release workflow passes AMO's newest uBO release to packaging as
   `CAMOUFOX_UBO`; `browser/scripts/fetch-ubo.py` checks its SHA-256, add-on ID
   and version, then stages it under `addons/UBO/`. Bundle updates stay disabled,
-  so a launch uses the filter lists that shipped with its browser. ([`build.yml`](.github/workflows/build.yml))
+  and the selected filter lists are pinned to the ten lists inside that bundle,
+  so a first run downloads no regional list before pages load.
+  ([`build.yml`](.github/workflows/build.yml), [`policies.json`](browser/settings/distribution/policies.json))
 - **Linux x86_64 releases built by this repo's CI**
   ([`build.yml`](.github/workflows/build.yml)), with sha256 digests. No PyPI or
   npm packages are published, and upstream's release train doesn't run. ([b70dc6c](https://github.com/coffeegrind123/camoufox-free/commit/b70dc6c52c1605ad8bcf7c7770cf99d2235dd8a0))
