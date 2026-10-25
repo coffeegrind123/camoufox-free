@@ -672,6 +672,27 @@ def test_network_patch_overrides_accept_encoding_for_https_only():
     )
 
 
+def test_dnt_config_is_read_by_the_getter_and_wire_header():
+    patch = (BROWSER / "patches" / "privacy-signals-spoofing.patch").read_text(
+        encoding="utf-8"
+    )
+    assert 'MaskConfig::GetString("navigator.doNotTrack")' in patch
+    assert 'value.value() == "1"' in patch
+    assert "globalPrivacyControl" not in patch, (
+        "GPC already has separate context and worker support; this patch is DNT-only."
+    )
+
+
+def test_locale_override_reads_config_once_into_stable_storage():
+    patch = (BROWSER / "patches" / "locale-spoofing.patch").read_text(encoding="utf-8")
+    assert "static std::string locale;" not in patch
+    assert "static const std::optional<std::string> sLocale" in patch
+    assert "GetCamouLanguage" not in patch, (
+        "Only the default locale may be spoofed; per-locale global overrides are "
+        "not part of this fix."
+    )
+
+
 def test_a_sandbox_held_over_a_page_window_is_nuked_not_just_dropped():
     """Dropping the reference leaves the compartment to the cycle collector.
 

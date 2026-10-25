@@ -47,6 +47,7 @@ be listed there.
 | `navigator-spoofing.patch` | `navigator.*` |
 | `network-patches.patch` | `headers.*`, `navigator.userAgent` |
 | `no-css-animations.patch` | `instantAnimations` |
+| `privacy-signals-spoofing.patch` | `navigator.doNotTrack` |
 | `screen-spoofing.patch` | `screen.*` |
 | `system-ui-font-spoofing.patch` | `navigator.platform` |
 | `timezone-spoofing.patch` | `timezone` |
@@ -72,6 +73,7 @@ already set up, and do not add the include or `LOCAL_INCLUDES` themselves:
 | `font-metrics-windows.patch` | `font-hijacker.patch` for `/camoucfg` in `gfx/thebes/moz.build` |
 | `force-default-pointer.patch` | `screen-spoofing.patch` for `MaskConfig.hpp` in `layout/style/nsMediaFeatures.cpp`; `font-hijacker.patch` for `/camoucfg` in `layout/style/moz.build` |
 | `media-device-spoofing.patch` | `audio-context-spoofing.patch` for `/camoucfg` in `dom/media/moz.build` |
+| `privacy-signals-spoofing.patch` | `navigator-spoofing.patch` for `MaskConfig.hpp` in `dom/base/Navigator.cpp`; `network-patches.patch` for `/camoucfg` in `netwerk/protocol/http/moz.build` |
 | `system-ui-font-spoofing.patch` | `font-hijacker.patch` for `MaskConfig.hpp` in `gfx/thebes/gfxPlatformFontList.cpp` and `/camoucfg` in `gfx/thebes/moz.build` |
 | `touchscreen-fingerprint-spoofing.patch` | `navigator-spoofing.patch` for `MaskConfig.hpp` in `dom/base/Navigator.cpp` |
 | `font-list-spoofing.patch` | `anti-font-fingerprinting.patch` for `gfxFontGroup::mUserContextId` |

@@ -12,7 +12,15 @@ diff --git a/intl/components/src/Locale.cpp b/intl/components/src/Locale.cpp
 index 718d8814d8..7dc23ab003 100644
 --- a/intl/components/src/Locale.cpp
 +++ b/intl/components/src/Locale.cpp
-@@ -20,11 +20,35 @@
+@@ -13,6 +13,7 @@
+ 
+ #include <algorithm>
+ #include <iterator>
++#include <optional>
+ #include <stddef.h>
+ #include <stdint.h>
+ #include <string.h>
+@@ -20,11 +21,38 @@
  
  #include "unicode/uloc.h"
  #include "unicode/utypes.h"
@@ -25,16 +33,19 @@ index 718d8814d8..7dc23ab003 100644
 +// Camoufox: default-locale hooks (see Locale.h).
 +
 +const char* Locale::GetCamouLocale() {
-+  static std::string locale;
-+
-+  if (auto lang = MaskConfig::GetString("locale:language"))
-+    if (auto region = MaskConfig::GetString("locale:region"))
-+      locale = (lang.value() + "-" + region.value());
-+  if (auto value = MaskConfig::GetString("navigator.language"))
-+    locale = value.value();
-+  if (locale.empty())
-+    return nullptr;
-+  return locale.c_str();
++  static const std::optional<std::string> sLocale =
++      []() -> std::optional<std::string> {
++    if (auto value = MaskConfig::GetString("navigator.language")) {
++      return value;
++    }
++    auto lang = MaskConfig::GetString("locale:language");
++    auto region = MaskConfig::GetString("locale:region");
++    if (lang && region) {
++      return lang.value() + "-" + region.value();
++    }
++    return std::nullopt;
++  }();
++  return sLocale ? sLocale->c_str() : nullptr;
 +}
 +
 +const char* Locale::GetDefaultLocale() {

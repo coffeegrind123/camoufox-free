@@ -1920,11 +1920,11 @@ export async function launchOptions({
 		setInto(firefox_user_prefs, QUOTA_FIXED_LIMIT_PREF, quotaLimitKb);
 	}
 
-	// navigator.doNotTrack and navigator.globalPrivacyControl are pref-backed in
-	// Firefox; spoofing them anywhere else leaves the wire (or the worker)
-	// contradicting the API (daijro/camoufox#760). A stock Firefox 152 reports
-	// "unspecified" and false, so generated values are dropped unless the
-	// caller set them explicitly. screen.colorDepth is left as drawn.
+	// navigator.doNotTrack is read from CAMOU_CONFIG by the browser so values
+	// other than "1" survive; the pref remains the fallback for unset config.
+	// globalPrivacyControl is pref-backed across the window, workers and the
+	// Sec-GPC header (daijro/camoufox#760). Generated values are dropped unless
+	// the caller set them explicitly. screen.colorDepth is left as drawn.
 	if (!userSetDnt) {
 		delete config["navigator.doNotTrack"];
 	}

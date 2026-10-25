@@ -1,9 +1,10 @@
 # Mappings of fpgen fingerprints to Camoufox config properties.
 #
 # Fonts, voices and the rest of what fpgen carries are drawn from Camoufox's own
-# catalogues instead; WebGL is drawn by camoufox/webgl.py. doNotTrack and
-# globalPrivacyControl are prefs Camoufox owns (utils.launch_options), so
-# neither is mapped. fpgen carries header values as lists.
+# catalogues instead; WebGL is drawn by camoufox/webgl.py. doNotTrack is read
+# from CAMOU_CONFIG by the browser, and globalPrivacyControl is a pref Camoufox
+# owns (utils.launch_options), so neither is mapped. fpgen carries header values
+# as lists.
 
 navigator:
   # fpgen's UAs trail the current release; the version is rewritten to the
