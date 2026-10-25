@@ -3,7 +3,7 @@
   {
    "id": "office",
    "kind": "bundle",
-   "prob": 0.602,
+   "prob": 0.501,
    "fonts": [
     "Bodoni MT Condensed",
     "Stencil",
@@ -125,7 +125,7 @@
   {
    "id": "pan-euro",
    "kind": "bundle",
-   "prob": 0.028,
+   "prob": 0.024,
    "fonts": [
     "Arial Nova",
     "Georgia Pro",
@@ -138,7 +138,7 @@
   {
    "id": "libreoffice",
    "kind": "bundle",
-   "prob": 0.066,
+   "prob": 0.075,
    "fonts": [
     "Caladea",
     "Carlito",
@@ -205,7 +205,7 @@
   {
    "id": "dev",
    "kind": "alacarte",
-   "prob": 0.038,
+   "prob": 0.017,
    "fonts": [
     "Fira Code",
     "Fira Mono",
@@ -260,7 +260,7 @@
   {
    "id": "web",
    "kind": "alacarte",
-   "prob": 0.088,
+   "prob": 0.158,
    "fonts": [
     "Roboto",
     "Open Sans",
@@ -333,7 +333,7 @@
   {
    "id": "hololens",
    "kind": "bundle",
-   "prob": 0.592,
+   "prob": 0.289,
    "fonts": [
     "HoloLens MDL2 Assets"
    ]

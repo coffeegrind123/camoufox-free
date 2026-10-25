@@ -192,17 +192,32 @@ plus independent per-unit draws. Not a uniform percentage of a pool.
 
    | unit | kind | Windows | macOS | Linux |
    |------|------|--------:|------:|------:|
-   | `office` | bundle | 0.602 | — | — |
+   | `office` | bundle | 0.501 | — | — |
    | `apple-optional` | bundle | — | 0.818 | — |
-   | `hololens` | bundle | 0.592 | — | — |
+   | `hololens` | bundle | 0.289 | — | — |
    | `distro-i18n` | bundle | — | — | 0.372 |
-   | `libreoffice` | bundle | 0.066 | — | 0.112 |
-   | `pan-euro` | bundle | 0.028 | — | — |
+   | `libreoffice` | bundle | 0.075 | — | 0.112 |
+   | `pan-euro` | bundle | 0.024 | — | — |
    | `cascadia` | bundle | 0.100 | 0.060 | 0.080 |
    | `meslo` | bundle | 0.040 | 0.040 | 0.060 |
    | `cjk-tc` | bundle (`zh-TW`) | 0.900 | — | — |
-   | `dev` | à la carte | 0.038 | 0.070 | 0.174 |
-   | `web` | à la carte | 0.088 | 0.270 | 0.195 |
+   | `dev` | à la carte | 0.017 | 0.070 | 0.174 |
+   | `web` | à la carte | 0.158 | 0.270 | 0.195 |
+
+   The Windows rates of `office`, `hololens`, `libreoffice`, `pan-euro`, `dev`
+   and `web` are measured from the pinned fpgen model by
+   `browser/scripts/measure-font-units.py` (8,000 seeded draws; a unit is
+   counted by the fonts only it carries; a bundle counts when half of its
+   probed fonts show; an à-la-carte rate is corrected for the fonts the model
+   never probes). Each carries the model's tag in the manifest, and
+   `ci/tests/test_font_units.py` fails when the model is bumped and the rates
+   are not re-measured. `meslo` and `cascadia` have no font the model probes,
+   and `cjk-tc` is conditional on a locale the samples do not carry, so they
+   keep their rates. The macOS and Linux columns are not re-measured. A
+   Windows machine with only some of a bundle's fonts is not drawn: 12% of the
+   model's samples show one to a quarter of Office's fonts. Units are drawn
+   independently; the model pairs `web` with `dev` 4.2 times as often as
+   independence would.
 
    `apple-optional` is one atomic unit rather than base because Apple ships those
    57 faces as optional Font Book downloads, and the fpgen corpus puts all of
