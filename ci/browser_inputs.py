@@ -81,6 +81,7 @@ BROWSER_FILES = ("browser/upstream.sh", "browser/Makefile")
 NON_NATIVE_SCRIPTS = frozenset(
     {
         "browser/scripts/_font_bundle.py",
+        "browser/scripts/audit-property-tracer.py",
         "browser/scripts/check-input-dispatch.py",
         "browser/scripts/cursor-demo.py",
         "browser/scripts/export-mousecrack-weights.py",
