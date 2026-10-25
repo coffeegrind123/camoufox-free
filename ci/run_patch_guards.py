@@ -46,7 +46,6 @@ GROUPS: Dict[str, Tuple[str, ...]] = {
         "display-scale-resolution",
         "fingerprint-setter-seal",
         "font-fallback-windows",
-        "fontconfig-memo-per-context",
         "geolocation-accuracy",
         "ipv4-only-network",
         "locale-explicit-names",
@@ -65,6 +64,7 @@ GROUPS: Dict[str, Tuple[str, ...]] = {
     ),
     "automation": (
         "addons-install-once",
+        "context-process-isolation",
         "debug-logging-off",
         "force-scope-access",
         "humanize-edge-deadlock",
