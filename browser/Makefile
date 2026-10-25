@@ -7,8 +7,8 @@ ff_source_tarball := firefox-$(version).source.tar.xz
 .PHONY: help fetch setup-minimal setup ff-dbg revert fetch-fonts fonts-extract fonts-check \
         fonts-clean dir set-target mozbootstrap setup-macos-sdk bootstrap diff first-checkpoint \
         checkpoint clean distclean build package-linux package-macos package-windows run edit-cfg \
-        check-arg grep patch unpatch workspace tests stage-fonts unbusy path \
-        generate-assets-car
+        check-arg grep patch unpatch workspace tests stage-fonts stage-ubo unbusy path \
+        generate-assets-car sync build-js build-cpp verify-patches
 
 help:
 	@echo "Available targets:"
@@ -22,6 +22,10 @@ help:
 	@echo "  clean               - Remove build artifacts"
 	@echo "  distclean           - Remove everything including downloads"
 	@echo "  build               - Build Camoufox"
+	@echo "  sync                - Sync additions and settings without re-patching"
+	@echo "  build-js            - Sync, then rebuild JS, prefs and Juggler (mach build faster)"
+	@echo "  build-cpp           - Rebuild compiled code (mach build binaries)"
+	@echo "  verify-patches      - Replay the patch stack without preparing the source tree"
 	@echo "  set-target          - Change the build target with BUILD_TARGET"
 	@echo "  setup-macos-sdk     - Download the macOS SDK for cross-compilation"
 	@echo "  fetch-fonts         - Download and verify the font bundle"
@@ -29,6 +33,7 @@ help:
 	@echo "  fonts-check         - Verify the font bundle against its pin"
 	@echo "  fonts-clean         - Remove the downloaded and extracted font bundle"
 	@echo "  stage-fonts         - Stage the font bundle into an unpackaged build"
+	@echo "  stage-ubo           - Bundle the newest uBlock Origin into an unpackaged build"
 	@echo "  package-linux       - Package Camoufox for Linux"
 	@echo "  package-macos       - Package Camoufox for macOS"
 	@echo "  package-windows     - Package Camoufox for Windows"
@@ -64,7 +69,7 @@ setup-minimal:
 	mkdir -p $(cf_source_dir)
 	tar -xJf $(ff_source_tarball) -C $(cf_source_dir) --strip-components=1
 	# Copy settings & additions
-	cd $(cf_source_dir) && bash ../scripts/copy-additions.sh $(version) $(release)
+	python3 scripts/sync_additions.py $(cf_source_dir) --baseline
 
 setup: setup-minimal
 	# Initialize local git repo for development
@@ -164,6 +169,24 @@ build: unbusy
 	fi
 	cd $(cf_source_dir) && ./mach build $(_ARGS)
 
+# Fast paths for a prepared tree. Juggler, settings and other additions are
+# copied files, so syncing and rebuilding them does not require re-patching.
+sync:
+	@test -f $(cf_source_dir)/configure.py || \
+		{ echo "Run make dir first."; exit 1; }
+	python3 scripts/sync_additions.py $(cf_source_dir)
+
+build-js: sync
+	cd $(cf_source_dir) && ./mach build faster
+
+build-cpp:
+	@test -f $(cf_source_dir)/configure.py || \
+		{ echo "Run make dir first."; exit 1; }
+	cd $(cf_source_dir) && ./mach build binaries
+
+verify-patches:
+	python3 scripts/patchstack.py verify $(if $(filter true,$(compare)),--compare,)
+
 package-linux: fonts-extract
 	python3 scripts/package.py linux \
 		--includes \
@@ -247,6 +270,11 @@ tests:
 # checkout has no bundle/fonts/, and fonts-extract is a no-op once it does.
 stage-fonts: fonts-extract
 	bash scripts/stage-fonts.sh $(version) $(release)
+
+# The launchers load uBlock Origin from addons/UBO/ beside the binary, which only
+# scripts/package.py fills; this does the same for an unpackaged build.
+stage-ubo:
+	python3 scripts/fetch-ubo.py stage $(cf_source_dir)/obj-x86_64-pc-linux-gnu/dist/bin
 
 unbusy:
 	rm -rf $(cf_source_dir)/obj-x86_64-pc-linux-gnu/dist/bin/camoufox-bin \

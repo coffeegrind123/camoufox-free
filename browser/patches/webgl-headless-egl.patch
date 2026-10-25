@@ -1,0 +1,85 @@
+diff --git a/gfx/gl/GLContextProviderLinux.cpp b/gfx/gl/GLContextProviderLinux.cpp
+index 87bfa48d50..3f063938eb 100644
+--- a/gfx/gl/GLContextProviderLinux.cpp
++++ b/gfx/gl/GLContextProviderLinux.cpp
+@@ -33,7 +33,26 @@ already_AddRefed<GLContext> GLContextProviderLinux::CreateForCompositorWidget(
+ /*static*/
+ already_AddRefed<GLContext> GLContextProviderLinux::CreateHeadless(
+     const GLContextCreateDesc& desc, nsACString* const out_failureId) {
+-  if (gfxVars::UseEGL() ||
++  // Camoufox: headless has no window system, and the GLX branch below needs an
++  // X connection it cannot get, so WebGL context creation fails outright and
++  // canvas.getContext('webgl') hands the page a null. UseEGL is false because
++  // the X11_EGL feature is force-disabled: it requires the glxtest probe to
++  // have reported EGL, and that probe opens an X connection first and dies
++  // without one. A browser that claims a GPU in every other signal and has no
++  // WebGL at all is a louder tell than any renderer string.
++  //
++  // Take the EGL provider here instead. It reaches Mesa's swrast device, or
++  // EGL_PLATFORM_SURFACELESS_MESA where there is no render node, and either
++  // gives a real GL ES context on llvmpipe with no X server and no hardware.
++  //
++  // Narrowed to this function on purpose. Flipping gfxVars::UseEGL() would
++  // reach DMABUF, hardware video decoding, RenderCompositorEGL and the
++  // compositor's shared GL context, none of which should change behaviour
++  // just so WebGL can have a context. This is the offscreen factory --
++  // WebGLContext::CreateAndInitGL() calls it as "tryNativeGL" -- and in
++  // headless the branch it replaces could only ever fail.
++  static const bool isHeadless = !!PR_GetEnv("MOZ_HEADLESS");
++  if (gfxVars::UseEGL() || isHeadless ||
+       bool(desc.flags & CreateContextFlags::FORBID_HARDWARE)) {
+     // We request EGL if software is required, because we don't know
+     // what X11 is using. It could be software or hardware.
+diff --git a/gfx/thebes/gfxPlatform.cpp b/gfx/thebes/gfxPlatform.cpp
+index f45971a4ec..e9924df4db 100644
+--- a/gfx/thebes/gfxPlatform.cpp
++++ b/gfx/thebes/gfxPlatform.cpp
+@@ -3216,6 +3216,18 @@ void gfxPlatform::InitWebGLConfig() {
+     if (StaticPrefs::webgl_ignore_blocklist_AtStartup()) {
+       featureWebGL.UserForceEnable(
+           "Ignoring blocklist entry because webgl.ignore-blocklist is true.");
++#ifdef MOZ_WIDGET_GTK
++    } else if (IsHeadless()) {
++      // Camoufox: headless leaves gfxInfo with nothing to go on -- the glxtest
++      // probe opens an X connection before anything else and cannot reach one,
++      // so it fails and GfxInfo blocks most features by default. This says
++      // blocklisted for want of a display, not for want of a driver. Note the
++      // ordering: Disable() below writes the environment status, and SetUser()
++      // asserts that has not happened yet, which is why the force-enable goes
++      // here rather than after.
++      featureWebGL.UserForceEnable(
++          "Camoufox: headless, gfxInfo had no display to probe");
++#endif
+     }
+     featureWebGL.Disable(FeatureStatus::Blocklisted, message.get(), failureId);
+   }
+@@ -3230,6 +3242,29 @@ void gfxPlatform::InitWebGLConfig() {
+   gfxVars::SetAllowMetalAngleWebGL(
+       IsFeatureOk(nsIGfxInfo::FEATURE_WEBGL_ANGLE_METAL));
+ 
++  // Camoufox: same reasoning as the force-enable above, for the two vars that
++  // actually gate context creation. WebglAllowWindowsNativeGl is what
++  // WebGLContext.cpp checks before it will try native GL at all, and a headless
++  // process fails that check for want of a display rather than for want of a
++  // driver. Whether WebGL exists belongs to the fingerprint, not to the host's
++  // window system.
++  //
++  // WebglUseHardware stays false on purpose: nothing is accelerating a headless
++  // process, and false is what sends DefaultEglDisplay() to the swrast device
++  // before anything else.
++  //
++  // GTK only. The probe this works around is the X11/Wayland one; macOS and
++  // Windows reach gfxInfo without a window system, so their verdicts are real
++  // and forcing WebglUseHardware false there would drop a working hardware
++  // context onto a software rasterizer.
++#ifdef MOZ_WIDGET_GTK
++  if (IsHeadless()) {
++    gfxVars::SetAllowWebgl2(true);
++    gfxVars::SetWebglAllowWindowsNativeGl(true);
++    gfxVars::SetWebglUseHardware(false);
++  }
++#endif
++
+   if (kIsMacOS) {
+     // Avoid crash for Intel HD Graphics 3000 on OSX. (Bug 1413269)
+     nsString vendorID, deviceID;

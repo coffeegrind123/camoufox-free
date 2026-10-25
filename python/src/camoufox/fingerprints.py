@@ -130,9 +130,9 @@ def _load_os_fonts() -> Dict[str, List[str]]:
 # Each OS's base font set: every family a stock install ships, intersected with
 # the bundle, so it is always reported in full and never subsetted. Regenerate
 # essential-fonts.json with fonts.json (`browser/scripts/gen-fonts-json.py
-# --print-bases`). On Windows it includes the GDI-substitution and Light /
-# Semilight names fonts.conf rewrites unconditionally: they render, so they
-# must be reported.
+# --print-bases`). It holds the alias names fonts.conf rewrites only where
+# every base of the OS carries them: on Windows the GDI-substitution and Light /
+# Semilight names, on Linux the metric aliases whose target every base has.
 with open(os.path.join(os.path.dirname(__file__), 'essential-fonts.json'), 'rb') as _f:
     _ESSENTIAL = json.loads(_f.read())
 _ESSENTIAL_FONTS_WINDOWS: List[str] = _ESSENTIAL['win']
@@ -383,9 +383,9 @@ def _generate_random_font_subset(
     chosen = set(result)
 
     # _ESSENTIAL_FONTS_* is the guaranteed floor underneath whichever base was
-    # drawn: the GDI-substitution names on Windows and the alias names fonts.conf
-    # rewrites unconditionally have no file of their own, so they render for
-    # every identity and must be reported by every identity.
+    # drawn. It adds the alias names every base of the OS carries but no base
+    # lists as a family (the Linux metric aliases): they have no file of their
+    # own, and they render for every identity, so every identity reports them.
     for font in full_list:
         if font in essential and font not in chosen:
             result.append(font)
@@ -1441,6 +1441,7 @@ def generate_context_fingerprint(
     locale: Optional[str] = None,
     config_overrides: Optional[Dict[str, Any]] = None,
     webgl_config: Optional[Tuple[str, str]] = None,
+    launch_window: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """
     Generate fingerprint values for a single per-context identity.
@@ -1458,9 +1459,36 @@ def generate_context_fingerprint(
             context_options['locale'] for Playwright.
         config_overrides: Dict of CAMOU_CONFIG keys to override after config
             is built but before init_script is rendered (e.g. {'timezone': 'UTC'}).
-        webgl_config: The (vendor, renderer) a drawn identity claims, instead of
-            drawing one.
+        webgl_config: The (vendor, renderer) a drawn identity claims. It outranks
+            a preset's GPU; otherwise the GPU is drawn.
+        launch_window: The browser's launch window, as attach_launch_window records it
+            ({'outer': (w, h), 'inner': (w|None, h|None), 'screen': (w|None, h|None)}).
+            The window is process-wide, so the context's viewport is its inner size,
+            or its preset viewport clamped inside the outer window.
     """
+    # Only a well-formed record counts; a mock, a half-built dict or non-numeric
+    # dimensions describe no real launch window.
+    def _dimension(value: Any, *, optional: bool = False) -> bool:
+        if optional and value is None:
+            return True
+        return isinstance(value, (int, float)) and not isinstance(value, bool) and value > 0
+
+    if not (
+        isinstance(launch_window, dict)
+        and all(
+            isinstance(launch_window.get(key), (tuple, list))
+            and len(launch_window[key]) == 2
+            for key in ('outer', 'inner', 'screen')
+        )
+        and all(_dimension(value) for value in launch_window['outer'])
+        and all(_dimension(value, optional=True) for value in launch_window['inner'])
+        and all(_dimension(value, optional=True) for value in launch_window['screen'])
+    ):
+        launch_window = None
+
+    def _target_os(current: Dict[str, Any]) -> str:
+        return OS_KEYS.get(os or '') or OS_KEYS[platform_to_os(current.get('navigator.platform', ''))]
+
     if preset is not None:
         # Use real fingerprint preset
         config = from_preset(preset, ff_version)
@@ -1506,24 +1534,21 @@ def generate_context_fingerprint(
 
         # Draw the GPU and its WebGL data (fpgen.yml does not map these)
         if not config.get('webGl:vendor') or not config.get('webGl:renderer'):
-            # Not at the top: camoufox.webgl imports this module.
-            from .webgl import sample_webgl_for_screen, webgl_for_gpu
-
-            _target_os = OS_KEYS.get(os or '') or OS_KEYS[platform_to_os(config.get('navigator.platform', ''))]
             # Same coherence treatment launch_options applies (#729): lift
             # netbook geometry, then keep the GPU consistent with whatever
             # screen this identity ended up with. This path has no real
             # display to reconcile against, so the floor is unconditional.
             raise_screen_to_modern_floor(config)
-            if webgl_config:
-                webgl_fp = webgl_for_gpu(_target_os, *webgl_config)
-            else:
+            if not webgl_config:
+                # Not at the top: camoufox.webgl imports this module.
+                from .webgl import sample_webgl_for_screen
+
                 webgl_fp = sample_webgl_for_screen(
-                    _target_os, config.get('screen.width'), config.get('screen.height'),
+                    _target_os(config), config.get('screen.width'), config.get('screen.height'),
                     cores=config.get('navigator.hardwareConcurrency'),
                 )
-            webgl_fp.pop('webGl2Enabled')
-            config.update(webgl_fp)
+                webgl_fp.pop('webGl2Enabled')
+                config.update(webgl_fp)
 
         # Build source dicts from the fingerprint config for init_values
         nav = {
@@ -1542,6 +1567,24 @@ def generate_context_fingerprint(
         }
         preset = {'navigator': nav, 'screen': screen, 'webgl': webgl}
 
+    # An explicit pair outranks the preset's pair, just as it does in
+    # launch_options(). Replace the whole WebGL record so the init script and
+    # config cannot name different devices.
+    if webgl_config:
+        from .webgl import webgl_for_gpu
+
+        webgl_fp = webgl_for_gpu(_target_os(config), *webgl_config)
+        webgl_fp.pop('webGl2Enabled')
+        config.update(webgl_fp)
+        webgl = {
+            'unmaskedVendor': config['webGl:vendor'],
+            'unmaskedRenderer': config['webGl:renderer'],
+        }
+        preset = {
+            **preset,
+            'webgl': {**preset.get('webgl', {}), **webgl},
+        }
+
     # Inject explicit timezone/locale into config (takes priority over preset)
     if timezone:
         config['timezone'] = timezone
@@ -1559,6 +1602,28 @@ def generate_context_fingerprint(
         config_overrides = dict(config_overrides)
         drop_audio_seed(config_overrides)
         config.update(config_overrides)
+
+    # The launch window is process-wide, so every context's screen must hold it.
+    # When the drawn screen cannot, claim the launch screen, which
+    # launch_options already made hold the window.
+    if launch_window:
+        outer_width, outer_height = launch_window['outer']
+        screen_width, screen_height = screen.get('width'), screen.get('height')
+        launch_screen_width, launch_screen_height = launch_window['screen']
+        holds_window = (
+            screen_width
+            and screen_height
+            and screen_width >= outer_width
+            and screen_height >= outer_height
+        )
+        if not holds_window and launch_screen_width and launch_screen_height:
+            screen = {
+                **screen,
+                'width': launch_screen_width,
+                'height': launch_screen_height,
+            }
+            config['screen.width'] = launch_screen_width
+            config['screen.height'] = launch_screen_height
 
     # Build the values dict for the init script (works for both paths)
     init_values: Dict[str, Any] = {
@@ -1588,10 +1653,31 @@ def generate_context_fingerprint(
     sw = screen.get('width')
     sh = screen.get('height')
     if sw and sh:
-        context_options['viewport'] = {
-            'width': sw,
-            'height': max(sh - 28, 600),
-        }
+        inner_width, inner_height = (launch_window or {}).get('inner') or (None, None)
+        if inner_width and inner_height:
+            # The launch window's own inner size: inner <= outer by construction.
+            context_options['viewport'] = {
+                'width': inner_width,
+                'height': inner_height,
+            }
+        elif launch_window:
+            # No pinned inner: hold the preset viewport inside the launch outer.
+            window = {
+                'window.outerWidth': launch_window['outer'][0],
+                'window.outerHeight': launch_window['outer'][1],
+                'window.innerWidth': sw,
+                'window.innerHeight': max(sh - 28, 600),
+            }
+            clamp_window_dimensions(window)
+            context_options['viewport'] = {
+                'width': window['window.innerWidth'],
+                'height': window['window.innerHeight'],
+            }
+        else:
+            context_options['viewport'] = {
+                'width': sw,
+                'height': max(sh - 28, 600),
+            }
     dpr = screen.get('devicePixelRatio')
     if dpr:
         context_options['device_scale_factor'] = dpr

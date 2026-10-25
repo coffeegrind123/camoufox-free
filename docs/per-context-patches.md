@@ -36,6 +36,7 @@ Supporting patches, with no setter of their own:
 |---|---|
 | `anti-font-fingerprinting.patch` | The context id on each font group |
 | `cross-process-storage.patch` | `RoverfoxStorageManager`, the per-context store, with the IPC that makes a value set in one process readable in every other, and the guard and removal every setter uses |
+| `zzz-context-locale.patch` | A context's UA on worker requests, its locale in every JS scope and worker, and its language on requests and built-in strings |
 
 There is no canvas pixel noise, no audio noise and no glyph-spacing noise: each
 produces output no real machine does ([`ci/tribal-rules.yml`](../ci/tribal-rules.yml)). A
@@ -87,9 +88,8 @@ its own id).
 |---|---|
 | 1 | The setter resolves `userContextId` from the window's `BrowsingContext`. |
 | 2 | The value goes into the in-process cache. |
-| 3 | It is also written as a pref with the `roverfox.s.` prefix (every type serialized as a string). |
+| 3 | It is also written as a pref with the `roverfox.s.` prefix (every type serialized as a string), in chunks when it is over 3 KiB (below). |
 | 4 | In a content process, it is sent to the parent with sync IPC (`SendRoverfoxStoragePut`). |
-| 5 | Navigator, screen, timezone and WebGL also store it under id 0, for workers that cannot resolve their context. Fonts, voices and WebRTC do not. |
 
 | Tier | Read path |
 |---|---|
@@ -115,9 +115,22 @@ what the stock getter does.
 `cross-process-storage.patch` adds a sync message to `PContent.ipdl`,
 `RoverfoxStoragePut`. The parent accepts only pref names starting with
 `roverfox.s.`. Put is synchronous so the value is in the
-parent before any worker process starts. The patch also adds `roverfox.s.` to
-`sDynamicPrefOverrideList` in `Preferences.cpp`, because Firefox otherwise
-strips dynamically created string prefs from content processes.
+parent before any worker process starts. The patch also adds `roverfox.s.` and
+`roverfox.c.` to `sDynamicPrefOverrideList` in `Preferences.cpp`, because
+Firefox otherwise strips dynamically created string prefs without a default
+value from content processes. The values live on the default branch, so today
+that list is not what lets them through.
+
+Firefox sends no string pref longer than 4 KiB to another process
+(`MAX_ADVISABLE_PREF_LENGTH`, checked by `Pref::HasAdvisablySizedValues()` in
+both the snapshot a new process starts with and every later update). A value
+over 3 KiB, such as a font list of a few hundred names, is therefore written as
+chunk prefs `roverfox.c.<key>.<i>`, cut on UTF-8 code point boundaries, and then
+`roverfox.s.<key>` is written as a header: byte `0x01`, the chunk count, `:`,
+and a generation that makes every header differ from the last. Only the header
+matches the `roverfox.s.` callback, and pref updates reach a process in the
+order the parent made them, so the callback runs once, after every chunk has
+arrived. `StorePref` and `LoadPref` are the one writer and reader (#231).
 
 Files: `dom/base/RoverfoxStorageManager.cpp/h`, `ContentParent.cpp/h`,
 `PContent.ipdl`, `ipc/ipdl/sync-messages.ini`, `modules/libpref/Preferences.cpp`.
@@ -134,18 +147,16 @@ Every setter uses the same three `RoverfoxStorageManager` helpers:
 
 ### Context resolution and lookup order
 
-Windows resolve the id from `BrowsingContext`, which exists before the
-DocShell or Document attributes are populated:
+Windows, nodes and documents resolve the id from their principal:
 
 ```cpp
-if (BrowsingContext* bc = win->GetBrowsingContext()) {
-  userContextId = bc->OriginAttributesRef().mUserContextId;
-}
+userContextId = RoverfoxStorageManager::UserContextId(window);
 ```
 
-Workers use `WorkerPrivate::GetOriginAttributes()`. A spoofed getter checks the
-per-context value first, then `CAMOU_CONFIG` through `MaskConfig`, then the
-real value.
+This includes documents with no browsing context of their own. Workers use
+`WorkerPrivate::GetOriginAttributes()`. A spoofed getter checks the per-context
+value first, then `CAMOU_CONFIG` through `MaskConfig`, then the real value.
+Nothing stores a fallback copy under context 0.
 
 ### Prefs that make it work
 
@@ -166,6 +177,7 @@ real value.
 | `timezone-spoofing.patch` | SpiderMonkey `DateTimeInfo` per realm (`JS::SetRealmTimeZoneOverride`), `nsGlobalWindowOuter::SetNewDocument`, `WorkerPrivate::GetOrCreateGlobalScope` | The only patch inside SpiderMonkey. Re-applied on navigation and in dedicated, shared and service workers; also sets a process-wide override. Invalid IDs throw `TypeError`. |
 | `screen-spoofing.patch` | `nsScreen::GetRect`, `nsDeviceContext`, `nsMediaFeatures.cpp` | CSS `device-width` and `color` agree with `screen.*`. |
 | `navigator-spoofing.patch` | `Navigator::GetPlatform`, `GetOscpu`, `HardwareConcurrency`, `GetUserAgent`, `GetAppVersion`; the `WorkerNavigator` versions of platform, cores, UA and appVersion | Falls back to `navigator.*` in `CAMOU_CONFIG`. |
+| `zzz-context-locale.patch` | `BrowsingContext::DidSet(LanguageOverride)`, worker request channels, `RemoteWorkerChild`, content-process app locales and chrome | Stores a context locale for service workers and worker requests, makes the context's process default locale follow it, expands its language list, and selects its chrome and built-in strings. The launch locale remains the fallback. |
 | `webrtc-ip-spoofing.patch` | `SanitizeSDPForIPLeak`, `CandidateReady`, candidate `.address`/`.relatedAddress`, `getStats()`, `UpdateDefaultCandidate`, `NrSocketBase::CreateSocket` | Forces `default_address_only` while spoofing; loopback, link-local and private addresses are left alone. UDP candidate ports come from the ephemeral range of the identity's OS (`MaskConfig::SpoofedEphemeralPorts()`), so a Windows identity on Linux never shows a Linux port. |
 | `webgl-spoofing.patch` | `ClientWebGLContext::GetParameter` | Per context: vendor and renderer. Global only (`CAMOU_CONFIG`): parameters, extensions, shader precision. Works from `OffscreenCanvas` in workers. |
 | `font-list-spoofing.patch` | `gfxPlatformFontList::FindAndAddFamiliesLocked` | A thread-local context id, set by an RAII guard in `FontFaceSet::Check/Load` and `gfxFontGroup::EnsureFontList`, avoids changing ~50 signatures. The list is in the shared store, so it holds in every content process. An `OffscreenCanvas` in a worker takes the worker's context (`anti-font-fingerprinting.patch`); other worker lookups are not filtered. |
@@ -177,7 +189,7 @@ Global-only patches (no setter) read `CAMOU_CONFIG` at startup:
 | Patch | Config keys | Effect |
 |---|---|---|
 | `geolocation-spoofing.patch` | `geolocation:latitude`, `geolocation:longitude`, `geolocation:accuracy` | Returns these coordinates and grants the permission. Per context, use Playwright's `geolocation` option. |
-| `locale-spoofing.patch` | `locale:*`, `navigator.language` | `navigator.language`, `Accept-Language`, `Intl`, the OS locale. |
+| `locale-spoofing.patch` | `locale:*`, `navigator.language` | `navigator.language`, `Accept-Language`, `Intl`, the OS locale. Playwright's per-context `locale` replaces the default through `zzz-context-locale.patch`; explicitly named locales are unchanged. |
 | `force-default-pointer.patch` | `navigator.maxTouchPoints` | CSS `pointer` reports a fine pointer on desktop. |
 
 Every patch that reads `CAMOU_CONFIG` is listed in

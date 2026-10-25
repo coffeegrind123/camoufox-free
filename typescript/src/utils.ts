@@ -49,17 +49,19 @@ import {
 	addCanvasPlaceholder,
 	type Gpu,
 	gpuFamily,
-	WINDOWS_WEBGPU_LIMITS,
 	hasCanvasPlaceholder,
 	hostGpu,
 	rendersOnHardware,
 	setWebgpu,
+	WINDOWS_WEBGPU_LIMITS,
 } from "./host_rendering.js";
 import {
+	PROXY_CREDENTIALS_ENV,
 	type ProxyConfig,
 	ProxyHelper,
 	publicIP,
 	publicIPv6,
+	splitSocksCredentials,
 	validIPv4,
 	validIPv6,
 } from "./ip.js";
@@ -410,15 +412,13 @@ function generateFontconfig(
 		{ linux: "lin", macos: "mac", windows: "win" } as Record<string, string>
 	)[osDir ?? ""];
 	if (osKey && fs.existsSync(groupsPath)) {
-		try {
-			const parsed = JSON.parse(fs.readFileSync(groupsPath, "utf-8"));
-			const readBy: string[] = parsed?.readBy?.[osKey] ?? [];
-			scanDirs = readBy
-				.map((g) => path.join(fontsDir, g))
-				.filter((d) => isDir(d));
-		} catch {
-			scanDirs = [];
-		}
+		// A damaged groups.json throws: the fallback below would widen the scan to
+		// every OS's fonts (#186). Only an absent one means a legacy bundle.
+		const parsed = JSON.parse(fs.readFileSync(groupsPath, "utf-8"));
+		const readBy: string[] = parsed?.readBy?.[osKey] ?? [];
+		scanDirs = readBy
+			.map((g) => path.join(fontsDir, g))
+			.filter((d) => isDir(d));
 	}
 	if (!scanDirs.length) {
 		// Older bundles ship fonts/<os>/ with each OS's set duplicated in full.
@@ -1025,6 +1025,36 @@ export function spoofsWindowDimensions(
 }
 
 /**
+ * Record the launch window and screen on the browser for NewContext (#164).
+ * The launch window is process-wide (CamoufoxWindow.sys.mjs resizes the real
+ * window once), so every context shares it. 1280x1040 is the startup default
+ * when the config sets no outer size.
+ */
+export function attachLaunchWindow(
+	browser: any,
+	fromOptions: Record<string, any>,
+): void {
+	try {
+		const config = JSON.parse(camouConfigBlob(fromOptions) || "{}");
+		if (typeof config !== "object" || config === null || Array.isArray(config))
+			return;
+		browser._camoufoxLaunchWindow = {
+			outer: [
+				config["window.outerWidth"] || 1280,
+				config["window.outerHeight"] || 1040,
+			],
+			inner: [
+				config["window.innerWidth"] ?? null,
+				config["window.innerHeight"] ?? null,
+			],
+			screen: [config["screen.width"] ?? null, config["screen.height"] ?? null],
+		};
+	} catch (error) {
+		if (!(error instanceof SyntaxError)) throw error;
+	}
+}
+
+/**
  * Playwright emulates four media features on every context it creates, whether
  * or not the caller asked: `colorScheme` defaults to "light" and reducedMotion /
  * forcedColors / contrast to their no-preference values. That is an override,
@@ -1164,14 +1194,17 @@ export async function planPassthrough(
  */
 export async function hostIdentity(
 	fromOptions: Record<string, any>,
-	canvasNoise: boolean | undefined,
+	canvasNoise: boolean | null | undefined,
 	gpuPassthrough = false,
 ): Promise<HostIdentity | null> {
 	if (gpuPassthrough) {
 		const config = JSON.parse(camouConfigBlob(fromOptions) || "{}");
 		const vendor = config["webGl:vendor"];
 		const renderer = config["webGl:renderer"];
-		return [getTargetOs(config), vendor && renderer ? [vendor, renderer] : null];
+		return [
+			getTargetOs(config),
+			vendor && renderer ? [vendor, renderer] : null,
+		];
 	}
 	const prefs = fromOptions.firefoxUserPrefs ?? {};
 	if (canvasNoise != null || hasCanvasPlaceholder(prefs)) return null;
@@ -1549,10 +1582,15 @@ export async function launchOptions({
 	debug,
 	virtual_display,
 	pin_cpu_cores,
-	canvas_noise,
+	canvas_noise = false,
 	gpu_passthrough,
 	...passthrough
 }: LaunchOptions = {}): Promise<Record<string, any>> {
+	const callerEnv = env;
+	const proxyForLookup = proxy;
+	const [playwrightProxy, proxyCredentials] = splitSocksCredentials(proxy);
+	proxy = playwrightProxy;
+
 	utilsDeps.ensureBrowserProfileDir(env);
 
 	// The launch fills these in, so it works on copies: a caller's object
@@ -1611,6 +1649,11 @@ export async function launchOptions({
 	// the rest. The post-generation corrections below must only touch generated
 	// values, never override what the user passed.
 	const userSetNavigator = isDomainSet(config, "navigator.");
+	const userSetArch = isDomainSet(
+		config,
+		"navigator.platform",
+		"navigator.oscpu",
+	);
 	const userSetScreenWindow = isDomainSet(config, "screen.", "window.");
 	const userSetMediaDevices = isDomainSet(config, "mediaDevices:");
 	const userSetFonts = Boolean(fonts?.length) || isDomainSet(config, "fonts");
@@ -1653,22 +1696,25 @@ export async function launchOptions({
 			"gpu_passthrough claims the host's GPU through WebGL; it cannot be combined with block_webgl.",
 		);
 	}
-
-	// Add the default addons
-	await utilsDeps.addDefaultAddons(addons, exclude_addons);
-
-	// Confirm all addon paths are valid
-	if (addons.length) {
-		utilsDeps.confirmPaths(addons);
-		config.addons = addons;
-	}
-
 	// The managed install is resolved lazily in Python (camoufox_path() may
 	// download); here that download is async, so do it before any sync lookup.
 	if (!executable_path) {
 		await utilsDeps.ensureCamoufoxInstalled();
 	}
 	warnIfPackageOutdated();
+
+	// The default addons are the ones that build bundles, beside its binary
+	await utilsDeps.addDefaultAddons(
+		addons,
+		exclude_addons,
+		executable_path ? String(executable_path) : utilsDeps.launchPath(),
+	);
+
+	// Confirm all addon paths are valid
+	if (addons.length) {
+		utilsDeps.confirmPaths(addons);
+		config.addons = addons;
+	}
 
 	// Get the Firefox version
 	let ffVersionStr: string;
@@ -1733,10 +1779,9 @@ export async function launchOptions({
 
 	// Correct fingerprint inconsistencies that leak as headless /
 	// impossible-geometry tells, unless the user is driving these themselves.
-	if (!userSetNavigator) {
-		utilsDeps.fixNavigatorArch(config, targetOs);
+	if (!userSetArch) utilsDeps.fixNavigatorArch(config, targetOs);
+	if (!userSetNavigator)
 		utilsDeps.fixHardwareConcurrency(config, Boolean(pin_cpu_cores));
-	}
 	if (!userSetScreenWindow) {
 		// Lift netbook-era geometry to something current hardware reports,
 		// before the display clamp below so a genuinely small real monitor still
@@ -1917,11 +1962,11 @@ export async function launchOptions({
 		setInto(firefox_user_prefs, QUOTA_FIXED_LIMIT_PREF, quotaLimitKb);
 	}
 
-	// navigator.doNotTrack and navigator.globalPrivacyControl are pref-backed in
-	// Firefox; spoofing them anywhere else leaves the wire (or the worker)
-	// contradicting the API (daijro/camoufox#760). A stock Firefox 152 reports
-	// "unspecified" and false, so generated values are dropped unless the
-	// caller set them explicitly. screen.colorDepth is left as drawn.
+	// navigator.doNotTrack is read from CAMOU_CONFIG by the browser so values
+	// other than "1" survive; the pref remains the fallback for unset config.
+	// globalPrivacyControl is pref-backed across the window, workers and the
+	// Sec-GPC header (daijro/camoufox#760). Generated values are dropped unless
+	// the caller set them explicitly. screen.colorDepth is left as drawn.
 	if (!userSetDnt) {
 		delete config["navigator.doNotTrack"];
 	}
@@ -1948,8 +1993,8 @@ export async function launchOptions({
 		let geoipIp: string;
 		if (geoip === true) {
 			// Find the user's IP address
-			geoipIp = proxy
-				? await utilsDeps.publicIp(ProxyHelper.asString(proxy))
+			geoipIp = proxyForLookup
+				? await utilsDeps.publicIp(ProxyHelper.asString(proxyForLookup))
 				: await utilsDeps.publicIp();
 		} else {
 			geoipIp = geoip as string;
@@ -2136,7 +2181,13 @@ export async function launchOptions({
 				? [config["webGl:vendor"], config["webGl:renderer"]]
 				: null;
 		passthroughFamily = await planPassthrough(namedGpu, () =>
-			utilsDeps.hostGpu(resolvedExecutable, headless, env, firefox_user_prefs, true),
+			utilsDeps.hostGpu(
+				resolvedExecutable,
+				headless,
+				env,
+				firefox_user_prefs,
+				true,
+			),
 		);
 		[coverCanvas, host] = [false, null];
 	} else {
@@ -2148,7 +2199,12 @@ export async function launchOptions({
 					pyTruthy(config["webGl:renderer"])),
 			Boolean(block_webgl),
 			() =>
-				utilsDeps.hostGpu(resolvedExecutable, headless, env, firefox_user_prefs),
+				utilsDeps.hostGpu(
+					resolvedExecutable,
+					headless,
+					env,
+					firefox_user_prefs,
+				),
 		);
 	}
 	if (coverCanvas) {
@@ -2163,9 +2219,9 @@ export async function launchOptions({
 		let webglFp: Record<string, any>;
 		const seed = () =>
 			utilsDeps.identitySeed(config as Record<string, any>, salt);
-		// A pair the caller named, or the preset's own GPU, keeps its name and
-		// gets that device's recorded parameters. webglForGpu raises for a GPU
-		// fpgen has never seen: the caller asked for something that does not exist.
+		// GPU source precedence is explicit webgl_config, caller/preset pair,
+		// host GPU, then the default sampler. webglForGpu raises for a GPU fpgen
+		// has never seen: the caller asked for something that does not exist.
 		if (pyTruthy(webgl_config)) {
 			const [vendor, renderer] = webgl_config as [string, string];
 			webglFp = await utilsDeps.webglForGpu(targetOs, vendor, renderer, seed());
@@ -2198,6 +2254,13 @@ export async function launchOptions({
 		const enableWebgl2 = webglFp.webGl2Enabled;
 		delete webglFp.webGl2Enabled;
 
+		// mergeInto() never replaces an existing key. Drop a preset's pair so an
+		// explicit webgl_config cannot leave its names over the pinned device's
+		// measured parameters.
+		if (pyTruthy(webgl_config)) {
+			delete config["webGl:vendor"];
+			delete config["webGl:renderer"];
+		}
 		// Merge the WebGL fingerprint into the config
 		mergeInto(config, webglFp);
 		// Set the WebGL preferences
@@ -2286,6 +2349,12 @@ export async function launchOptions({
 		...getPrefEnvVars(firefox_user_prefs),
 		...env,
 	};
+	if (
+		proxyCredentials &&
+		!(callerEnv != null && Object.hasOwn(callerEnv, PROXY_CREDENTIALS_ENV))
+	) {
+		envVars[PROXY_CREDENTIALS_ENV] = JSON.stringify(proxyCredentials);
+	}
 
 	const result: Record<string, any> = {
 		executablePath: resolvedExecutable,

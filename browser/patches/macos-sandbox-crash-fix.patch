@@ -2,7 +2,7 @@ diff --git a/dom/ipc/ContentParent.cpp b/dom/ipc/ContentParent.cpp
 index fbd24a5d00..1ff3195235 100644
 --- a/dom/ipc/ContentParent.cpp
 +++ b/dom/ipc/ContentParent.cpp
-@@ -2324,22 +2324,24 @@ static void CacheSandboxParams(std::vector<std::string>& aCachedParams) {
+@@ -2323,22 +2323,24 @@ static void CacheSandboxParams(std::vector<std::string>& aCachedParams) {
      // Repo dir
      nsCOMPtr<nsIFile> repoDir;
      rv = nsMacUtilsImpl::GetRepoDir(getter_AddRefs(repoDir));

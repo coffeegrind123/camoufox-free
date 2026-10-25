@@ -25,8 +25,17 @@ from .exceptions import (
 from .fingerprints import Screen, platform_to_os, from_fpgen, from_preset, generate_fingerprint, get_random_preset, _generate_random_font_subset, _generate_random_voice_subset, fix_navigator_arch, fix_hardware_concurrency, identity_salt, drop_audio_seed, identity_seed, follow_baseline_protection, clamp_screen_to_display, clamp_window_dimensions, clamp_window_position, raise_screen_to_modern_floor, set_media_devices_defaults, WINDOWS_11_MARKER_FONTS, OS_KEYS, OS_NAMES
 from . import coherence
 from .geolocation import geoip_allowed, get_geolocation
-from .ip import Proxy, public_ip, public_ipv6, valid_ipv4, valid_ipv6
-from .locales import handle_locales
+from .ip import (
+    ExitGeo,
+    PROXY_CREDENTIALS_ENV,
+    Proxy,
+    public_ip,
+    public_ipv6,
+    split_socks_credentials,
+    valid_ipv4,
+    valid_ipv6,
+)
+from .locales import SELECTOR, handle_locales
 import warnings
 
 from .pkgman import (
@@ -218,16 +227,15 @@ def _generate_fontconfig(
     groups_path = os.path.join(fonts_dir, "groups.json")
     os_key = OS_KEYS.get(os_dir or '')
     if os_key and os.path.exists(groups_path):
-        try:
-            with open(groups_path, 'rb') as fh:
-                read_by = json.loads(fh.read()).get('readBy', {}).get(os_key, [])
-            scan_dirs = [
-                os.path.join(fonts_dir, g)
-                for g in read_by
-                if os.path.isdir(os.path.join(fonts_dir, g))
-            ]
-        except (OSError, ValueError):
-            scan_dirs = []
+        # A damaged groups.json raises: the fallback below would widen the scan to
+        # every OS's fonts (#186). Only an absent one means a legacy bundle.
+        with open(groups_path, 'rb') as fh:
+            read_by = json.loads(fh.read()).get('readBy', {}).get(os_key, [])
+        scan_dirs = [
+            os.path.join(fonts_dir, g)
+            for g in read_by
+            if os.path.isdir(os.path.join(fonts_dir, g))
+        ]
     if not scan_dirs:
         # Older bundles ship fonts/<os>/ with each OS's set duplicated in full.
         if os_dir and os.path.isdir(os.path.join(fonts_dir, os_dir)):
@@ -811,6 +819,40 @@ def attach_context_defaults(browser: Any, no_viewport_default: bool) -> None:
     attach_desktop_only_warning(browser)
 
 
+def attach_launch_window(target: Any, from_options: Optional[Dict[str, Any]]) -> Any:
+    """Record the launch window and screen on the browser for NewContext (#164).
+
+    The launch window is process-wide (CamoufoxWindow.sys.mjs resizes the real
+    window once), so every context shares it; a context can only claim a viewport
+    inside it and a screen that holds it. 1280x1040 is the startup default when
+    the config sets no outer size.
+    """
+    try:
+        config = orjson.loads(_camou_config_blob(from_options or {}) or '{}')
+    except (AttributeError, orjson.JSONDecodeError, TypeError, ValueError):
+        return target
+    if not isinstance(config, dict):
+        return target
+    try:
+        target._camoufox_launch_window = {
+            'outer': (
+                config.get('window.outerWidth') or 1280,
+                config.get('window.outerHeight') or 1040,
+            ),
+            'inner': (
+                config.get('window.innerWidth'),
+                config.get('window.innerHeight'),
+            ),
+            'screen': (
+                config.get('screen.width'),
+                config.get('screen.height'),
+            ),
+        }
+    except AttributeError:
+        pass
+    return target
+
+
 def plan_rendering(
     target_os: str,
     canvas_noise: Optional[bool],
@@ -917,6 +959,36 @@ def context_identity(
     return host_name, gpu
 
 
+def needs_exit_geo(
+    webrtc_ip: Optional[str],
+    geolocation: Optional[Dict[str, float]],
+    context_kwargs: Dict[str, Any],
+) -> bool:
+    """Whether a context behind a proxy needs to look up where it exits."""
+    return not (
+        webrtc_ip
+        and geolocation
+        and 'timezone_id' in context_kwargs
+        and 'locale' in context_kwargs
+    )
+
+
+def place_at_exit(
+    geo: ExitGeo,
+    webrtc_ip: Optional[str],
+    geolocation: Optional[Dict[str, float]],
+    context_kwargs: Dict[str, Any],
+) -> Tuple[str, Dict[str, float]]:
+    """Place a proxied context at the exit, keeping caller-provided values."""
+    context_kwargs.setdefault('timezone_id', geo.timezone)
+    if 'locale' not in context_kwargs:
+        context_kwargs['locale'] = SELECTOR.from_region(geo.country).as_string
+    return (
+        webrtc_ip or geo.ip,
+        geolocation or {'latitude': geo.latitude, 'longitude': geo.longitude},
+    )
+
+
 def new_context_options(
     fingerprint: Dict[str, Any],
     context_kwargs: Dict[str, Any],
@@ -926,6 +998,12 @@ def new_context_options(
     """new_context() options for a generate_context_fingerprint() identity; the
     caller's own options win."""
     opts: Dict[str, Any] = {**fingerprint['context_options'], **context_kwargs}
+    if context_kwargs.get('no_viewport'):
+        # An explicit no_viewport beats the fingerprint's viewport, and Playwright
+        # rejects deviceScaleFactor with a null viewport.
+        for key in ('viewport', 'device_scale_factor'):
+            if key not in context_kwargs:
+                opts.pop(key, None)
     if proxy:
         opts['proxy'] = proxy
     if geolocation:
@@ -1162,6 +1240,7 @@ def launch_options(
             Firefox user preferences to set.
         proxy (Optional[Dict[str, str]]):
             Proxy to use for the browser.
+            SOCKS5 credentials are moved into CAMOU_PROXY_CREDENTIALS for the launch.
             Note: If geoip is True, a request will be sent through this proxy to find the target IP.
         enable_cache (Optional[bool]):
             Cache previous pages, requests, etc (uses more memory).
@@ -1207,6 +1286,9 @@ def launch_options(
         **launch_options (Dict[str, Any]):
             Additional Firefox launch options.
     """
+    caller_env = env
+    proxy, proxy_credentials = split_socks_credentials(proxy)
+
     ensure_browser_profile_dir(env)
 
     # The launch fills these in, so it works on copies: a caller's mapping
@@ -1265,6 +1347,7 @@ def launch_options(
     # the rest. The post-generation fix-ups below must
     # only touch generated values, never override what the user passed.
     _user_set_navigator = is_domain_set(config, 'navigator.')
+    _user_set_arch = is_domain_set(config, 'navigator.platform', 'navigator.oscpu')
     _user_set_screen_window = is_domain_set(config, 'screen.', 'window.')
     _user_set_media_devices = is_domain_set(config, 'mediaDevices:')
     _user_set_fonts = bool(fonts) or is_domain_set(config, 'fonts')
@@ -1300,19 +1383,19 @@ def launch_options(
     if gpu_passthrough and block_webgl:
         raise ValueError('gpu_passthrough claims the host\'s GPU through WebGL; it cannot be combined with block_webgl.')
 
-    # Add the default addons
-    add_default_addons(addons, exclude_addons)
-
-    # Confirm all addon paths are valid
-    if addons:
-        confirm_paths(addons)
-        config['addons'] = addons
-
     # Resolve the binary that will launch before reading its version:
     # launch_path() downloads the browser when none is installed, and the
     # identity has to match the Firefox that actually runs.
     browser_binary = str(executable_path) if executable_path else launch_path()
     warn_if_package_outdated()
+
+    # The default addons are the ones that build bundles, beside its binary
+    add_default_addons(addons, exclude_addons, browser_binary)
+
+    # Confirm all addon paths are valid
+    if addons:
+        confirm_paths(addons)
+        config['addons'] = addons
 
     # Get the Firefox version
     if ff_version:
@@ -1370,8 +1453,9 @@ def launch_options(
 
     # Correct fingerprint inconsistencies that leak as headless /
     # impossible-geometry tells, unless the user is driving these themselves.
-    if not _user_set_navigator:
+    if not _user_set_arch:
         fix_navigator_arch(config, target_os)
+    if not _user_set_navigator:
         fix_hardware_concurrency(config, can_pin=bool(pin_cpu_cores))
     if not _user_set_screen_window:
         # Lift netbook-era geometry to something current hardware reports,
@@ -1585,11 +1669,11 @@ def launch_options(
     # skips the activation itself whenever navigator.platform is the host's;
     # the font draw above claims only the OS base in that case (`native`).
 
-    # navigator.doNotTrack and navigator.globalPrivacyControl are pref-backed: the
-    # getters, the worker getters and the DNT / Sec-GPC headers all read the same
-    # pref, so they are applied as prefs (daijro/camoufox#760). Stock Firefox 152
-    # reports "unspecified" and false, so a generated value is dropped unless the
-    # caller set it.
+    # navigator.doNotTrack is read from CAMOU_CONFIG by the browser so values
+    # other than "1" survive; the pref remains the fallback for unset config.
+    # globalPrivacyControl is pref-backed across the window, workers and the
+    # Sec-GPC header (daijro/camoufox#760). Stock Firefox reports "unspecified"
+    # and false, so generated values are dropped unless the caller set them.
     #
     # screen.colorDepth is left as drawn: real macOS reports 30 and Windows /
     # Linux 24, and the CSS `color` feature follows the spoofed depth
@@ -1619,7 +1703,13 @@ def launch_options(
         if geoip is True:
             # Find the user's IP address
             if proxy:
-                geoip = public_ip(Proxy(**proxy).as_string())
+                lookup_proxy = proxy
+                if proxy_credentials:
+                    lookup_proxy = {
+                        **proxy,
+                        **next(iter(proxy_credentials.values())),
+                    }
+                geoip = public_ip(Proxy(**lookup_proxy).as_string())
             else:
                 geoip = public_ip()
 
@@ -1799,8 +1889,8 @@ def launch_options(
         firefox_user_prefs['webgl.disabled'] = True
         LeakWarning.warn('block_webgl', i_know_what_im_doing)
     else:
-        # A pair the caller named, or the preset's own GPU, keeps its name and
-        # gets that device's recorded parameters. webgl_for_gpu raises for a GPU
+        # GPU source precedence is explicit webgl_config, caller/preset pair,
+        # host GPU, then the default sampler. webgl_for_gpu raises for a GPU
         # fpgen has never seen: the caller asked for something that does not exist.
         if webgl_config:
             webgl_fp = webgl_for_gpu(target_os, *webgl_config, seed=identity_seed(config, _identity_salt))
@@ -1825,6 +1915,12 @@ def launch_options(
             )
         enable_webgl2 = webgl_fp.pop('webGl2Enabled')
 
+        # merge_into() never replaces an existing key. Drop a preset's pair so an
+        # explicit webgl_config cannot leave its names over the pinned device's
+        # measured parameters.
+        if webgl_config:
+            config.pop('webGl:vendor', None)
+            config.pop('webGl:renderer', None)
         # Merge the WebGL fingerprint into the config
         merge_into(config, webgl_fp)
         # Set the WebGL preferences
@@ -1892,6 +1988,12 @@ def launch_options(
         **get_pref_env_vars(firefox_user_prefs),
         **env,
     }
+    # Juggler reads this once, browser-wide. Only a caller-supplied env map can
+    # predeclare credentials for more than the launch proxy's endpoint.
+    if proxy_credentials and not (
+        caller_env is not None and PROXY_CREDENTIALS_ENV in caller_env
+    ):
+        env_vars[PROXY_CREDENTIALS_ENV] = orjson.dumps(proxy_credentials).decode()
     result = {
         "executable_path": browser_binary,
         "args": args,

@@ -42,6 +42,30 @@
         "updates_disabled": true
       }
     },
+    "3rdparty": {
+      "Extensions": {
+        "uBlock0@raymondhill.net": {
+          "userSettings": [["autoUpdate", "false"]],
+          "advancedSettings": [
+            ["suspendUntilListsAreLoaded", "false"]
+          ],
+          "toOverwrite": {
+            "filterLists": [
+              "user-filters",
+              "ublock-filters",
+              "ublock-badware",
+              "ublock-privacy",
+              "ublock-unbreak",
+              "ublock-quick-fixes",
+              "easylist",
+              "easyprivacy",
+              "urlhaus-1",
+              "plowe-0"
+            ]
+          }
+        }
+      }
+    },
     "SearchEngines": {
       "PreventInstalls": true,
       "Remove": [
@@ -64,15 +88,6 @@
           "PostData": ""
         }
       ]
-    },
-    "3rdparty": {
-      "Extensions": {
-        "uBlock0@raymondhill.net": {
-          "advancedSettings": [
-            ["suspendUntilListsAreLoaded", "false"]
-          ]
-        }
-      }
     }
   }
 }

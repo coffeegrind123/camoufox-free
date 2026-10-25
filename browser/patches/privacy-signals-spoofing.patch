@@ -1,0 +1,47 @@
+diff --git a/dom/base/Navigator.cpp b/dom/base/Navigator.cpp
+--- a/dom/base/Navigator.cpp
++++ b/dom/base/Navigator.cpp
+@@ -672,5 +677,11 @@ void Navigator::GetDoNotTrack(nsAString& aResult) {
++  // Camoufox: keep the window value aligned with the explicitly configured
++  // DNT signal, including "0", instead of collapsing it to the pref's unset state.
++  if (auto value = MaskConfig::GetString("navigator.doNotTrack")) {
++    aResult.Assign(NS_ConvertUTF8toUTF16(value.value()));
++    return;
++  }
+   if (StaticPrefs::privacy_donottrackheader_enabled()) {
+     aResult.AssignLiteral("1");
+   } else {
+     aResult.AssignLiteral("unspecified");
+   }
+diff --git a/netwerk/protocol/http/nsHttpChannel.cpp b/netwerk/protocol/http/nsHttpChannel.cpp
+--- a/netwerk/protocol/http/nsHttpChannel.cpp
++++ b/netwerk/protocol/http/nsHttpChannel.cpp
+@@ -5,4 +5,6 @@
+ #include "nsHttpChannel.h"
+ 
++#include "MaskConfig.hpp"
++
+ #include <inttypes.h>
+ 
+@@ -12063,11 +12065,21 @@ void nsHttpChannel::SetDoNotTrack() {
+ void nsHttpChannel::SetDoNotTrack() {
+   /**
+    * 'DoNotTrack' header should be added if 'privacy.donottrackheader.enabled'
+    * is true.
+    */
++  // Camoufox: only an explicit DNT "1" sends the header. "0" and
++  // "unspecified" suppress it, matching navigator.doNotTrack in the page.
++  if (auto value = MaskConfig::GetString("navigator.doNotTrack")) {
++    if (value.value() == "1") {
++      DebugOnly<nsresult> rv =
++          mRequestHead.SetHeader(nsHttp::DoNotTrack, "1"_ns, false);
++      MOZ_ASSERT(NS_SUCCEEDED(rv));
++    }
++    return;
++  }
+   if (StaticPrefs::privacy_donottrackheader_enabled()) {
+     DebugOnly<nsresult> rv =
+         mRequestHead.SetHeader(nsHttp::DoNotTrack, "1"_ns, false);
+     MOZ_ASSERT(NS_SUCCEEDED(rv));
+   }
+ }

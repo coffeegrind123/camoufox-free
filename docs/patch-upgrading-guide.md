@@ -52,9 +52,14 @@ every command in this guide that does not say otherwise, from `browser/`:
 
 | Target | What it does |
 |---|---|
-| `make dir` | Fetches and extracts Firefox if the tree is missing. Otherwise resets it to `unpatched`, runs `mach clobber` and `git clean -fdx` (the object directory goes too), re-copies additions, then applies every patch and lists the ones that left rejects. |
+| `make dir` | Fetches and extracts Firefox if the tree is missing. Otherwise resets tracked files to `unpatched`, removes untracked source files while preserving `obj-*/`, syncs additions, then applies every patch. Any fuzz or reject fails. `CAMOUFOX_CLOBBER=1 make dir` also runs `mach clobber`. |
 | `make revert` | `git reset --hard unpatched`. Untracked files stay, including new files that patches created. |
 | `make clean` | `mach clobber`, `git clean -fdx`, then `make revert`: unpatched Firefox with nothing left over, without re-fetching. |
+| `make sync` | Copies changed additions and settings into the prepared tree without re-applying patches. Unchanged files keep their mtimes. |
+| `make build-js` | Runs `make sync`, then `./mach build faster` for JS, prefs and Juggler changes. |
+| `make build-cpp` | Runs `./mach build binaries` for an incremental compiled-code build. |
+| `make verify-patches` | Replays the patch stack over clean upstream copies of the touched files, without preparing or modifying the source tree. |
+| `make verify-patches compare=true` | Also compares every replayed file with the prepared source tree. |
 | `make patch ./patches/x.patch` | Applies one patch (`patch -p1`). |
 | `make unpatch ./patches/x.patch` | Reverses one patch. |
 | `make first-checkpoint` | Commits the current tree and tags it `first-checkpoint`. |
@@ -85,9 +90,10 @@ Update `version` and `release` in `browser/upstream.sh`, then:
 make dir
 ```
 
-`patch.py` applies every patch and ends with a list of the ones that failed and
-their reject files. It deletes the `.rej` files after listing them, so reproduce
-each failure one patch at a time (Step 2).
+`patch.py` applies every patch with zero fuzz and ends with a list of the ones
+that failed and their reject files. It deletes the `.rej` files after listing
+them, so reproduce each failure one patch at a time (Step 2). To verify the
+whole stack without changing the source tree, run `make verify-patches`.
 
 ### Step 2: Set Up One Patch
 
@@ -155,9 +161,16 @@ From `browser/`:
 make diff > patches/patch-name.patch
 ```
 
+`python3 scripts/patchstack.py regen patches/patch-name.patch` performs the same
+step from a prepared tree after checking that no later patch touches one of the
+target files. It validates the generated diff by replaying it before replacing
+the patch. Add `--output /tmp/patch-name.patch` to validate without replacing
+the original.
+
 ### Step 8: Verify
 
-Run `make dir` again. The patch should no longer be listed as failing.
+Run `make verify-patches` and then `make dir`. Neither may report fuzz or a
+reject.
 
 ---
 
@@ -409,6 +422,20 @@ Run the suites that cover the patch (see [`ci/README.md`](../ci/README.md)).
 From the repository root,
 `python3 -m ci.run_patch_guards --binary <camoufox-bin>` is the most direct
 evidence that a patch which still applies was not neutered by the upgrade.
+
+Native headless WebGL is a separate upgrade gate. The guard removes
+`DISPLAY` and `WAYLAND_DISPLAY` from the browser environment, pins a recorded
+GPU, and requires a real context that compiles, links, draws and reports that
+GPU. Mesa's EGL and DRI drivers must be installed on the runner:
+
+```bash
+env -u DISPLAY -u WAYLAND_DISPLAY \
+  python3 -m ci.run_patch_guards --binary <camoufox-bin> \
+  --only webgl-headless-parity
+```
+
+The patch scope, runtime dependencies and failure mode are in
+[Native headless WebGL](headless-webgl.md).
 
 ### Browser-Owned GPU Values
 

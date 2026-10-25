@@ -33,3 +33,19 @@ def read_groups(fonts):
     with open(path, encoding='utf-8') as fh:
         data = json.load(fh)
     return data['groups'], data['readBy']
+
+
+# Whether an OS enumerates the alias names its fonts.conf rewrites. macOS lists
+# each TTC weight ("Futura Bold") and Windows each GDI substitute ("Helvetica")
+# as a family of its own, so a measured OS-version base records whether that
+# version has the name. Linux fontconfig never lists its metric aliases
+# ("Arial" -> Liberation Sans); a stock install resolves one exactly when the
+# target family is installed.
+ALIAS_NAMES_ENUMERATED = {'win': True, 'mac': True, 'lin': False}
+
+
+def base_has_alias(os_key, alias, target, base_fonts):
+    """Whether an OS-version base, given as its families, carries `alias`."""
+    if alias in base_fonts:
+        return True
+    return not ALIAS_NAMES_ENUMERATED[os_key] and target in base_fonts

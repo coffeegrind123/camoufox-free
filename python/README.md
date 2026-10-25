@@ -83,6 +83,66 @@ with Camoufox(
 locale, geolocation and the WebRTC IP from it. Pass an IP string instead to
 skip the lookup.
 
+### SOCKS5 proxy authentication
+
+Playwright's pinned driver rejects SOCKS5 proxies carrying a username or
+password before the request reaches Juggler. At launch, Camoufox removes those
+credentials from the proxy passed to Playwright and supplies them through
+`CAMOU_PROXY_CREDENTIALS` instead:
+
+```python
+from camoufox.sync_api import Camoufox
+
+with Camoufox(
+    proxy={
+        "server": "socks5://proxy.example.com:1080",
+        "username": "<username>",
+        "password": "<password>",
+    },
+) as browser:
+    page = browser.new_page()
+    page.goto("https://example.com")
+```
+
+Credentials can also be embedded in the URL. Percent-encode `@`, `/`, `?`, `#`
+and `%`; explicit `username` and `password` fields take precedence over URL
+credentials. Both `socks5://` and `socks5h://` are accepted
+case-insensitively, and `socks5h` is normalized to `socks5` before launch.
+SOCKS5 endpoints must include an explicit port, even without credentials;
+Playwright turns a missing port into `NaN` for Juggler.
+
+For several endpoints, set the launch environment yourself. The JSON keys are
+lower-case `host:port` strings, and an explicitly supplied environment variable
+takes precedence over the mapping Camoufox would generate. The map is
+browser-wide: all contexts using the same endpoint share one credential entry
+throughout that browser's lifetime, and cannot override it per context:
+
+```python
+import json
+import os
+
+from camoufox.sync_api import Camoufox
+
+credentials = json.dumps(
+    {
+        "proxy-a.example.com:1080": {
+            "username": "<username-a>",
+            "password": "<password-a>",
+        },
+        "proxy-b.example.com:1080": {
+            "username": "<username-b>",
+            "password": "<password-b>",
+        },
+    }
+)
+
+with Camoufox(
+    env={**os.environ, "CAMOU_PROXY_CREDENTIALS": credentials},
+) as browser:
+    page = browser.new_page()
+    page.goto("https://example.com")
+```
+
 Without a proxy, sites can reach this machine over IPv6. IPv6 stays on when the
 machine's IPv6 address geolocates where the IPv4 identity does. Otherwise, the
 browser behaves as on an IPv4-only network, and a `LeakWarning` says why.
@@ -126,11 +186,62 @@ with Camoufox(headless=True, canvas_noise=True) as browser:
 | `os` | `"windows"`, `"macos"` or `"linux"` for the drawn identity. On a browser without canvas noise, the host's OS, and anything else raises `ValueError`. |
 | `ff_version` | Firefox major version claimed in the User-Agent. Defaults to the browser's own. |
 | `webrtc_ip` | IPv4 or IPv6 address WebRTC reports. |
-| `proxy` | Per-context proxy, in Playwright's format. Unless `webrtc_ip` and `timezone_id` are both given, they are looked up from the proxy's exit IP, and `InvalidIP` is raised if the lookup fails. |
+| `proxy` | Per-context proxy, in Playwright's format. SOCKS5 credentials are not accepted here: Playwright cannot deliver them after launch. Declare authenticated endpoints in `CAMOU_PROXY_CREDENTIALS` at launch and pass only `server` here; otherwise `InvalidProxy` is raised. The context is placed where the proxy exits: `webrtc_ip`, `timezone_id`, `locale` and `geolocation` each default to the exit IP's, looked up through the proxy unless all four are given, and `InvalidIP` is raised if the lookup fails. |
 | `geolocation` | `{"latitude": ..., "longitude": ...}`; also grants the `geolocation` permission. |
 | anything else | Passed to Playwright's `new_context()`, overriding the generated value. |
 
 `AsyncNewContext()` is the async twin.
+
+Per-context SOCKS5 credentials fail closed before any geo lookup. To use
+authenticated proxies in several contexts, declare their endpoints at launch,
+then select one per context without credentials. Because `NewContext` performs
+its exit lookup in Python, it cannot read `CAMOU_PROXY_CREDENTIALS` from the
+browser environment. Supply all four location values in that case, as below, to
+skip the lookup:
+
+```python
+import json
+import os
+
+from camoufox.sync_api import Camoufox, NewContext
+
+credentials = json.dumps(
+    {
+        "proxy-a.example.com:1080": {
+            "username": "<username-a>",
+            "password": "<password-a>",
+        },
+        "proxy-b.example.com:1080": {
+            "username": "<username-b>",
+            "password": "<password-b>",
+        },
+    }
+)
+
+with Camoufox(
+    env={**os.environ, "CAMOU_PROXY_CREDENTIALS": credentials},
+) as browser:
+    alice = NewContext(
+        browser,
+        proxy={"server": "socks5://proxy-a.example.com:1080"},
+        webrtc_ip="203.0.113.10",
+        timezone_id="UTC",
+        locale="en-US",
+        geolocation={"latitude": 40.7128, "longitude": -74.006},
+    )
+    bob = NewContext(
+        browser,
+        proxy={"server": "socks5h://proxy-b.example.com:1080"},
+        webrtc_ip="198.51.100.20",
+        timezone_id="Europe/Paris",
+        locale="fr-FR",
+        geolocation={"latitude": 48.8566, "longitude": 2.3522},
+    )
+```
+
+Use the actual exit location for each endpoint in real code. Omitting any of
+`webrtc_ip`, `timezone_id`, `locale` or `geolocation` triggers a lookup, and an
+authenticated context proxy passed without credentials will fail that lookup.
 
 Canvas noise belongs to the browser, not the context (see
 [The canvas on another OS](#the-canvas-on-another-os)). On a browser without it,
@@ -189,7 +300,7 @@ browser claim the launch's OS and GPU.
 | `headless=` | What runs | Notes |
 |---|---|---|
 | `False` (default) | A normal window | Needs a display. |
-| `True` | Firefox headless | Camoufox patches the headless tells it knows about. |
+| `True` | Firefox headless | Native headless WebGL/WebGL2 render on Mesa EGL and llvmpipe without `DISPLAY` or Xvfb on Linux; install the Mesa EGL/DRI packages from [`headless-webgl.md`](../docs/headless-webgl.md). |
 | `"virtual"` | A headed browser on a private Xvfb display | Linux only, needs `Xvfb` and `setpriv` (util-linux). Handled by `Camoufox`, `AsyncCamoufox`, `NewBrowser` and `launch_server`. The display is 1x1 unless `CAMOUFOX_VIRTUAL_DISPLAY_SIZE` (e.g. `1920x1080x24`) says otherwise. Xvfb has no GPU: canvas and WebGL render in software. |
 | `"virtual-gpu"` | A headed browser on a private, headless Xorg server bound to one GPU | Linux only, needs Xorg and the card's driver. Canvas and WebGL render on the card. Handled like `"virtual"`. See [The GPU display](#the-gpu-display). |
 
@@ -291,10 +402,10 @@ passed to Playwright's `firefox.launch()` (or `launch_persistent_context()`).
 | `headless` | `bool`, `"virtual"` or `"virtual-gpu"` | `False` | See [Headless modes](#headless-modes). |
 | `gpu` | `str` or `int` | `CAMOUFOX_GPU`, or the only GPU | The card for `headless="virtual-gpu"`. See [The GPU display](#the-gpu-display). Not taken by `launch_options`. |
 | `require_gpu` | `bool` | `True` | With `headless="virtual-gpu"`, fail the launch when the browser does not render on the card; `False` warns. Not taken by `launch_options`. |
-| `proxy` | `dict` | none | Playwright proxy: `server`, `username`, `password`, `bypass`. |
+| `proxy` | `dict` | none | Playwright proxy: `server`, `username`, `password`, `bypass`. SOCKS5 credentials are moved to `CAMOU_PROXY_CREDENTIALS` at launch; `socks5h` is normalized to `socks5`. SOCKS5 endpoints require an explicit port. |
 | `geoip` | `bool` or `str` | none | `True` finds the public IP (through `proxy` if set); a string uses that IP. Sets timezone, locale, geolocation and the WebRTC IP. Without a proxy, also decides whether IPv6 stays on. Needs the `geoip` extra. |
 | `geoip_db` | `str` | the `camoufox set --geoip` choice | GeoIP database name, e.g. `"GeoIP AIO by daijro"`. |
-| `locale` | `str` or `list[str]` | from `geoip`, else the drawn identity's | Locale(s), e.g. `"en-US"` or `["fr-FR", "en-US"]`. The first is used for `Intl`. |
+| `locale` | `str` or `list[str]` | from `geoip`, else the drawn identity's | Locale(s), e.g. `"en-US"` or `["fr-FR", "en-US"]`. The first drives `Intl`; the list is used by `navigator.languages` and Accept-Language. Context locales also reach workers, isolated worlds, worklets, requests and built-in strings. |
 | `humanize` | `bool` or `float` | off | Human cursor movement. A number caps one movement at that many seconds (default cap 1.5). |
 | `humanize_engine` | `str` | `"cursory"` | The generator behind `humanize`: `"cursory"` replays recorded human movements, `"mousecrack"` synthesizes them with a trained network. Needs `humanize`. |
 | `screen` | `camoufox.fingerprints.Screen` | the real display when headed | Bounds the generated screen: `Screen(max_width=1920, max_height=1080)`. |
@@ -306,7 +417,7 @@ passed to Playwright's `firefox.launch()` (or `launch_persistent_context()`).
 | `block_images` | `bool` | `False` | Block image loading. Warns: some WAFs detect it. |
 | `block_webrtc` | `bool` | `False` | Disable WebRTC entirely. |
 | `block_webgl` | `bool` | `False` | Disable WebGL. Warns: many WAFs check for it. |
-| `webgl_config` | `(vendor, renderer)` | drawn | Use one GPU fpgen has recorded for Firefox on `os` (see `camoufox.webgl.firefox_gpus`); any other pair raises `ValueError`. Needs `os`. |
+| `webgl_config` | `(vendor, renderer)` | drawn | Use one GPU fpgen has recorded for Firefox on `os` (see `camoufox.webgl.firefox_gpus`); any other pair raises `ValueError`. An explicit pair replaces a preset's GPU. Needs `os`. |
 | `canvas_noise` | `bool` | on for another OS or GPU | Random canvas and WebGL readback, as in LibreWolf. Warns. See [The canvas on another OS](#the-canvas-on-another-os). |
 | `gpu_passthrough` | `bool` | `False` | The host renders on the claimed GPU's vendor under another OS (a Linux container on a Windows host's GPU through WSL's d3d12). Checks the host's GPU and raises unless it is hardware from that vendor; leaves the canvas uncovered and WebGPU on. Not with `canvas_noise` on or `block_webgl`. See [The canvas on another OS](#the-canvas-on-another-os). |
 | `disable_coop` | `bool` | `False` | Turn off Cross-Origin-Opener-Policy so elements in cross-origin iframes (such as the Turnstile checkbox) can be clicked. Warns. |

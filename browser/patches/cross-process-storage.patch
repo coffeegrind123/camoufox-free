@@ -1,9 +1,9 @@
 diff --git a/dom/base/RoverfoxStorageManager.cpp b/dom/base/RoverfoxStorageManager.cpp
 new file mode 100644
-index 0000000000..c5f3dd4247
+index 0000000000..36ad5bcbe1
 --- /dev/null
 +++ b/dom/base/RoverfoxStorageManager.cpp
-@@ -0,0 +1,450 @@
+@@ -0,0 +1,531 @@
 +#include "RoverfoxStorageManager.h"
 +#include "mozilla/Preferences.h"
 +#include "nsIPrefBranch.h"
@@ -18,6 +18,7 @@ index 0000000000..c5f3dd4247
 +#include "nsGlobalWindowInner.h"
 +#include "xpcpublic.h"
 +
++#include <algorithm>
 +#include <atomic>
 +#include <cstdint>
 +
@@ -31,6 +32,86 @@ index 0000000000..c5f3dd4247
 +// Reading the default branch alone also ignores user values an older build
 +// left in a profile's prefs.js.
 +static constexpr auto kKind = PrefValueKind::Default;
++
++// Firefox sends no string pref longer than 4 KiB to another process
++// (MAX_ADVISABLE_PREF_LENGTH in Preferences.cpp), so a longer value -- a font
++// list of a few hundred names -- is written as chunk prefs the roverfox.s.
++// callback does not match, then roverfox.s.<key> as a header naming them. Pref
++// updates reach a process in the order the parent made them, so the header's
++// callback runs once every chunk has arrived (#231).
++static constexpr uint32_t kChunkBytes = 3072;
++// Leads every header. No value a setter stores starts with it (numbers,
++// "0"/"1", the launcher's strings), and StorePref chunks any value that does,
++// so a header is never mistaken for a value.
++static constexpr char kChunkMark = '\x01';
++
++static nsCString ChunkPrefName(const nsACString& aPrefName, uint32_t aIndex) {
++  MOZ_ASSERT(StringBeginsWith(aPrefName, "roverfox.s."_ns));
++  nsCString name("roverfox.c."_ns);
++  name.Append(Substring(aPrefName, "roverfox.s."_ns.Length()));
++  name.AppendPrintf(".%u", aIndex);
++  return name;
++}
++
++/* static */ void RoverfoxStorageManager::StorePref(const nsACString& aPrefName,
++                                                    const nsACString& aValue) {
++  MOZ_ASSERT(XRE_IsParentProcess());
++  MOZ_ASSERT(NS_IsMainThread());
++  MOZ_ASSERT(StringBeginsWith(aPrefName, "roverfox.s."_ns));
++  const nsPromiseFlatCString& name = PromiseFlatCString(aPrefName);
++  if (aValue.Length() <= kChunkBytes &&
++      (aValue.IsEmpty() || aValue.First() != kChunkMark)) {
++    Preferences::SetCString(name.get(), aValue, kKind);
++    return;
++  }
++  uint32_t count = 0;
++  for (uint32_t start = 0; start < aValue.Length(); ++count) {
++    uint32_t end = std::min<uint32_t>(start + kChunkBytes, aValue.Length());
++    // End on a code point: UTF-8 has at most three continuation bytes.
++    for (int i = 0; i < 3 && end < aValue.Length() &&
++                    (static_cast<uint8_t>(aValue[end]) & 0xC0) == 0x80;
++         ++i) {
++      --end;
++    }
++    Preferences::SetCString(ChunkPrefName(aPrefName, count).get(),
++                            Substring(aValue, start, end - start), kKind);
++    start = end;
++  }
++  // libpref notifies only a changed value, so the generation keeps a later
++  // value with the same chunk count from going unseen.
++  static uint32_t sGeneration = 0;
++  nsAutoCString header;
++  header.AppendPrintf("%c%u:%u", kChunkMark, count, ++sGeneration);
++  Preferences::SetCString(name.get(), header, kKind);
++}
++
++/* static */ void RoverfoxStorageManager::LoadPref(const nsACString& aPrefName,
++                                                   nsACString& aOutValue) {
++  MOZ_ASSERT(NS_IsMainThread());
++  MOZ_ASSERT(StringBeginsWith(aPrefName, "roverfox.s."_ns));
++  Preferences::GetCString(PromiseFlatCString(aPrefName).get(), aOutValue,
++                          kKind);
++  if (aOutValue.IsEmpty() || aOutValue.First() != kChunkMark) {
++    return;
++  }
++  const int32_t colon = aOutValue.FindChar(':');
++  nsresult rv = NS_ERROR_FAILURE;
++  uint32_t count = 0;
++  if (colon > 0) {
++    count = Substring(aOutValue, 1, colon - 1).ToUnsignedInteger(&rv);
++  }
++  aOutValue.Truncate();
++  for (uint32_t i = 0; NS_SUCCEEDED(rv) && i < count; ++i) {
++    nsAutoCString chunk;
++    rv = Preferences::GetCString(ChunkPrefName(aPrefName, i).get(), chunk,
++                                 kKind);
++    aOutValue.Append(chunk);
++  }
++  // Part of a font list is a wrong answer; no value is a known one.
++  if (NS_FAILED(rv)) {
++    aOutValue.Truncate();
++  }
++}
 +
 +/* static */ nsTHashMap<nsCStringHashKey, nsCString>&
 +RoverfoxStorageManager::GetLocalCache() {
@@ -234,7 +315,7 @@ index 0000000000..c5f3dd4247
 +/* static */ void RoverfoxStorageManager::MirrorPref(const nsACString& aPrefName) {
 +  MOZ_ASSERT(NS_IsMainThread());
 +  nsAutoCString value;
-+  Preferences::GetCString(PromiseFlatCString(aPrefName).get(), value, kKind);
++  LoadPref(aPrefName, value);
 +  {
 +    MutexAutoLock lock(GetLocalCacheMutex());
 +    if (value.IsEmpty()) {
@@ -269,7 +350,7 @@ index 0000000000..c5f3dd4247
 +  }
 +  for (const nsCString& name : names) {
 +    nsAutoCString value;
-+    Preferences::GetCString(name.get(), value, kKind);
++    LoadPref(name, value);
 +    if (value.IsEmpty()) {
 +      continue;
 +    }
@@ -312,7 +393,7 @@ index 0000000000..c5f3dd4247
 +                                                       const nsCString& value) {
 +  MOZ_ASSERT(NS_IsMainThread());
 +  if (XRE_IsParentProcess()) {
-+    Preferences::SetCString(prefName.get(), value, kKind);
++    StorePref(prefName, value);
 +  } else {
 +    ContentChild* cc = ContentChild::GetSingleton();
 +    if (cc) {
@@ -336,7 +417,7 @@ index 0000000000..c5f3dd4247
 +    return;
 +  }
 +  // Then Preferences (values synced from other processes)
-+  Preferences::GetCString(prefName.get(), outValue, kKind);
++  LoadPref(prefName, outValue);
 +  // No sync IPC to the parent for a key this process has not seen. It made
 +  // the first read of each unset key in a process cost 16-54 ms (stock: under
 +  // 1 ms), which a page can time on its first navigator.hardwareConcurrency
@@ -456,10 +537,10 @@ index 0000000000..c5f3dd4247
 +}  // namespace mozilla
 diff --git a/dom/base/RoverfoxStorageManager.h b/dom/base/RoverfoxStorageManager.h
 new file mode 100644
-index 0000000000..c7dad0158f
+index 0000000000..ba146aba8b
 --- /dev/null
 +++ b/dom/base/RoverfoxStorageManager.h
-@@ -0,0 +1,75 @@
+@@ -0,0 +1,80 @@
 +#ifndef mozilla_dom_RoverfoxStorageManager_h
 +#define mozilla_dom_RoverfoxStorageManager_h
 +
@@ -500,6 +581,11 @@ index 0000000000..c7dad0158f
 +  // A put reached this process's prefs: copy it into the local cache (main
 +  // thread only), which is all a worker thread reads.
 +  static void MirrorPref(const nsACString& aPrefName);
++  // Main thread. StorePref (parent only) writes a pref the way every process
++  // can receive it, chunking a value over the size Firefox syncs; LoadPref
++  // reads one back whole.
++  static void StorePref(const nsACString& aPrefName, const nsACString& aValue);
++  static void LoadPref(const nsACString& aPrefName, nsACString& aOutValue);
 +
 +  // The userContextId per-context values are stored under: the principal's.
 +  // A document without a browsing context of its own (createHTMLDocument,
@@ -556,10 +642,18 @@ index ad24dc91a2..e8f35ff5c4 100644
      "ScreenLuminance.cpp",
      "ScreenOrientation.cpp",
 diff --git a/dom/ipc/ContentParent.cpp b/dom/ipc/ContentParent.cpp
-index a3b9fd9ead..fb4011d2c3 100644
+index a3b9fd9ead..8f36a9b8e1 100644
 --- a/dom/ipc/ContentParent.cpp
 +++ b/dom/ipc/ContentParent.cpp
-@@ -1276,6 +1276,18 @@ mozilla::ipc::IPCResult ContentParent::RecvCreateGMPService() {
+@@ -122,6 +122,7 @@
+ #include "mozilla/dom/PushNotifier.h"
+ #include "mozilla/dom/RemoteWorkerDebuggerManagerParent.h"
+ #include "mozilla/dom/RemoteWorkerServiceParent.h"
++#include "mozilla/dom/RoverfoxStorageManager.h"
+ #include "mozilla/dom/ServiceWorkerManager.h"
+ #include "mozilla/dom/ServiceWorkerRegistrar.h"
+ #include "mozilla/dom/ServiceWorkerUtils.h"
+@@ -1276,6 +1277,16 @@ mozilla::ipc::IPCResult ContentParent::RecvCreateGMPService() {
    return IPC_OK();
  }
  
@@ -569,9 +663,7 @@ index a3b9fd9ead..fb4011d2c3 100644
 +  if (!StringBeginsWith(aPrefName, "roverfox.s."_ns)) {
 +    return IPC_OK();
 +  }
-+  // Default branch: session state, never written to prefs.js (see
-+  // RoverfoxStorageManager.cpp).
-+  Preferences::SetCString(aPrefName.get(), aValue, PrefValueKind::Default);
++  RoverfoxStorageManager::StorePref(aPrefName, aValue);
 +  return IPC_OK();
 +}
 +
@@ -622,15 +714,16 @@ index d562255670..b3dc7070d7 100644
  description = This must be synchronous until quota file streams become non-blocking. The synchronous message is never used on the main thread or the PBackground thread or a DOM worker threed.
  
 diff --git a/modules/libpref/Preferences.cpp b/modules/libpref/Preferences.cpp
-index 916d0e3728..f2127ef18b 100644
+index 916d0e3728..b632212b6b 100644
 --- a/modules/libpref/Preferences.cpp
 +++ b/modules/libpref/Preferences.cpp
-@@ -7315,6 +7315,8 @@ static const PrefListEntry sDynamicPrefOverrideList[]{
+@@ -7315,6 +7315,9 @@ static const PrefListEntry sDynamicPrefOverrideList[]{
      PREF_LIST_ENTRY("toolkit.mozprotocol.url"),
      PREF_LIST_ENTRY("toolkit.telemetry.log.level"),
      PREF_LIST_ENTRY("ui."),
 +    // Roverfox: allow cross-process sync of per-context fingerprint storage
 +    PREF_LIST_ENTRY("roverfox.s."),
++    PREF_LIST_ENTRY("roverfox.c."),
  };
  
  #undef PREF_LIST_ENTRY

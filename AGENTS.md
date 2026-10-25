@@ -1,9 +1,9 @@
 # AGENTS.md
 
-Instructions for any coding agent working in this repository or writing code
-against Camoufox: Claude Code, Codex, Cursor, Copilot, Gemini or anything else.
-`CLAUDE.md` and `GEMINI.md` only import this file, and `.aider.conf.yml` reads
-it, so there is one set of rules. Edit them here.
+This is the only agent-instruction file in the repository. It applies to any
+coding agent working in this repository or writing code against Camoufox,
+including Codex, Claude Code, Cursor, Copilot, Gemini, Aider or anything else.
+Edit the rules here.
 
 ---
 
@@ -124,11 +124,11 @@ persist a change there as a patch, never as an edit to that tree.
 | Path | What it is |
 |---|---|
 | `browser/` | The browser build: `Makefile`, `upstream.sh`, `multibuild.py`, `Dockerfile`, and the directories below. |
-| `browser/patches/` | Diffs applied to Firefox (42 top level, plus `playwright/`, `librewolf/`, `ghostery/`). Browser behaviour changes here. |
+| `browser/patches/` | Diffs applied to Firefox, including `playwright/`, `librewolf/` and `ghostery/`. Browser behaviour changes here. |
 | `browser/additions/camoucfg/` | The C++ config layer. `MaskConfig.hpp` reads `CAMOU_CONFIG`, which the patches consult. |
 | `browser/additions/juggler/` | Camoufox's Juggler, Playwright's Firefox protocol. The page agent runs in an isolated world. `input/` holds the cursor trajectory generators: Cursory (default) and mousecrack. |
 | `browser/settings/` | `camoufox.cfg` (prefs), `properties.json` (every config key and its type; a key the browser stops reading is marked `removed`, never deleted), policies. |
-| `browser/scripts/` | `patch.py` applies patches and writes the mozconfig; `copy-additions.sh`, `package.py`, `install-deps.sh`, font tooling. |
+| `browser/scripts/` | `patch.py` applies patches and writes the mozconfig; `sync_additions.py`, `patchstack.py`, `package.py`, `install-deps.sh`, font tooling. |
 | `browser/assets/` | Mozconfigs, README images. |
 | `browser/bundle/` | The per-OS `fontconfig/` files and `FONTS-README.txt`. The fonts are a release asset (`make fonts-extract`), pinned by `browser/scripts/data/font-bundle.json`. |
 | `browser/tests/` | Browser test suites (below): `build-tester/`, `native/`, `service/`, `playwright/`. |
@@ -144,8 +144,9 @@ it. `mach` needs Python 3.11 or newer.
 
 ```bash
 cd browser
-make dir                       # fetch Firefox, copy additions, apply every patch
-make bootstrap                 # one time: scripts/install-deps.sh + mach bootstrap
+make bootstrap                 # one time: host packages and mach bootstrap
+make dir                       # fetch Firefox, sync additions, apply every patch
+make verify-patches compare=true
 make build                     # ./mach build
 make run                       # run the build (wipes ~/.camoufox)
 make package-linux arch=x86_64 # or package-macos / package-windows
@@ -153,7 +154,10 @@ python3 multibuild.py --target linux windows macos --arch x86_64 arm64
 ```
 
 Install `ccache`. A cold build takes about 40 minutes, and an incremental one
-about 5.
+about 5. After editing Juggler, prefs or copied resources, run `make build-js`;
+after editing C++, run `make build-cpp`. `make sync` copies changed additions
+without reapplying patches. `make dir` preserves `obj-*` unless
+`CAMOUFOX_CLOBBER=1` is set.
 
 ## Changing a patch
 
@@ -166,10 +170,13 @@ make diff > patches/my-change.patch        # (git add -N new files first)
 
 make dir && make workspace ./patches/x.patch   # an existing patch: edit, then
 make diff > patches/x.patch
+
+make verify-patches compare=true              # replay and compare the whole stack
 ```
 
 `make patch` and `make unpatch` apply or reverse one patch. `make revert` resets
-the tree to unpatched Firefox. Every make target is described in
+the tree to unpatched Firefox. A fuzz, reject or partial application is a hard
+failure. Every make target is described in
 [`docs/patch-upgrading-guide.md`](docs/patch-upgrading-guide.md#the-source-tree-and-its-make-targets),
 which also covers porting patches to a new Firefox and porting Playwright. Keep
 the `Makefile` diff minimal: host dependencies belong in
@@ -184,7 +191,7 @@ change while you work:
 
 | You changed | Run |
 |---|---|
-| Patches, C++, Juggler | `python3 -m ci.run_build_tester --binary <camoufox-bin>` (the anti-detect suite) and `python3 -m ci.run_patch_guards --binary <camoufox-bin>` (one guard per shipped behaviour, in three groups: `--group spoofing|automation|parity`) |
+| Patches, C++, Juggler | `make -C browser verify-patches compare=true`, then `python3 -m ci.run_build_tester --binary <camoufox-bin>` and `python3 -m ci.run_patch_guards --binary <camoufox-bin>` (one guard per shipped behaviour, in groups `spoofing`, `automation` and `parity`) |
 | Automation behaviour | `make -C browser tests`, the upstream Playwright suite with `ci/skiplist.yml` applied |
 | `python/` | `python3 -m ci.run_pythonlib` |
 | `typescript/` | `python3 -m ci.run_typescript` (add `--browser <camoufox-bin>` for the end-to-end half) |
@@ -231,12 +238,16 @@ this section in step with the launcher options.
 - **Leave the viewport alone.** When the window size is spoofed, new pages default to `no_viewport=True`; forcing a `viewport` asks the window to resize to something the identity does not claim.
 - **`is_mobile` is ignored** (with a warning). Camoufox has desktop identities only.
 - **Persistent contexts** need `persistent_context=True` and `user_data_dir`, and cannot be served by `launch_server`.
+- **`headless=True`** uses native headless mode and needs Mesa's EGL and DRI packages on Linux; it needs neither `DISPLAY` nor Xvfb for WebGL. See [Native headless WebGL](docs/headless-webgl.md).
 - **`headless="virtual"`** needs Linux, `Xvfb` and `setpriv` from util-linux (`CannotFindXvfb`, `VirtualDisplayNotSupported` otherwise). Xvfb has no GPU, so canvas and WebGL render in software.
 - **`headless="virtual-gpu"`** renders on one GPU, named by `gpu=` or `CAMOUFOX_GPU` (a PCI address is the stable choice); several GPUs and no selector raise `AmbiguousGpuSelection`. Without root it needs Xorg.wrap allowed to start Xorg as root for any user, and the card's config in `/etc/X11`; `python -m camoufox gpu-setup <gpu> | sudo sh` does both, and every failure that setup would fix ends with that command. A browser that does not render on the card raises `GpuSoftwareFallback` (`require_gpu=False` warns). Every error is a `VirtualDisplayError`. `gpu` and `require_gpu` are not `launch_options()` arguments.
 - **`os` values are lowercase** `windows`, `macos`, `linux`; anything else raises `InvalidOS`.
 - **`geoip` in Python needs the extra**: `pip install "camoufox[geoip]"`, else `NotInstalledGeoIPExtra`.
-- **`InvalidIP`** is raised when the public-IP or proxy exit-IP lookup fails, or when `webrtc_ip` is not a valid IPv4/IPv6 address. Pass `webrtc_ip` and `timezone_id` to `NewContext` to skip the lookup.
-- **`InvalidProxy`** means the proxy `server` string could not be parsed.
+- **`InvalidIP`** is raised when the public-IP or proxy exit-IP lookup fails, or when `webrtc_ip` is not a valid IPv4/IPv6 address. Pass `webrtc_ip`, `timezone_id`, `locale` and `geolocation` to `NewContext` to skip the lookup.
+- **`InvalidProxy`** means the proxy could not be parsed or configured. SOCKS5
+  credentials at launch are moved out of Playwright through
+  `CAMOU_PROXY_CREDENTIALS`; a credential-bearing SOCKS5 proxy passed to
+  `NewContext` raises because Playwright rejects it before Juggler.
 - **`UnknownIPLocation`**: the IP is not in the GeoIP database; pass `locale` and set coordinates another way.
 - **Version ceilings:** Playwright below 1.63; Node.js 22.15 or newer.
 - **Each package release is paired with one browser build.** `camoufox set` overrides it (with a warning at launch), the `browser` option overrides it for one launch, and `camoufox set --release` restores it.

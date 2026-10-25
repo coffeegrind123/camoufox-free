@@ -241,6 +241,10 @@ profile" workflow makes one; see `ci/pgo.py`). Tags `font-bundle-*` and
 These releases carry no `manifest.json` and their tags are not upstream's
 `v<version>-<release>`, so `ci.release paired` finds none: a pull request that
 leaves the browser alone still builds it rather than fetching a release.
+The build resolves AMO's newest uBlock Origin once, passes that pin to
+packaging, and names the bundled version in the release notes. The test
+pipeline resolves its own pin once per run and stages it into both built and
+restored browsers.
 
 ## Running a piece by hand
 
@@ -253,6 +257,7 @@ leaves the browser alone still builds it rather than fetching a release.
 | `python3 -m ci.run_typescript --browser <bin>` | yes | The npm launcher end to end |
 | `python3 -m ci.run_install --tmpdir /mnt/tmpfs --browser <bin>` | yes | Packed packages, a real fetch, and a launch, click and typing through each installed package; the tmpdir must be its own filesystem |
 | `python3 -m ci.run_patch_guards --binary <bin>` | yes | Patch guards; `--group spoofing\|automation\|parity`, `--only <name>` |
+| `env -u DISPLAY -u WAYLAND_DISPLAY python3 -m ci.run_patch_guards --binary <bin> --only webgl-headless-parity` | yes | Native-headless WebGL renders and reports the pinned GPU without X11 ([design note](../docs/headless-webgl.md)) |
 | `python3 -m ci.run_patch_guards --binary <bin> --only stock-gpu-parity` | yes | WebGL and WebGPU against stock Firefox of the same version, downloaded into `.ci-work` ([upgrade step](../docs/patch-upgrading-guide.md#browser-owned-gpu-values)) |
 | `python3 -m ci.run_build_tester --binary <bin>` | yes | build-tester |
 | `python3 -m ci.run_skiplist_audit --binary <bin>` | yes | Every skiplist entry still fails |

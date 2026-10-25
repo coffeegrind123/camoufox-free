@@ -1,6 +1,6 @@
 import asyncio
 from functools import partial
-from typing import Any, Dict, Optional, Tuple, Union, overload
+from typing import Any, Dict, Optional, Union, overload
 
 from playwright.async_api import (
     Browser,
@@ -12,17 +12,27 @@ from typing_extensions import Literal
 
 from camoufox.virtdisplay import VirtualDisplay
 
+from .exceptions import InvalidProxy
 from .fingerprints import generate_context_fingerprint
-from .ip import Proxy, proxy_exit_geo
+from .ip import (
+    ExitGeo,
+    PROXY_CREDENTIALS_ENV,
+    Proxy,
+    proxy_exit_geo,
+    split_socks_credentials,
+)
 from .utils import (
     DEFAULT_CANVAS_NOISE,
     async_attach_vd,
     attach_context_defaults,
+    attach_launch_window,
     context_identity,
     host_identity,
     launch_options,
+    needs_exit_geo,
     new_context_options,
     persistent_context_options,
+    place_at_exit,
     spoofs_window_dimensions,
     start_virtual_display,
 )
@@ -207,12 +217,13 @@ async def _launch(
     )
     browser = await playwright.firefox.launch(**from_options)
     attach_context_defaults(browser, no_viewport_default)
+    attach_launch_window(browser, from_options)
     browser._camoufox_host_identity = identity
     return await async_attach_vd(browser, virtual_display)
 
 
-async def _resolve_proxy_geo(proxy: Dict[str, str]) -> Tuple[str, str]:
-    """The proxy's exit IP and timezone, looked up off the event loop."""
+async def _resolve_proxy_geo(proxy: Dict[str, str]) -> ExitGeo:
+    """Where the proxy exits, looked up off the event loop."""
     # run_in_executor rather than asyncio.to_thread, which needs Python 3.9.
     loop = asyncio.get_running_loop()
     return await loop.run_in_executor(None, proxy_exit_geo, Proxy(**proxy).as_string())
@@ -245,26 +256,40 @@ async def AsyncNewContext(
         ff_version: Firefox major version to claim in the UA. Defaults to the browser's own.
         webrtc_ip: IPv4 or IPv6 address to spoof for WebRTC ICE candidates.
         proxy: Per-context proxy (Playwright format: {"server": "...", "username": "...", "password": "..."}).
-            Unless webrtc_ip and timezone_id are both given, they are looked up from the
-            proxy's exit IP; InvalidIP is raised if that lookup fails.
+            SOCKS5 credentials are rejected; declare them in CAMOU_PROXY_CREDENTIALS at launch.
+            The context is placed where the proxy exits: webrtc_ip, timezone_id, locale and
+            geolocation each default to the exit IP's, looked up through the proxy unless all
+            four are given; InvalidIP is raised if that lookup fails.
         geolocation: Per-context geolocation ({"latitude": float, "longitude": float}).
         **context_kwargs: Additional Playwright new_context() options.
     """
+    proxy, socks_credentials = split_socks_credentials(proxy)
+    if socks_credentials:
+        raise InvalidProxy(
+            "Per-context SOCKS5 credentials cannot be delivered after the browser "
+            f"has started. Declare the endpoint in {PROXY_CREDENTIALS_ENV} in the "
+            "launch env, then pass the proxy without credentials to AsyncNewContext."
+        )
+
     # The drawn UA carries fpgen's Firefox version, which must not disagree with
     # the browser the page is actually talking to.
     ff_version = ff_version or browser.version.split('.', 1)[0]
 
-    # Auto-derive WebRTC IP and timezone from proxy's exit IP when not explicitly provided
-    if proxy and (not webrtc_ip or "timezone_id" not in context_kwargs):
-        exit_ip, timezone = await _resolve_proxy_geo(proxy)
-        webrtc_ip = webrtc_ip or exit_ip
-        context_kwargs.setdefault("timezone_id", timezone)
+    if proxy and needs_exit_geo(webrtc_ip, geolocation, context_kwargs):
+        webrtc_ip, geolocation = place_at_exit(
+            await _resolve_proxy_geo(proxy), webrtc_ip, geolocation, context_kwargs
+        )
 
     os, webgl_config = context_identity(browser, os, preset)
     fp = await asyncio.get_event_loop().run_in_executor(
         None,
         lambda: generate_context_fingerprint(
-            preset=preset, os=os, ff_version=ff_version, webrtc_ip=webrtc_ip, webgl_config=webgl_config
+            preset=preset,
+            os=os,
+            ff_version=ff_version,
+            webrtc_ip=webrtc_ip,
+            webgl_config=webgl_config,
+            launch_window=getattr(browser, '_camoufox_launch_window', None),
         ),
     )
 

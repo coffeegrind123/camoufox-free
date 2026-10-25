@@ -2,8 +2,8 @@ import ipaddress
 import re
 from dataclasses import dataclass
 from functools import lru_cache
-from typing import Dict, Optional, Tuple
-from urllib.parse import quote
+from typing import Dict, NamedTuple, Optional, Tuple
+from urllib.parse import quote, unquote, urlsplit
 
 import requests
 
@@ -48,7 +48,9 @@ class Proxy:
                 result += f":{quote(self.password, safe='')}"
             result += "@"
 
-        result += url
+        # An explicit username replaces URL userinfo rather than adding a second
+        # credential pair, which would produce an invalid URL with two `@`s.
+        result += url.rsplit('@', 1)[-1] if self.username else url
         if port:
             result += f":{port}"
         return result
@@ -62,6 +64,95 @@ class Proxy:
             'http': proxy_string,
             'https': proxy_string,
         }
+
+
+PROXY_CREDENTIALS_ENV = 'CAMOU_PROXY_CREDENTIALS'
+SOCKS5_SCHEMES = ('socks5', 'socks5h')
+
+
+def split_socks_credentials(
+    proxy: Optional[Dict[str, str]],
+) -> Tuple[Optional[Dict[str, str]], Optional[Dict[str, Dict[str, str]]]]:
+    """Split SOCKS5 credentials from Playwright's public proxy settings.
+
+    Playwright's driver rejects SOCKS5 proxies that carry credentials. Return a
+    proxy without them for Playwright, plus credentials keyed by lower-case
+    ``host:port`` for the launch environment. Credentials in the server URL are
+    percent-decoded; explicit username/password fields take precedence.
+    """
+    if proxy is None:
+        return None, None
+
+    server = proxy.get('server')
+    if not isinstance(server, str) or not server:
+        raise InvalidProxy(f"Invalid proxy server: {server!r}")
+
+    if '://' not in server:
+        scheme = server.split(':', 1)[0].lower()
+        if scheme in SOCKS5_SCHEMES or server.startswith(('/', '.', '?', '#')) or '/' in server:
+            raise InvalidProxy(f"Invalid proxy server: {server}")
+        # Playwright accepts a scheme-less HTTP endpoint in host:port form.
+        return proxy, None
+
+    try:
+        parsed = urlsplit(server)
+        host = parsed.hostname
+    except ValueError as exception:
+        raise InvalidProxy(f"Invalid proxy server: {server}") from exception
+    try:
+        port = parsed.port
+    except ValueError as exception:
+        raise InvalidProxy(f"Invalid proxy server port: {server}") from exception
+
+    if parsed.scheme.lower() not in SOCKS5_SCHEMES:
+        return proxy, None
+    if not host:
+        raise InvalidProxy(f"Invalid proxy server, missing host: {server}")
+    if parsed.path or parsed.query or parsed.fragment:
+        raise InvalidProxy(f"Invalid proxy server: {server}")
+
+    host_port = parsed.netloc.rsplit('@', 1)[-1]
+    if host_port.endswith(':'):
+        raise InvalidProxy(f"Invalid proxy server port: {server}")
+    if port is not None and not 1 <= port <= 65535:
+        raise InvalidProxy(f"Invalid proxy server port: {server}")
+    if port is None:
+        # Playwright serializes a missing SOCKS port as NaN for Juggler.
+        raise InvalidProxy(f"A SOCKS5 proxy needs an explicit port: {server}")
+
+    for field in ('username', 'password'):
+        value = proxy.get(field)
+        if value is not None and not isinstance(value, str):
+            raise InvalidProxy(f"Invalid proxy {field}: expected a string")
+
+    if 'username' in proxy:
+        username = proxy['username'] or ''
+    else:
+        username = unquote(parsed.username or '')
+    if 'password' in proxy:
+        password = proxy['password'] or ''
+    else:
+        password = unquote(parsed.password or '')
+
+    if password and not username:
+        raise InvalidProxy("A SOCKS5 proxy password requires a username")
+
+    playwright_proxy = dict(proxy)
+    playwright_proxy.pop('username', None)
+    playwright_proxy.pop('password', None)
+    normalized_host = host.lower()
+    normalized_server = f"[{normalized_host}]" if ':' in normalized_host else normalized_host
+    normalized_server += f":{port}"
+    playwright_proxy['server'] = f"socks5://{normalized_server}"
+
+    if not username:
+        return playwright_proxy, None
+    return playwright_proxy, {
+        f"{normalized_host}:{port}": {
+            "username": username,
+            "password": password,
+        }
+    }
 
 
 @lru_cache(128, typed=True)
@@ -92,15 +183,25 @@ DIRECT_IP_TIMEOUT = 5
 PROXIED_IP_TIMEOUT = 15
 
 
-def proxy_exit_geo(proxy: str) -> Tuple[str, str]:
+class ExitGeo(NamedTuple):
+    """Where a proxy exits: its IP and that IP's timezone, country and position."""
+
+    ip: str
+    timezone: str
+    country: str
+    latitude: float
+    longitude: float
+
+
+def proxy_exit_geo(proxy: str) -> ExitGeo:
     """
-    The exit IP of `proxy` and that IP's timezone, looked up through the proxy.
-    Raises InvalidIP when the lookup fails: a context that silently kept the
-    host's WebRTC IP and timezone behind a proxy would be a leak.
+    Where `proxy` exits, looked up through the proxy. Raises InvalidIP when the
+    lookup fails: a context that silently kept the host's WebRTC IP and
+    timezone behind a proxy would be a leak.
     """
     try:
         resp = requests.get(
-            "http://ip-api.com/json?fields=status,message,query,timezone",
+            "http://ip-api.com/json?fields=status,message,query,timezone,countryCode,lat,lon",
             proxies=Proxy.as_requests_proxy(proxy),
             timeout=PROXIED_IP_TIMEOUT,
         )
@@ -108,15 +209,24 @@ def proxy_exit_geo(proxy: str) -> Tuple[str, str]:
         data = resp.json()
     except requests.RequestException as exception:
         raise InvalidIP(f"{PROXY_LOOKUP_FAILED}: {exception}") from exception
-    if data.get("status") != "success" or not data.get("timezone"):
+    if data.get("status") != "success" or not all(
+        data.get(key) is not None
+        for key in ("query", "timezone", "countryCode", "lat", "lon")
+    ):
         raise InvalidIP(f"{PROXY_LOOKUP_FAILED}: {data.get('message') or data}")
     validate_ip(data["query"])
-    return data["query"], data["timezone"]
+    return ExitGeo(
+        data["query"],
+        data["timezone"],
+        data["countryCode"],
+        float(data["lat"]),
+        float(data["lon"]),
+    )
 
 
 PROXY_LOOKUP_FAILED = (
-    "Could not look up the proxy's exit IP and timezone. Pass webrtc_ip and "
-    "timezone_id explicitly to skip the lookup"
+    "Could not look up where the proxy exits. Pass webrtc_ip, timezone_id, "
+    "locale and geolocation explicitly to skip the lookup"
 )
 
 

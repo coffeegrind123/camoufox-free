@@ -17,11 +17,20 @@ import {
 	firefox,
 } from "playwright-core";
 import * as cpuAffinity from "./cpu_affinity.js";
+import { InvalidProxy } from "./exceptions.js";
 import { generateContextFingerprint } from "./fingerprints.js";
-import { type ProxyConfig, ProxyHelper, proxyExitGeo } from "./ip.js";
+import {
+	PROXY_CREDENTIALS_ENV,
+	type ProxyConfig,
+	ProxyHelper,
+	proxyExitGeo,
+	splitSocksCredentials,
+} from "./ip.js";
+import { SELECTOR } from "./locales.js";
 import {
 	applyNoViewport,
 	attachDesktopOnlyWarning,
+	attachLaunchWindow,
 	attachNoViewportDefault,
 	attachStockMediaDefaults,
 	attachVirtualDisplay,
@@ -105,11 +114,12 @@ export async function NewBrowser(
 	let fromOptions = from_options;
 	// Options the caller built leave its contexts to the caller
 	// (hostIdentity).
-	let canvasNoise: boolean | undefined = false;
+	let canvasNoise: boolean | null = false;
 	let gpuPassthrough = false;
 	try {
 		if (!fromOptions || !Object.keys(fromOptions).length) {
-			canvasNoise = kwargs.canvas_noise ?? undefined;
+			canvasNoise =
+				kwargs.canvas_noise === undefined ? false : kwargs.canvas_noise;
 			gpuPassthrough = Boolean(kwargs.gpu_passthrough);
 			// Opt-in (2026-09-17). Pinning keeps the identity's core count by
 			// constraining the browser to that many cores; it costs real CPU,
@@ -173,7 +183,7 @@ async function launchWith(
 	persistentContext: boolean,
 	noViewportDefault: boolean,
 	virtualDisplay: VirtualDisplay | null,
-	canvasNoise: boolean | undefined,
+	canvasNoise: boolean | null | undefined,
 	gpuPassthrough: boolean,
 ): Promise<Browser | BrowserContext> {
 	// Persistent context. Python passes user_data_dir inside the options; the
@@ -212,6 +222,7 @@ async function launchWith(
 	attachStockMediaDefaults(browser);
 	attachDesktopOnlyWarning(browser);
 	(browser as any)._camoufoxHostIdentity = identity;
+	attachLaunchWindow(browser, fromOptions);
 	return attachVirtualDisplay(browser, virtualDisplay);
 }
 
@@ -265,6 +276,16 @@ export async function NewContext(
 		...contextOptions
 	}: NewContextOptions = {},
 ): Promise<BrowserContext> {
+	const [sanitizedProxy, socksCredentials] = splitSocksCredentials(proxy);
+	if (socksCredentials) {
+		throw new InvalidProxy(
+			"Per-context SOCKS5 credentials cannot be delivered after the browser " +
+				`has started. Declare the endpoint in ${PROXY_CREDENTIALS_ENV} in the ` +
+				"launch env, then pass the proxy without credentials to NewContext.",
+		);
+	}
+	proxy = sanitizedProxy;
+
 	// Python's fpgen loads its model on import; here it is fetched on first use.
 	// launchOptions() awaits it, but a browser from connect() or a custom
 	// executable never went through launchOptions().
@@ -274,13 +295,29 @@ export async function NewContext(
 	// the browser the page is actually talking to.
 	const ffVersion = ff_version || browser.version().split(".", 1)[0];
 
-	// Auto-derive the WebRTC IP and timezone from the proxy's exit IP when they
-	// aren't explicitly provided.
+	// Put a context behind a proxy where the proxy exits, as geoip places a
+	// launch: its WebRTC IP, clock, locale and position. A value the caller
+	// gave is kept.
 	let webrtcIp = webrtc_ip;
-	if (proxy && (!webrtcIp || !("timezoneId" in contextOptions))) {
-		const [exitIp, timezone] = await proxyExitGeo(ProxyHelper.asString(proxy));
-		webrtcIp ||= exitIp;
-		if (!("timezoneId" in contextOptions)) contextOptions.timezoneId = timezone;
+	let position = geolocation;
+	if (
+		proxy &&
+		!(
+			webrtcIp &&
+			position &&
+			"timezoneId" in contextOptions &&
+			"locale" in contextOptions
+		)
+	) {
+		const exit = await proxyExitGeo(ProxyHelper.asString(proxy));
+		webrtcIp ||= exit.ip;
+		position ||= { latitude: exit.latitude, longitude: exit.longitude };
+		if (!("timezoneId" in contextOptions))
+			contextOptions.timezoneId = exit.timezone;
+		if (!("locale" in contextOptions))
+			contextOptions.locale = (
+				await SELECTOR.fromRegion(exit.country)
+			).asString;
 	}
 
 	const [contextOs, webglConfig] = contextIdentity(browser, os, preset);
@@ -290,19 +327,30 @@ export async function NewContext(
 		ff_version: ffVersion,
 		webrtc_ip: webrtcIp,
 		webgl_config: webglConfig,
+		launch_window: (browser as any)._camoufoxLaunchWindow,
 	});
 
 	// Merge the generated context options with user overrides (user wins). They
 	// are already Playwright's JS names (userAgent, deviceScaleFactor,
 	// timezoneId); re-casing them turned userAgent into `useragent`, which
 	// Playwright ignores, so the HTTP User-Agent contradicted navigator's.
-	const opts: Record<string, any> = {
+	let opts: Record<string, any> = {
 		...fp.context_options,
 		...contextOptions,
 	};
+	if (contextOptions.noViewport || contextOptions.viewport === null) {
+		// An explicit no-viewport beats the fingerprint's viewport, and Playwright
+		// rejects deviceScaleFactor with a null viewport.
+		for (const key of ["viewport", "deviceScaleFactor"]) {
+			if (!(key in contextOptions)) delete opts[key];
+		}
+	}
+	if ("noViewport" in opts) {
+		opts = applyNoViewport(opts);
+	}
 	if (proxy) opts.proxy = proxy;
-	if (geolocation) {
-		opts.geolocation = geolocation;
+	if (position) {
+		opts.geolocation = position;
 		opts.permissions ??= ["geolocation"];
 	}
 

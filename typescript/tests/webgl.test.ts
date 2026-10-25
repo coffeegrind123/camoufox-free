@@ -13,6 +13,7 @@ import {
 	generateContextFingerprint,
 	gpuScreenIsPlausible,
 	isSoftwareRenderer,
+	loadPresets,
 	MODERN_SCREEN_FLOOR,
 	raiseScreenToModernFloor,
 	rendererBucket,
@@ -506,6 +507,33 @@ describe("WebGL <-> screen coherence (test_webgl_screen_consistency.py)", () => 
 		const empty = {};
 		raiseScreenToModernFloor(empty);
 		expect(empty).toEqual({});
+	});
+
+	it("an explicit GPU replaces a context preset's GPU", () => {
+		const preset = loadPresets("152")?.presets.linux[0];
+		expect([
+			preset.webgl.unmaskedVendor,
+			preset.webgl.unmaskedRenderer,
+		]).not.toEqual(GTX_980_LINUX);
+
+		const context = generateContextFingerprint({
+			preset,
+			os: "linux",
+			ff_version: "152",
+			webgl_config: [...GTX_980_LINUX],
+		});
+
+		expect([
+			context.config["webGl:vendor"],
+			context.config["webGl:renderer"],
+		]).toEqual(GTX_980_LINUX);
+		expect(context.init_script).toContain(
+			`setWebGLRenderer(${JSON.stringify(GTX_980_LINUX[1])})`,
+		);
+		expect([
+			context.preset.webgl.unmaskedVendor,
+			context.preset.webgl.unmaskedRenderer,
+		]).toEqual(GTX_980_LINUX);
 	});
 
 	it.skipIf(!MODEL.ok)("context fingerprints get the same treatment", () => {

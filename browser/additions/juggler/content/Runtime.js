@@ -552,8 +552,24 @@ class Runtime {
     // onDebuggerStatement. This also works in workers, which have no Xrays.
     if (this._pendingPromises.size === 1)
       this._debugger.onDebuggerStatement = this._onDebuggerStatement.bind(this);
-    executionContext._debuggee.executeInGlobalWithBindings(
-        'p.then(() => { debugger; }, () => { debugger; })', {p: obj}, {useInnerBindings: true});
+    // Page code can replace `then` in a main-world promise. The pending entry
+    // is already registered, so a failed attach must remove it and report an
+    // evaluation error or the evaluate would wait forever.
+    let attached;
+    try {
+      attached = executionContext._debuggee.executeInGlobalWithBindings(
+          'p.then(() => { debugger; }, () => { debugger; })', {p: obj}, {useInnerBindings: true});
+    } catch (e) {
+      attached = null;
+    }
+    if (!attached || 'throw' in attached) {
+      this._pendingPromises.delete(obj);
+      if (!this._pendingPromises.size)
+        this._debugger.onDebuggerStatement = undefined;
+      exceptionDetails.text =
+          'Cannot await promise: failed to observe when it settles';
+      return {success: false, obj: null};
+    }
     return await promise;
   }
 

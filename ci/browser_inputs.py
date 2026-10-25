@@ -81,12 +81,14 @@ BROWSER_FILES = ("browser/upstream.sh", "browser/Makefile")
 NON_NATIVE_SCRIPTS = frozenset(
     {
         "browser/scripts/_font_bundle.py",
+        "browser/scripts/audit-property-tracer.py",
         "browser/scripts/check-input-dispatch.py",
         "browser/scripts/cursor-demo.py",
         "browser/scripts/export-mousecrack-weights.py",
         "browser/scripts/gen-contentaccessible-manifest.py",
         "browser/scripts/gen-font-groups.py",
         "browser/scripts/gen-fonts-json.py",
+        "browser/scripts/measure-font-units.py",
         "browser/scripts/verify-fonts.py",
     }
 )
@@ -97,7 +99,7 @@ BUILD_ENTRY_POINTS = (
     "browser/multibuild.py",
     "browser/scripts/patch.py",
     "browser/scripts/package.py",
-    "browser/scripts/copy-additions.sh",
+    "browser/scripts/sync_additions.py",
     "browser/scripts/_mixin.py",
 )
 

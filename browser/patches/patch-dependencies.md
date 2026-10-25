@@ -20,7 +20,7 @@ WebRTC host socket's port range in `webrtc-ip-spoofing.patch`); anything a page
 can observe asks `NavigatorManager::GetSpoofedOS()` (`navigator-spoofing.patch`)
 for its own context's OS, which is that context's `navigator.platform` when it
 set one and the launch's otherwise.
-`scripts/copy-additions.sh` copies it into the source tree before any patch
+`scripts/sync_additions.py --baseline` copies it into the source tree before any patch
 applies. A patch that calls MaskConfig from a directory whose `moz.build` does
 not already see `/camoucfg` must add `LOCAL_INCLUDES += ["/camoucfg"]` itself.
 
@@ -47,6 +47,7 @@ be listed there.
 | `navigator-spoofing.patch` | `navigator.*` |
 | `network-patches.patch` | `headers.*`, `navigator.userAgent` |
 | `no-css-animations.patch` | `instantAnimations` |
+| `privacy-signals-spoofing.patch` | `navigator.doNotTrack` |
 | `screen-spoofing.patch` | `screen.*` |
 | `system-ui-font-spoofing.patch` | `navigator.platform` |
 | `timezone-spoofing.patch` | `timezone` |
@@ -72,12 +73,35 @@ already set up, and do not add the include or `LOCAL_INCLUDES` themselves:
 | `font-metrics-windows.patch` | `font-hijacker.patch` for `/camoucfg` in `gfx/thebes/moz.build` |
 | `force-default-pointer.patch` | `screen-spoofing.patch` for `MaskConfig.hpp` in `layout/style/nsMediaFeatures.cpp`; `font-hijacker.patch` for `/camoucfg` in `layout/style/moz.build` |
 | `media-device-spoofing.patch` | `audio-context-spoofing.patch` for `/camoucfg` in `dom/media/moz.build` |
+| `privacy-signals-spoofing.patch` | `navigator-spoofing.patch` for `MaskConfig.hpp` in `dom/base/Navigator.cpp`; `network-patches.patch` for `/camoucfg` in `netwerk/protocol/http/moz.build` |
 | `system-ui-font-spoofing.patch` | `font-hijacker.patch` for `MaskConfig.hpp` in `gfx/thebes/gfxPlatformFontList.cpp` and `/camoucfg` in `gfx/thebes/moz.build` |
 | `touchscreen-fingerprint-spoofing.patch` | `navigator-spoofing.patch` for `MaskConfig.hpp` in `dom/base/Navigator.cpp` |
 | `font-list-spoofing.patch` | `anti-font-fingerprinting.patch` for `gfxFontGroup::mUserContextId` |
 | `timezone-spoofing.patch`, `webrtc-ip-spoofing.patch` | `audio-fingerprint-manager.patch` for `RoverfoxStorageManager.h` in `dom/base/nsGlobalWindowInner.cpp` |
 | `font-system-fonts-css2.patch`, `system-ui-font-spoofing.patch`, `webrtc-ip-spoofing.patch`, `zz-stock-cost-parity.patch` | `navigator-spoofing.patch` for `NavigatorManager::GetSpoofedOS()` |
 | `windows-keyboard.patch` | `touchscreen-fingerprint-spoofing.patch` for `/camoucfg` in `dom/events/moz.build` |
+| `zz-stock-cost-parity.patch` | `cross-process-storage.patch` for `RoverfoxStorageManager::Generation()`; `screen-spoofing.patch` for `ScreenDimensionManager` in `dom/base/nsScreen.cpp` |
+
+`zzz-context-locale.patch` applies last and depends on `locale-spoofing.patch`
+for the default-locale hook, `navigator-spoofing.patch` for
+`NavigatorManager`, `cross-process-storage.patch` for the context store, and
+`network-patches.patch` for the request-header path it extends.
+
+## Headless WebGL
+
+`webgl-headless-egl.patch` has no source dependency on `webgl-spoofing.patch`.
+It touches only `gfx/gl/GLContextProviderLinux.cpp` and
+`gfx/thebes/gfxPlatform.cpp`, and applies in file-name order before the
+spoofing patch without sharing either file. The two are one behavioural unit:
+EGL creates a real context when `DISPLAY` is unset, and `webgl-spoofing.patch`
+makes that context report the identity's GPU. The
+`webgl-headless-parity.py` guard fails if either half is missing.
+
+Linux needs Mesa's EGL and DRI drivers at runtime: `libegl1`, `libegl-mesa0`
+and `libgl1-mesa-dri` on Debian/Ubuntu, or `mesa-libEGL` and
+`mesa-dri-drivers` on Fedora/RHEL. `libxul` dlopens `libEGL.so.1`; without the
+stack the browser starts but native-headless WebGL returns `null`. Xvfb is not
+needed for native headless.
 
 ## RoverfoxStorageManager
 
@@ -97,6 +121,12 @@ at hand. A browsing context is not used, because a document created by
 shares its creator's principal. A value is stored only under its own context;
 nothing writes a fallback copy under context 0.
 
+`zzz-context-locale.patch` stores a context's Playwright `locale` as
+`nav_locale_<userContextId>`. Worker scripts, shared and service worker
+requests, and service workers without a browsing context read that key. The
+context's process gets the locale as its default and app locale, covering
+isolated worlds, worklets, form widgets and built-in strings.
+
 ## Backports
 
 These patches carry upstream Firefox changes that `browser/upstream.sh`'s
@@ -111,3 +141,22 @@ the change.
 
 Everything else is written against a tree that already has
 `playwright/0-playwright.patch` and `playwright/1-leak-fixes.patch` applied.
+
+`proxy-auth-isolation.patch` is paired with Juggler's proxy routing in
+`additions/juggler/NetworkObserver.js` and `additions/juggler/TargetRegistry.js`.
+The C++ patch keys proxy credentials by the channel's context; Juggler must route
+that channel through its context's proxy and must not globally clear the auth
+cache while other contexts are authenticating. `TargetRegistry.setProxy()` clears
+`clear-origin-attributes-data` only for its own `userContextId` when replacing an
+existing proxy.
+
+`NetworkObserver.js` also constructs SOCKS and SOCKS4 proxies with
+`nsIProtocolProxyService.newProxyInfoWithAuth`. Playwright rejects SOCKS5
+credentials before Juggler receives a proxy, so the launchers remove them from
+the Playwright proxy and export an endpoint-keyed `CAMOU_PROXY_CREDENTIALS`
+map: `{"host:port": {"username": "...", "password": "..."}}`. They also
+normalize Playwright's unrecognized `socks5h` scheme to `socks5`; Juggler sets
+`TRANSPARENT_PROXY_RESOLVES_HOST`, so both resolve names at the proxy. Invalid
+credential data or proxy construction produces an unusable proxy result instead
+of returning `defaultProxyInfo`: Gecko resumes its filter chain with the default
+when a channel filter throws, which would be a direct connection.

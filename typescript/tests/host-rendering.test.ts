@@ -26,6 +26,7 @@ const {
 	FEATURE_STATUS_OK,
 	gpuFamily,
 	hasCanvasPlaceholder,
+	HOST_GPU_PROBE_TIMEOUT_MS,
 	hostGpu,
 	setWebgpu,
 	WEBGPU_BLOCKLIST_PREF,
@@ -72,7 +73,12 @@ function onHost(
 
 async function launch(opts: Record<string, any>) {
 	const options = await quietly(() =>
-		utils.launchOptions({ env: { HOME }, i_know_what_im_doing: true, ...opts }),
+		utils.launchOptions({
+			env: { HOME },
+			i_know_what_im_doing: true,
+			canvas_noise: null,
+			...opts,
+		}),
 	);
 	return { options, config: configOf(options) };
 }
@@ -90,6 +96,42 @@ const gpuOf = (config: Record<string, any>) => [
 	config["webGl:vendor"],
 	config["webGl:renderer"],
 ];
+
+describe.skipIf(!MODEL.ok)("the fork default", () => {
+	it("another OS stays uncovered without a probe or warning", async () => {
+		const probes = onHost(HOST_GPU);
+		const {
+			result,
+			error,
+			warnings: caught,
+		} = await warnings.recordWarnings(() =>
+			utils.launchOptions({
+				env: { HOME },
+				os: "windows",
+				i_know_what_im_doing: true,
+			}),
+		);
+		if (error) throw error;
+
+		expect(placeholder(result as any)).toBe(false);
+		expect(caught.some((w) => w.message.includes("canvas_noise"))).toBe(false);
+		expect(probes).toEqual([]);
+	});
+
+	it("a named GPU stays uncovered", async () => {
+		onHost(HOST_GPU);
+		const options = await quietly(() =>
+			utils.launchOptions({
+				env: { HOME },
+				os: "linux",
+				webgl_config: OTHER_GPU,
+				i_know_what_im_doing: true,
+			}),
+		);
+
+		expect(placeholder(options)).toBe(false);
+	});
+});
 
 describe.skipIf(!MODEL.ok)("the host's OS", () => {
 	it("a drawn identity claims the host GPU without noise", async () => {
@@ -116,7 +158,11 @@ describe.skipIf(!MODEL.ok)("the host's OS", () => {
 			error,
 			warnings: caught,
 		} = await warnings.recordWarnings(() =>
-			utils.launchOptions({ env: { HOME }, os: "linux" }),
+			utils.launchOptions({
+				env: { HOME },
+				os: "linux",
+				canvas_noise: null,
+			}),
 		);
 		if (error) throw error;
 
@@ -194,7 +240,11 @@ describe.skipIf(!MODEL.ok)("another OS", () => {
 	it("covering the canvas warns", async () => {
 		onHost(HOST_GPU);
 		const { error, warnings: caught } = await warnings.recordWarnings(() =>
-			utils.launchOptions({ env: { HOME }, os: "windows" }),
+			utils.launchOptions({
+				env: { HOME },
+				os: "windows",
+				canvas_noise: null,
+			}),
 		);
 		if (error) throw error;
 
@@ -300,13 +350,17 @@ describe.skipIf(!MODEL.ok)("WebGPU", () => {
 	});
 });
 
-it("the probe ignores what the launcher adds to the environment", () => {
+it("the probe ignores what the launcher adds to the environment", async () => {
 	// hostIdentity probes with the launch's env and prefs, which carry CAMOU_*,
 	// FONTCONFIG_FILE and prefs that choose no device; that must hit
 	// launchOptions' cached probe.
-	const launch = vi
-		.spyOn(firefox, "launch")
-		.mockImplementation(() => new Promise(() => undefined));
+	let resolveLaunch: ((browser: any) => void) | undefined;
+	const launch = vi.spyOn(firefox, "launch").mockImplementation(
+		() =>
+			new Promise((resolve) => {
+				resolveLaunch = resolve;
+			}),
+	);
 	const first = hostGpu("/nonexistent/camoufox", true, { DISPLAY: ":0" }, {});
 	const second = hostGpu(
 		"/nonexistent/camoufox",
@@ -321,6 +375,57 @@ it("the probe ignores what the launcher adds to the environment", () => {
 
 	expect(second).toBe(first);
 	expect(launch).toHaveBeenCalledTimes(1);
+	resolveLaunch?.({
+		newPage: async () => ({ evaluate: async () => null }),
+		close: async () => undefined,
+	});
+	await expect(second).resolves.toBeNull();
+});
+
+it("a host GPU probe that never answers times out and says so", async () => {
+	expect(HOST_GPU_PROBE_TIMEOUT_MS).toBe(30_000);
+	vi.useFakeTimers();
+	try {
+		vi.spyOn(firefox, "launch").mockImplementation(
+			() => new Promise(() => undefined),
+		);
+		const pending = hostGpu(
+			"/nonexistent/timed-out-camoufox",
+			true,
+			{ DISPLAY: ":99" },
+			{},
+		);
+		const rejected = expect(pending).rejects.toThrow(
+			"Host GPU probe timed out after 30000 ms",
+		);
+
+		await vi.advanceTimersByTimeAsync(HOST_GPU_PROBE_TIMEOUT_MS);
+		await rejected;
+	} finally {
+		vi.useRealTimers();
+	}
+});
+
+it("a timed-out page read closes its browser", async () => {
+	expect(HOST_GPU_PROBE_TIMEOUT_MS).toBe(30_000);
+	vi.useFakeTimers();
+	try {
+		const close = vi.fn(async () => undefined);
+		vi.spyOn(firefox, "launch").mockResolvedValue({
+			newPage: async () => ({ evaluate: () => new Promise(() => undefined) }),
+			close,
+		} as any);
+		const pending = hostGpu("/nonexistent/hung-page-camoufox", true, {}, {});
+		const rejected = expect(pending).rejects.toThrow(
+			"Host GPU probe timed out after 30000 ms",
+		);
+
+		await vi.advanceTimersByTimeAsync(HOST_GPU_PROBE_TIMEOUT_MS);
+		await rejected;
+		expect(close).toHaveBeenCalledOnce();
+	} finally {
+		vi.useRealTimers();
+	}
 });
 
 function browserOnHost(gpu: Gpu | null) {
@@ -450,7 +555,13 @@ function onPassthroughHost(
 ): boolean[] {
 	const probes: boolean[] = [];
 	onHost(gpu, osKey);
-	deps.hostGpu = async (_executablePath, _headless, _env, raw = false) => {
+	deps.hostGpu = async (
+		_executablePath,
+		_headless,
+		_env,
+		_prefs,
+		raw = false,
+	) => {
 		probes.push(raw);
 		return gpu;
 	};
