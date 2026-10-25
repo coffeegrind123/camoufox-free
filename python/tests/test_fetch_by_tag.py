@@ -117,6 +117,41 @@ def test_the_paired_build_is_fetched_with_one_api_call(github, installs, tmp_pat
     assert installs == [("Official", "156.0.1-beta.33", True)]
 
 
+def test_a_fork_pin_fetches_the_fork_release(github, installs, tmp_path):
+    served, requested = github
+    (tmp_path / "browser-pin.json").write_text(json.dumps({
+        "tag": "v158.0-beta.33-cg.10",
+        "repo": "coffeegrind123/camoufox-free",
+        "repo_name": "CamoufoxFree",
+        "version": "158.0",
+        "build": "beta.33",
+    }))
+    api = "https://api.github.com/repos/coffeegrind123/camoufox-free/releases"
+    served[f"{api}/tags/v158.0-beta.33-cg.10"] = _release(
+        served, "v158.0-beta.33-cg.10", "beta.33", version="158.0", prerelease=True
+    )
+
+    result = CliRunner().invoke(cli.cli, ["fetch"])
+
+    assert result.exit_code == 0, result.output
+    assert _api_requests(requested) == [f"{api}/tags/v158.0-beta.33-cg.10"]
+    assert installs == [("CamoufoxFree", "158.0-beta.33", True)]
+
+
+def test_the_fork_tag_can_be_selected_explicitly(github, installs):
+    served, requested = github
+    api = "https://api.github.com/repos/coffeegrind123/camoufox-free/releases"
+    served[f"{api}/tags/v158.0-beta.33-cg.10"] = _release(
+        served, "v158.0-beta.33-cg.10", "beta.33", version="158.0", prerelease=True
+    )
+
+    result = CliRunner().invoke(cli.cli, ["fetch", "camoufoxfree/158.0-beta.33-cg.10"])
+
+    assert result.exit_code == 0, result.output
+    assert _api_requests(requested) == [f"{api}/tags/v158.0-beta.33-cg.10"]
+    assert installs == [("CamoufoxFree", "158.0-beta.33", False)]
+
+
 def test_a_build_without_its_own_tag_is_found_by_syncing(github, installs, monkeypatch):
     """Early alphas were published under other tags (v146-hardware holds 146.0.1-alpha.25)."""
     served, requested = github

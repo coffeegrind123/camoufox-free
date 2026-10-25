@@ -42,10 +42,9 @@ docs that ship with the code.
 [`.github/workflows/tests.yml`](.github/workflows/tests.yml) builds the browser
 from your branch when you touch browser sources (and tests the published
 release when you do not), then runs every suite. The aggregate check is
-**`All tests passed`**; branch protection is not currently enabled on this
-fork, so wait for that check before merging even though GitHub does not enforce
-it. CI leaves a summary comment on the pull request, so there is nothing to
-attach by hand.
+**`All tests passed`**, and branch protection requires it before merging. CI
+leaves a summary comment on the pull request, so there is nothing to attach by
+hand.
 
 The stealth check needs a credential, and GitHub gives secrets only to pull
 requests whose branch is in this repository. If you have write access, push your

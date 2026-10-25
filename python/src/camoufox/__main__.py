@@ -339,7 +339,8 @@ def _tagged_build(
         versions = tagged_versions(repo_config, tag)
     except requests.RequestException as e:
         _fail(f"Error: {e}")
-    match = next((v for v in versions if v.version.full_string == spec), None)
+    asset_spec = spec.rsplit("-cg.", 1)[0]
+    match = next((v for v in versions if v.version.full_string == asset_spec), None)
     return (repo_config, match) if match else None
 
 

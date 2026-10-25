@@ -122,7 +122,7 @@ def test_a_release_bundles_the_ubo_its_tests_ran_with():
     pin = "${{ needs.ubo.outputs.pin }}"
     assert jobs["ubo"]["outputs"]["pin"] == "${{ steps.resolve.outputs.pin }}"
     assert any("fetch-ubo.py resolve" in s.get("run", "") for s in jobs["ubo"]["steps"])
-    assert jobs["build"]["needs"] == "ubo"
+    assert set(jobs["build"]["needs"]) == {"verify", "ubo"}
     assert jobs["build"]["env"]["CAMOUFOX_UBO"] == pin
     assert set(jobs["release"]["needs"]) == {"build", "ubo"}
     describe = next(s for s in jobs["release"]["steps"] if s.get("name") == "Name the bundled uBlock Origin")

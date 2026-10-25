@@ -1,27 +1,18 @@
 #!/usr/bin/env python3
-"""Release plumbing for .github/workflows/release.yml.
+"""Release planning and verification helpers.
 
-Releases ride a train, on the 1st and 15th of each month. The scheduled run
-promotes the newest prerelease to stable: the browser release it pairs with is
-marked stable and latest (no rebuild), and its library version without the bN
-suffix goes to PyPI and npm `latest`. A promotion is refused while an issue
-labelled `regression` is open. The run then dispatches a cut: main is tested,
-and a browser prerelease is built if the browser's sources changed (a GitHub
-prerelease with its own release number), then -- if the library changed -- the
-Python package on PyPI and the npm package under the `next` dist-tag. A cut is
-also dispatched by hand for a fix that cannot wait, and pushing a `vX.Y.Z` tag on
-a tested main commit still promotes it by hand.
+This fork publishes a browser by tag through .github/workflows/build.yml. Before
+compiling, `check-release` requires the tag to name the browser in upstream.sh,
+the tagged commit to be on main, and the test pipeline's `All tests passed`
+gate to have succeeded on exactly that commit. A browser release's number is not
+committed: its tag supplies it, and `set-build` writes it into a working tree
+when reproducing a build.
 
-Each library release is paired with exactly one browser release -- the one built
-from the same sources, found by `ci.browser_inputs.source_digest()` in the
-release's manifest.json asset -- and `stamp` writes that pairing into the package
-(python/src/camoufox/browser-pin.json, read by both launchers). A library therefore
-never runs a browser it was not released with unless its user explicitly chooses
-another.
-
-A browser release's number is not committed anywhere: its tag points at the
-tested main commit, and `set-build` writes the number from the tag name into the
-build's working tree. Rebuilding from the tag with `set-build` reproduces it.
+`stamp` writes the browser pairing into python/src/camoufox/browser-pin.json and
+the package versions into both launchers. It is retained for library releases
+even though this fork currently publishes no packages. The train and promotion
+helpers below remain upstream-compatible tooling; this fork does not run the
+upstream release train.
 
     python3 -m ci.release target                 # the commit (and stable tag) this run releases
     python3 -m ci.release browser-plan           # build a new browser, or reuse one
@@ -33,6 +24,7 @@ build's working tree. Rebuilding from the tag with `set-build` reproduces it.
     python3 -m ci.release lib-diff --channel C --wheel W --tarball T --py-version V --npm-version V
     python3 -m ci.release promote                 # paired browser -> stable, latest
     python3 -m ci.release check-promotable --tag vX.Y.Z
+    python3 -m ci.release check-release --tag vX.Y.Z-prefix.N[-cg.N]
 """
 
 from __future__ import annotations
@@ -59,12 +51,21 @@ TS_VERSION = REPO_ROOT / "typescript" / "src" / "__version__.ts"
 # Attached to every browser release; how a library finds its browser.
 MANIFEST_ASSET = "manifest.json"
 
-# The one check the test pipeline reports. Run by release.yml it is named
-# "tests / All tests passed"; run on a pull request, "All tests passed".
+# The one gate the test pipeline reports. A reusable-workflow caller prefixes it
+# as "tests / All tests passed"; a direct run is just "All tests passed".
 GATE_CHECK = "All tests passed"
 
 # An open issue with this label holds the train's promotion.
 REGRESSION_LABEL = "regression"
+
+# The source name each release repository has in python/src/camoufox/repos.yml.
+BROWSER_SOURCE_NAMES = {
+    "daijro/camoufox": "Official",
+    "camoufox/camoufox": "Official",
+    "coffeegrind123/camoufox-free": "CamoufoxFree",
+    "coryking/camoufox": "CoryKing",
+    "jwriter20/camoufox": "JWriter20",
+}
 
 STABLE_TAG = re.compile(r"^v(\d+)\.(\d+)\.(\d+)$")
 # Every published library version is tagged: vX.Y.Z, or vX.Y.ZbN for a
@@ -72,7 +73,9 @@ STABLE_TAG = re.compile(r"^v(\d+)\.(\d+)\.(\d+)$")
 LIBRARY_TAG = re.compile(r"^v(\d+)\.(\d+)\.(\d+)(?:b(\d+))?$")
 # What a library release ships besides the browser it pairs with.
 LIBRARY_DIRS = ("python", "typescript")
-_BROWSER_TAG = re.compile(r"^v(?P<version>[^-]+)-(?P<prefix>[a-z]+)\.(?P<n>\d+)$")
+_BROWSER_TAG = re.compile(
+    r"^v(?P<version>[^-]+)-(?P<prefix>[a-z]+)\.(?P<n>\d+)(?:-cg\.(?P<cg>\d+))?$"
+)
 
 
 # ---------------------------------------------------------------------------
@@ -421,6 +424,15 @@ def repo_name() -> str:
     return os.environ.get("GITHUB_REPOSITORY") or "daijro/camoufox"
 
 
+def browser_source_name(repository: Optional[str] = None) -> str:
+    """The repos.yml source name for the repository running the release."""
+    source = (repository or repo_name()).lower()
+    try:
+        return BROWSER_SOURCE_NAMES[source]
+    except KeyError:
+        die(f"{source} has no browser source name; add it to repos.yml and BROWSER_SOURCE_NAMES")
+
+
 # ---------------------------------------------------------------------------
 # commands
 # ---------------------------------------------------------------------------
@@ -642,6 +654,21 @@ def cmd_check_promotable(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_check_release(args: argparse.Namespace) -> int:
+    """A browser tag builds only a main commit on which the test pipeline passed."""
+    m = _BROWSER_TAG.match(args.tag)
+    if not m:
+        die(f"{args.tag!r} is not a browser release tag")
+    up = read_upstream_sh()
+    if m["version"] != up["version"] or f"{m['prefix']}.{m['n']}" != up["release"]:
+        die(f"{args.tag} does not name browser {up['version']}-{up['release']} from upstream.sh")
+    sha = _head()
+    if not run(["git", "merge-base", "--is-ancestor", sha, "origin/main"], cwd=REPO_ROOT).ok:
+        die(f"{args.tag} points at {sha[:10]}, which is not on main")
+    _require_tested(sha)
+    return 0
+
+
 def cmd_stamp(args: argparse.Namespace) -> int:
     m = _BROWSER_TAG.match(args.browser_tag)
     if not m:
@@ -649,7 +676,7 @@ def cmd_stamp(args: argparse.Namespace) -> int:
     PIN_FILE.write_text(json.dumps({
         "tag": args.browser_tag,
         "repo": repo_name(),
-        "repo_name": "Official",
+        "repo_name": browser_source_name(),
         "version": m["version"],
         "build": f"{m['prefix']}.{m['n']}",
     }, indent=2) + "\n")
@@ -702,6 +729,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     p.set_defaults(fn=cmd_lib_plan)
     p = sub.add_parser("check-promotable"); p.add_argument("--tag", required=True)
     p.set_defaults(fn=cmd_check_promotable)
+    p = sub.add_parser("check-release"); p.add_argument("--tag", required=True)
+    p.set_defaults(fn=cmd_check_release)
     p = sub.add_parser("stamp"); p.add_argument("--browser-tag", required=True)
     p.add_argument("--py-version", required=True); p.add_argument("--npm-version", required=True)
     p.set_defaults(fn=cmd_stamp)

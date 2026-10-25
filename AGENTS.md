@@ -195,6 +195,11 @@ is in it, and they will not ask what a file was for.
 - **Documentation is never stale.** Update the README, `docs/` and the package
   READMEs in the same pull request as the code that changed them, never
   "later". Every snippet must run as written.
+- **README records this fork's delta from upstream.** Add every fork-only
+  browser, launcher, build, release, default or maintenance behaviour to
+  `README.md` in the same pull request, with implementation links and the
+  relevant test or guard. Remove it or move it to the declined-upstream section
+  when upstream absorbs or rejects it; never leave the list stale.
 
 ## Code
 
@@ -341,9 +346,8 @@ the `Makefile` diff minimal: host dependencies belong in
 
 `ci/` is the whole pipeline. It runs the same way locally and on a pull request
 ([`ci/README.md`](ci/README.md), which lists every runner). Branch protection
-is not currently enabled on this fork, so GitHub does not enforce the aggregate
-**`All tests passed`** check. Treat it as mandatory anyway and run the suite
-that covers your change while you work:
+requires the aggregate **`All tests passed`** check; force-pushes and branch
+deletion are disabled. Run the suite that covers your change while you work:
 
 | You changed | Run |
 |---|---|
