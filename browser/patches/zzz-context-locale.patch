@@ -480,7 +480,7 @@ diff --git a/dom/ipc/ContentChild.cpp b/dom/ipc/ContentChild.cpp
  #include "mozilla/ipc/Endpoint.h"
  #include "mozilla/ipc/FileDescriptorUtils.h"
  #include "mozilla/ipc/GeckoChildProcessHost.h"
-@@ -2475,12 +2478,19 @@ mozilla::ipc::IPCResult ContentChild::RecvFontListShmBlockAdded(
+@@ -2475,12 +2478,18 @@ mozilla::ipc::IPCResult ContentChild::RecvFontListShmBlockAdded(
    return IPC_OK();
  }
  
@@ -490,9 +490,8 @@ diff --git a/dom/ipc/ContentChild.cpp b/dom/ipc/ContentChild.cpp
 +  nsContentUtils::FlushStringBundles();
 +  if (mozilla::intl::Locale::HasContextLocale()) {
 +    AutoJSAPI jsapi;
-+    if (jsapi.Init()) {
-+      JS_ResetDefaultLocale(JS_GetRuntime(jsapi.cx()));
-+    }
++    jsapi.Init();
++    JS_ResetDefaultLocale(JS_GetRuntime(jsapi.cx()));
 +  }
    return IPC_OK();
  }
