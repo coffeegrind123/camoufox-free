@@ -152,10 +152,18 @@ Deliberate choices:
   `browser/bundle/fontconfig/windows/fonts.conf` because there is no per-launch
   fontconfig hook, and the names are in `essential-fonts.json`'s Windows list. That matches
   reality: every Windows install resolves all of them.
-- **macOS TTC weight names are reported.** The confs rewrite `American
-  Typewriter Semibold`, `Futura Bold`, `STIX Two Math Regular`, ... to their base
-  family. A real Mac registers those as families but `fc-scan` cannot see them,
-  so the ones whose target is bundled are forced in.
+- **macOS TTC weight names are reported where the version has them.** The
+  confs rewrite `American Typewriter Semibold`, `Futura Bold`, `STIX Two Math
+  Regular`, ... to their base family. A real Mac registers those as families but
+  `fc-scan` cannot see them, so the ones whose target is bundled are forced into
+  `fonts.json`. Only Sonoma's base lists all of them; `Kohinoor Devanagari
+  Medium` is one of the names whose absence identifies macOS 27. A base carries
+  an alias only when it lists the name (`base_has_alias` in
+  `browser/scripts/_font_bundle.py`), and `essential-fonts.json` holds only the
+  aliases every base of the OS carries. On Linux, where fontconfig never lists a
+  metric alias, a base carries one when it has the target: `Calibri` and
+  `Cambria` are not essential there, because no Ubuntu base has Carlito or
+  Caladea.
 - **`Twemoji Mozilla` is reportable on Linux** (a CreepJS Linux marker, and
   Firefox exposes its bundled font to content). Not reported on macOS.
 - One name renders for every Linux identity but is not always reported
@@ -180,7 +188,7 @@ plus independent per-unit draws. Not a uniform percentage of a pool.
    families and is identified by the *absence* of `Noto Sans Brahmi` /
    `Noto Sans CanAborig`.
 
-2. **The essential floor** (`essential-fonts.json`: 125 / 369 / 274) — the
+2. **The essential floor** (`essential-fonts.json`: 125 / 361 / 272) — the
    intersection of that OS's bases, so it holds whichever base was drawn.
 
 3. **Per-unit Bernoulli draws, per OS.** Each addition is one independent
@@ -192,17 +200,32 @@ plus independent per-unit draws. Not a uniform percentage of a pool.
 
    | unit | kind | Windows | macOS | Linux |
    |------|------|--------:|------:|------:|
-   | `office` | bundle | 0.602 | — | — |
+   | `office` | bundle | 0.501 | — | — |
    | `apple-optional` | bundle | — | 0.818 | — |
-   | `hololens` | bundle | 0.592 | — | — |
+   | `hololens` | bundle | 0.289 | — | — |
    | `distro-i18n` | bundle | — | — | 0.372 |
-   | `libreoffice` | bundle | 0.066 | — | 0.112 |
-   | `pan-euro` | bundle | 0.028 | — | — |
+   | `libreoffice` | bundle | 0.075 | — | 0.112 |
+   | `pan-euro` | bundle | 0.024 | — | — |
    | `cascadia` | bundle | 0.100 | 0.060 | 0.080 |
    | `meslo` | bundle | 0.040 | 0.040 | 0.060 |
    | `cjk-tc` | bundle (`zh-TW`) | 0.900 | — | — |
-   | `dev` | à la carte | 0.038 | 0.070 | 0.174 |
-   | `web` | à la carte | 0.088 | 0.270 | 0.195 |
+   | `dev` | à la carte | 0.017 | 0.070 | 0.174 |
+   | `web` | à la carte | 0.158 | 0.270 | 0.195 |
+
+   The Windows rates of `office`, `hololens`, `libreoffice`, `pan-euro`, `dev`
+   and `web` are measured from the pinned fpgen model by
+   `browser/scripts/measure-font-units.py` (8,000 seeded draws; a unit is
+   counted by the fonts only it carries; a bundle counts when half of its
+   probed fonts show; an à-la-carte rate is corrected for the fonts the model
+   never probes). Each carries the model's tag in the manifest, and
+   `ci/tests/test_font_units.py` fails when the model is bumped and the rates
+   are not re-measured. `meslo` and `cascadia` have no font the model probes,
+   and `cjk-tc` is conditional on a locale the samples do not carry, so they
+   keep their rates. The macOS and Linux columns are not re-measured. A
+   Windows machine with only some of a bundle's fonts is not drawn: 12% of the
+   model's samples show one to a quarter of Office's fonts. Units are drawn
+   independently; the model pairs `web` with `dev` 4.2 times as often as
+   independence would.
 
    `apple-optional` is one atomic unit rather than base because Apple ships those
    57 faces as optional Font Book downloads, and the fpgen corpus puts all of
@@ -210,8 +233,8 @@ plus independent per-unit draws. Not a uniform percentage of a pool.
 
 4. **Marker fonts** appended if missing (`_ensure_marker_fonts`).
 
-Resulting list sizes over 20 draws: 125–281 of 335 (Windows), 369–526 of 567
-(macOS), 278–319 of 358 (Linux).
+Resulting list sizes over 20 draws: 125–281 of 335 (Windows), 361–526 of 567
+(macOS), 276–319 of 358 (Linux).
 
 For a **native** identity — the host's own OS — on macOS and Windows the draw
 claims the OS base only, because the real system fonts are the right ones there

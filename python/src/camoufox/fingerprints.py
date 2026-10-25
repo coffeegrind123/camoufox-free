@@ -130,9 +130,9 @@ def _load_os_fonts() -> Dict[str, List[str]]:
 # Each OS's base font set: every family a stock install ships, intersected with
 # the bundle, so it is always reported in full and never subsetted. Regenerate
 # essential-fonts.json with fonts.json (`browser/scripts/gen-fonts-json.py
-# --print-bases`). On Windows it includes the GDI-substitution and Light /
-# Semilight names fonts.conf rewrites unconditionally: they render, so they
-# must be reported.
+# --print-bases`). It holds the alias names fonts.conf rewrites only where
+# every base of the OS carries them: on Windows the GDI-substitution and Light /
+# Semilight names, on Linux the metric aliases whose target every base has.
 with open(os.path.join(os.path.dirname(__file__), 'essential-fonts.json'), 'rb') as _f:
     _ESSENTIAL = json.loads(_f.read())
 _ESSENTIAL_FONTS_WINDOWS: List[str] = _ESSENTIAL['win']
@@ -383,9 +383,9 @@ def _generate_random_font_subset(
     chosen = set(result)
 
     # _ESSENTIAL_FONTS_* is the guaranteed floor underneath whichever base was
-    # drawn: the GDI-substitution names on Windows and the alias names fonts.conf
-    # rewrites unconditionally have no file of their own, so they render for
-    # every identity and must be reported by every identity.
+    # drawn. It adds the alias names every base of the OS carries but no base
+    # lists as a family (the Linux metric aliases): they have no file of their
+    # own, and they render for every identity, so every identity reports them.
     for font in full_list:
         if font in essential and font not in chosen:
             result.append(font)

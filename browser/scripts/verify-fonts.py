@@ -39,7 +39,7 @@ import subprocess
 import sys
 import tempfile
 
-from _font_bundle import read_groups, require_bundle
+from _font_bundle import base_has_alias, read_groups, require_bundle
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PYTHON_SRC = os.path.join(os.path.dirname(REPO), 'python', 'src')
@@ -137,6 +137,8 @@ def main():
         essentials = json.load(fh)
     with open(os.path.join(PACKAGE, 'launcher-constants.json'), encoding='utf-8') as fh:
         constants = json.load(fh)
+    with open(os.path.join(PACKAGE, 'font-bases.json'), encoding='utf-8') as fh:
+        font_bases = json.load(fh)
 
     # Browser-shipped fonts live beside the bundle in the package (fonts/ holds
     # TwemojiMozilla.ttf from the Firefox build plus the per-OS subdirs).
@@ -231,13 +233,28 @@ def main():
                 else:
                     print(f'OK: {len(lst)} {label} names all in fonts.json[{os_key}] ({len(reportable)})')
             # An unconditional pattern rewrite whose TARGET is reportable makes the
-            # alias renderable for every identity, so the alias must be reported by
-            # every identity too (essential). Rewrites to an unbundled/unreported
+            # alias renderable for every identity whose list has the target, so an
+            # alias every OS-version base carries must be reported by every
+            # identity too (essential). One that only some versions have is
+            # reported by those bases alone. Rewrites to an unbundled/unreported
             # target are inert (the allowlist blocks the target) and only noted.
             skip = {'MS Shell Dlg 2', 'MONO', 'mono', 'sans', 'sans serif', *GENERICS}
             live = {a: t for a, t in aliases.items() if a not in skip and t in rset}
             inert = sorted(a for a, t in aliases.items() if a not in skip and t not in rset)
-            not_always = sorted(set(live) - set(essential))
+            every_base = {
+                alias for alias, target in live.items()
+                if all(
+                    base_has_alias(os_key, alias, target, base['fonts'])
+                    for base in font_bases[os_key]
+                )
+            }
+            not_always = sorted(every_base - set(essential))
+            per_base = sorted(set(live) - every_base)
+            if per_base:
+                print(
+                    f'note: {len(per_base)} live alias rewrites are reported only by the bases '
+                    f'that have them: {per_base[:4]}...'
+                )
             if not_always:
                 msg = (f'{os_key}: fonts.conf rewrites {not_always} unconditionally to a reportable target, '
                        f'so they render for every identity but are not always reported (_ESSENTIAL_FONTS_{suffix})')

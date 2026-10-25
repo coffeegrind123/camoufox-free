@@ -87,6 +87,7 @@ NON_NATIVE_SCRIPTS = frozenset(
         "browser/scripts/gen-contentaccessible-manifest.py",
         "browser/scripts/gen-font-groups.py",
         "browser/scripts/gen-fonts-json.py",
+        "browser/scripts/measure-font-units.py",
         "browser/scripts/verify-fonts.py",
     }
 )
