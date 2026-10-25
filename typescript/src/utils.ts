@@ -1653,22 +1653,25 @@ export async function launchOptions({
 			"gpu_passthrough claims the host's GPU through WebGL; it cannot be combined with block_webgl.",
 		);
 	}
-
-	// Add the default addons
-	await utilsDeps.addDefaultAddons(addons, exclude_addons);
-
-	// Confirm all addon paths are valid
-	if (addons.length) {
-		utilsDeps.confirmPaths(addons);
-		config.addons = addons;
-	}
-
 	// The managed install is resolved lazily in Python (camoufox_path() may
 	// download); here that download is async, so do it before any sync lookup.
 	if (!executable_path) {
 		await utilsDeps.ensureCamoufoxInstalled();
 	}
 	warnIfPackageOutdated();
+
+	// The default addons are the ones that build bundles, beside its binary
+	await utilsDeps.addDefaultAddons(
+		addons,
+		exclude_addons,
+		executable_path ? String(executable_path) : utilsDeps.launchPath(),
+	);
+
+	// Confirm all addon paths are valid
+	if (addons.length) {
+		utilsDeps.confirmPaths(addons);
+		config.addons = addons;
+	}
 
 	// Get the Firefox version
 	let ffVersionStr: string;
