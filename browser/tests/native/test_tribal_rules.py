@@ -627,6 +627,72 @@ def test_per_frame_state_reset_on_navigation_is_also_released_on_dispose():
     )
 
 
+def test_juggler_reads_current_websocket_event_signatures():
+    source = (BROWSER / "additions" / "juggler" / "content" / "FrameTree.js").read_text(
+        encoding="utf-8"
+    )
+    expected = {
+        "webSocketClosed": "webSocketSerialID, httpChannelId, wasClean, code, reason",
+        "frameReceived": "webSocketSerialID, httpChannelId, frame",
+        "frameSent": "webSocketSerialID, httpChannelId, frame",
+    }
+    for callback, arguments in expected.items():
+        match = re.search(rf"\b{callback}:\s*\(([^)]*)\)\s*=>", source)
+        assert match, f"{callback} listener is missing from FrameTree.js"
+        assert match.group(1) == arguments, (
+            f"{callback} must read Firefox's current argument order; got ({match.group(1)})"
+        )
+
+
+def test_network_patch_reads_the_spoofed_user_agent_once():
+    patch = (BROWSER / "patches" / "network-patches.patch").read_text(encoding="utf-8")
+    assert "static const nsCString* MaskedUserAgent()" in patch
+    assert "mUserAgent.Assign(nsCString(value.value().c_str()));" not in patch, (
+        "UserAgent() runs off the main thread; it must not rewrite the shared mUserAgent per call."
+    )
+
+
+def test_network_patch_clears_the_accept_language_dirty_flag_on_override():
+    patch = (BROWSER / "patches" / "network-patches.patch").read_text(encoding="utf-8")
+    override = patch.index('MaskConfig::GetString("headers.Accept-Language")')
+    dirty_flag = patch.index("mAcceptLanguagesIsDirty = false;")
+    assert dirty_flag < override, (
+        "The Accept-Language override returns early; clear the dirty flag before it does."
+    )
+
+
+def test_network_patch_overrides_accept_encoding_for_https_only():
+    patch = (BROWSER / "patches" / "network-patches.patch").read_text(encoding="utf-8")
+    condition = patch.index("if (isSecure && !isDictionary)")
+    override = patch.index('MaskConfig::GetString("headers.Accept-Encoding")')
+    scheme_assignment = patch.index("if (isDictionary)", condition)
+    assert condition < override < scheme_assignment, (
+        "headers.Accept-Encoding must replace only Firefox's HTTPS list; "
+        "plain HTTP and dictionary requests keep their native encodings."
+    )
+
+
+def test_dnt_config_is_read_by_the_getter_and_wire_header():
+    patch = (BROWSER / "patches" / "privacy-signals-spoofing.patch").read_text(
+        encoding="utf-8"
+    )
+    assert 'MaskConfig::GetString("navigator.doNotTrack")' in patch
+    assert 'value.value() == "1"' in patch
+    assert "globalPrivacyControl" not in patch, (
+        "GPC already has separate context and worker support; this patch is DNT-only."
+    )
+
+
+def test_locale_override_reads_config_once_into_stable_storage():
+    patch = (BROWSER / "patches" / "locale-spoofing.patch").read_text(encoding="utf-8")
+    assert "static std::string locale;" not in patch
+    assert "static const std::optional<std::string> sLocale" in patch
+    assert "GetCamouLanguage" not in patch, (
+        "Only the default locale may be spoofed; per-locale global overrides are "
+        "not part of this fix."
+    )
+
+
 def test_a_sandbox_held_over_a_page_window_is_nuked_not_just_dropped():
     """Dropping the reference leaves the compartment to the cycle collector.
 

@@ -1655,11 +1655,11 @@ def launch_options(
     # skips the activation itself whenever navigator.platform is the host's;
     # the font draw above claims only the OS base in that case (`native`).
 
-    # navigator.doNotTrack and navigator.globalPrivacyControl are pref-backed: the
-    # getters, the worker getters and the DNT / Sec-GPC headers all read the same
-    # pref, so they are applied as prefs (daijro/camoufox#760). Stock Firefox 152
-    # reports "unspecified" and false, so a generated value is dropped unless the
-    # caller set it.
+    # navigator.doNotTrack is read from CAMOU_CONFIG by the browser so values
+    # other than "1" survive; the pref remains the fallback for unset config.
+    # globalPrivacyControl is pref-backed across the window, workers and the
+    # Sec-GPC header (daijro/camoufox#760). Stock Firefox reports "unspecified"
+    # and false, so generated values are dropped unless the caller set them.
     #
     # screen.colorDepth is left as drawn: real macOS reports 30 and Windows /
     # Linux 24, and the CSS `color` feature follows the spoofed depth
