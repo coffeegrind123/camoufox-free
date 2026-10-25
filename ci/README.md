@@ -190,9 +190,8 @@ fails it, including `skipped`, except:
 unreachable. A rejected credential, a full report, or a score under the floor
 still fails.
 
-Branch protection and repository rulesets are not currently enabled on this
-fork, so GitHub does not enforce the check. The intended settings are in
-[`ci/branch-protection.json`](branch-protection.json). To apply them (needs
+Branch protection requires this check. The settings are in
+[`ci/branch-protection.json`](branch-protection.json). To reapply them (needs
 admin):
 
 ```bash
@@ -226,7 +225,10 @@ Each tier gates the next, so a lint failure never reaches the build:
 | **Warm ccache** | Pushes to `main` and a twice-weekly schedule keep the ccache from being evicted; pull requests restore it. |
 | **Network retries only** | `ci.run_prepare` (`setup-minimal`, `dir`, `mozbootstrap`) retries only failures that read as transient network errors. A failed hunk or compile error fails at once. |
 
-Pushing to a branch cancels its running build (`cancel-in-progress`).
+Pushing to a branch cancels its running build (`cancel-in-progress`). A tag
+build first verifies that the tag names the current `upstream.sh` browser, that
+the tagged commit is on `main`, and that `All tests passed` succeeded on exactly
+that commit. A failed or missing gate stops the release before compilation.
 
 ## Releases
 

@@ -20,6 +20,15 @@ browsers:
             max: "1"
           # Prerelease channel (including "alpha.*" builds) matches all versions
 
+  - repo: coffeegrind123/camoufox-free
+    name: CamoufoxFree
+    pattern: "{name}-{version}-{build}-{os}.{arch}.zip"
+    versions:
+      - python_library:
+          min: "0.5.0"
+          max: "1"
+        # Fork releases use upstream.sh's build number; -cg.N names the release.
+
   - repo: coryking/camoufox
     name: CoryKing
     pattern: "{name}-{version}-{build}-{os}.{arch}.zip"

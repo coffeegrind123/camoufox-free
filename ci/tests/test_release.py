@@ -242,6 +242,38 @@ def test_stamp_writes_the_pin_and_every_version(tmp_path, monkeypatch):
     assert 'LIBRARY_VERSION = "0.5.8-beta.2"' in release.TS_VERSION.read_text()
 
 
+def test_a_fork_release_stamps_the_fork_source(tmp_path, monkeypatch):
+    for name, src in [("PIN_FILE", release.PIN_FILE), ("PYPROJECT", release.PYPROJECT),
+                      ("PACKAGE_JSON", release.PACKAGE_JSON), ("TS_VERSION", release.TS_VERSION)]:
+        dst = tmp_path / src.name
+        shutil.copy(src, dst)
+        monkeypatch.setattr(release, name, dst)
+    monkeypatch.setenv("GITHUB_REPOSITORY", "coffeegrind123/camoufox-free")
+
+    release.cmd_stamp(argparse.Namespace(browser_tag="v158.0-beta.33-cg.10",
+                                         py_version="0.5.8b2", npm_version="0.5.8-beta.2"))
+
+    assert json.loads(release.PIN_FILE.read_text()) == {
+        "tag": "v158.0-beta.33-cg.10",
+        "repo": "coffeegrind123/camoufox-free",
+        "repo_name": "CamoufoxFree",
+        "version": "158.0",
+        "build": "beta.33",
+    }
+
+
+def test_every_release_source_name_exists_in_the_launcher_config():
+    import sys
+
+    sys.path.insert(0, str(release.REPO_ROOT / "python" / "src"))
+    from camoufox.pkgman import RepoConfig
+
+    for repository, source_name in release.BROWSER_SOURCE_NAMES.items():
+        config = RepoConfig.find_by_name(source_name)
+        assert config is not None, source_name
+        assert repository in config.repos
+
+
 def test_the_pin_and_the_launchers_agree_on_its_format(tmp_path, monkeypatch):
     """What stamp writes is what pythonlib's loader reads."""
     import sys
@@ -259,6 +291,22 @@ def test_the_pin_and_the_launchers_agree_on_its_format(tmp_path, monkeypatch):
     pin = load_pin(release.PIN_FILE)
     assert (pin.repo_name, pin.version, pin.build, pin.tag) == \
         ("official", "156.0.1", "beta.33", "v156.0.1-beta.33")
+
+
+def test_a_release_tag_requires_the_passing_gate(monkeypatch):
+    monkeypatch.setattr(release, "read_upstream_sh",
+                        lambda: {"version": "158.0", "release": "beta.33"})
+    monkeypatch.setattr(release, "_head", lambda: "a" * 40)
+    checked = []
+    monkeypatch.setattr(release, "_require_tested", checked.append)
+
+    class Result:
+        ok = True
+
+    monkeypatch.setattr(release, "run", lambda *args, **kwargs: Result())
+
+    release.cmd_check_release(argparse.Namespace(tag="v158.0-beta.33-cg.10"))
+    assert checked == ["a" * 40]
 
 
 def _wheel(tmp_path, version, body=b"print('hi')\n"):
@@ -337,5 +385,7 @@ def test_this_fork_releases_by_tag_and_publishes_to_no_registry():
     build = yaml.safe_load((workflows / "build.yml").read_text(encoding="utf-8"))
     matrix = build["jobs"]["build"]["strategy"]["matrix"]
     assert (matrix["target"], matrix["arch"]) == (["linux"], ["x86_64"])
+    assert build["jobs"]["build"]["needs"] == ["verify", "ubo"]
     text = (workflows / "build.yml").read_text(encoding="utf-8")
+    assert "python3 -m ci.release check-release" in text
     assert "python3 -m ci.pgo fetch --require" in text

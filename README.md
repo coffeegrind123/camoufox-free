@@ -131,9 +131,9 @@ For an identity whose OS is not the host's. Offered upstream in
   npm packages are published, and upstream's release train doesn't run. ([b70dc6c](https://github.com/coffeegrind123/camoufox-free/commit/b70dc6c52c1605ad8bcf7c7770cf99d2235dd8a0))
 - **Releases are tag-driven and do not wait for Tests.** Pushing a matching
   `v<version>-<release>-cg.<n>` tag starts the release workflow; pushing to
-  `main` does not create a release. The publish job does not call the Tests
-  workflow or require `All tests passed`, so a release tag must point at an
-  already-tested commit.
+  `main` does not create a release. The release workflow fails before building
+  unless the tag names the pinned browser and its commit is on `main` with a
+  successful `All tests passed` check.
 - **Cross-language LTO and PGO** with a pinned profile, as stock Firefox builds
   ([`ci/pgo.py`](ci/pgo.py)). A release is refused until a profile is pinned.
   Offered upstream in [#886](https://github.com/daijro/camoufox/pull/886). ([3381943](https://github.com/coffeegrind123/camoufox-free/commit/3381943c57abebf06301bebee4e8f4a230781c44))
@@ -156,10 +156,10 @@ For an identity whose OS is not the host's. Offered upstream in
 - **CI and the TypeScript launcher.** The TypeScript unit and browser jobs run
   type checks, lint/build checks and Vitest, but are advisory: they use
   `continue-on-error` and are excluded from the workflow's aggregate gate. The
-  package install job is restricted to upstream. `main` currently has neither
-  branch protection nor repository rulesets, so CI reports a verdict but GitHub
-  does not enforce it. The TypeScript launcher is kept as upstream has it, but
-  not every Python change is ported to it. ([f9e1994](https://github.com/coffeegrind123/camoufox-free/commit/f9e1994f29824bb0a58a192867e85fa7ba2cc5da), [6978636](https://github.com/coffeegrind123/camoufox-free/commit/697863638dbaa4f2c16635f62e6ae0797fbc9a17))
+  package install job is restricted to upstream. `main` requires the aggregate
+  `All tests passed` check, with force-pushes and branch deletion disabled. The
+  TypeScript launcher is kept as upstream has it, but not every Python change
+  is ported to it. ([f9e1994](https://github.com/coffeegrind123/camoufox-free/commit/f9e1994f29824bb0a58a192867e85fa7ba2cc5da), [6978636](https://github.com/coffeegrind123/camoufox-free/commit/697863638dbaa4f2c16635f62e6ae0797fbc9a17))
 
 ## Maintenance
 
@@ -224,15 +224,19 @@ install it ahead of time, for example while building an image:
 python -c "from camoufox.fpgen_model import ensure_fpgen_model; ensure_fpgen_model()"
 ```
 
-`camoufox fetch` does not install this fork's browser releases. Bare
-`camoufox fetch` first consults a non-empty browser pin; the repository and
-release-tag commits documented here have an empty `browser-pin.json`, so it
-falls back to `official/stable` in
-[`repos.yml`](python/src/camoufox/repos.yml). That source queries
-`daijro/camoufox`, then `camoufox/camoufox`. This fork is not a configured
-source, so its `-cg.N` releases cannot be selected with `camoufox fetch`.
-Install the fork zip and pass `camoufox-bin` through `executable_path`, as
-shown above.
+`camoufox fetch` first consults a non-empty browser pin. This repository and
+its source installs have an empty `browser-pin.json`, so bare `camoufox fetch`
+still falls back to `official/stable` in
+[`repos.yml`](python/src/camoufox/repos.yml). A stamped library release follows
+its `CamoufoxFree` pin and fetches the matching fork tag. The fork source is
+also available explicitly:
+
+```bash
+camoufox fetch camoufoxfree/158.0-beta.33-cg.9
+```
+
+The release zip can still be installed manually and passed through
+`executable_path`, as shown above.
 
 ## Licensing
 
