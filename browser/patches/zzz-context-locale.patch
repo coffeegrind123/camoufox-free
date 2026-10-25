@@ -247,7 +247,7 @@ diff --git a/docshell/base/BrowsingContext.cpp b/docshell/base/BrowsingContext.c
  #include "mozilla/StaticPrefs_fission.h"
  #include "mozilla/StaticPrefs_media.h"
  #include "mozilla/StaticPrefs_page_load.h"
-@@ -3591,12 +3595,26 @@ void BrowsingContext::DidSet(FieldIndex<IDX_AnimationsPlayBackRateMultiplier>,
+@@ -3591,12 +3595,25 @@ void BrowsingContext::DidSet(FieldIndex<IDX_AnimationsPlayBackRateMultiplier>,
  void BrowsingContext::DidSet(FieldIndex<IDX_LanguageOverride>,
                               nsCString&& aOldValue) {
    MOZ_ASSERT(IsTop());
@@ -262,9 +262,8 @@ diff --git a/docshell/base/BrowsingContext.cpp b/docshell/base/BrowsingContext.c
 +  } else {
 +    mozilla::intl::Locale::SetContextLocale(languageOverride.get());
 +    AutoJSAPI jsapi;
-+    if (jsapi.Init()) {
-+      JS_ResetDefaultLocale(JS_GetRuntime(jsapi.cx()));
-+    }
++    jsapi.Init();
++    JS_ResetDefaultLocale(JS_GetRuntime(jsapi.cx()));
 +    ResetDefaultLocaleInAllWorkers();
 +  }
 +
