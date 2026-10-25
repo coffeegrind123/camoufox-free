@@ -4,8 +4,9 @@ A fork of [Camoufox](https://github.com/daijro/camoufox), the Firefox build
 that spoofs device fingerprints in C++. For what Camoufox is, its features and
 how to build it, read [upstream's README](https://github.com/daijro/camoufox#readme).
 
-This fork follows upstream `main` (026ec90, Firefox 158.0) and releases its
-own builds. Everything it adds is listed below; fixes are offered upstream.
+This fork follows upstream `main` and currently pins Firefox 158.0 in
+[`browser/upstream.sh`](browser/upstream.sh). It releases its own builds.
+Everything it adds is listed below; fixes are offered upstream.
 
 > [!NOTE]
 > Under development. Test a release against your own targets before relying on it.
@@ -37,6 +38,15 @@ For an identity whose OS is not the host's. Offered upstream in
 
 ### Other browser fixes
 
+- **Large per-context values cross content processes.** Firefox does not sync a
+  string pref over 4 KiB. Font and voice lists over 3 KiB are stored in chunks
+  and reassembled from a generation header, so every content-process page and
+  worker sees the context's own lists. A context font list replaces the launch
+  list instead of intersecting it.
+- **Context identity and proxy settings stay isolated.** Proxy credentials are
+  isolated per container/private context, and a NewContext behind a proxy
+  derives its WebRTC IP, timezone, locale and geolocation from that proxy's
+  exit IP. Context viewports are bounded by the shared launch window.
 - **Authenticated SOCKS5 proxies.** Playwright rejects SOCKS5 credentials
   before Juggler receives the proxy, so the launchers pass them through an
   endpoint-scoped launch environment and Juggler builds the proxy with
@@ -54,6 +64,21 @@ For an identity whose OS is not the host's. Offered upstream in
 - **uBlock Origin doesn't hold requests** while it compiles its lists on a
   fresh profile (1–45 s). Requests in the first seconds go unfiltered.
   Upstream keeps the hold. ([41a9903](https://github.com/coffeegrind123/camoufox-free/commit/41a9903048c011b9fc9aa38aa9786d72d922a94d))
+- **Network and automation protocol fixes.** Routed requests keep Firefox's
+  original header order; UA, Accept-Language and per-scheme Accept-Encoding
+  stay coherent; DNT and context locale are stable across navigation.
+  WebSocket close arguments follow Firefox 158, and a failed promise-reaction
+  attach rejects immediately instead of leaving Juggler hanging.
+- **Pinned viewport and GPU behaviour are deterministic.** A config that pins
+  `window.innerWidth`/`innerHeight` no longer deadlocks viewport updates.
+  Explicit `webgl_config` replaces a preset's GPU as one complete pair in both
+  launchers.
+- **Corrupt font data fails closed.** A damaged `groups.json` refuses the launch
+  instead of widening the scan to every OS's fonts. Windows font-unit rates and
+  essential-font aliases are regenerated from the pinned fpgen model.
+- **Launcher failures are bounded and explicit.** Transient downloads retry
+  429/5xx/connection failures, and the host GPU probe has a 30-second deadline
+  that reports the executable and display it was probing instead of hanging.
 
 ### Kept here after upstream declined
 
@@ -91,9 +116,38 @@ For an identity whose OS is not the host's. Offered upstream in
   ([`browser/tests/parity/`](browser/tests/parity)). It's a manual harness that
   diffs what a page sees in stock Firefox and in Camoufox, and it checks for
   leaks between contexts. ([9a9de49](https://github.com/coffeegrind123/camoufox-free/commit/9a9de495c1d223b7225ec4ee6eb05b0081b6968b))
+- **Incremental local builds.** Prepared trees keep their object directory, and
+  changed additions are synced without rewriting unchanged files. `make
+  build-js`, `make build-cpp`, and strict `make verify-patches` reduce rebuild
+  time without changing the release build.
+- **Read-only PropertyTracer audit.** [`audit-property-tracer.py`](browser/scripts/audit-property-tracer.py)
+  checks the 77 native source sites behind page-observable properties after a
+  Firefox upgrade. It does not inject runtime tracing or shipping code. See
+  [Property tracer source audit](docs/property-tracer-audit.md).
 - **CI and the TypeScript launcher.** The TypeScript jobs don't gate merges,
   and the package install gate runs on upstream only. The TypeScript launcher
   is kept as upstream has it, but not every Python change is ported to it. ([f9e1994](https://github.com/coffeegrind123/camoufox-free/commit/f9e1994f29824bb0a58a192867e85fa7ba2cc5da), [6978636](https://github.com/coffeegrind123/camoufox-free/commit/697863638dbaa4f2c16635f62e6ae0797fbc9a17))
+
+## Building locally
+
+The browser builds on Linux. From the repository root:
+
+```bash
+cd browser
+make bootstrap                 # host packages and mach bootstrap, once
+make dir                       # fetch Firefox, sync additions, apply every patch
+make verify-patches compare=true
+make build
+make package-linux arch=x86_64
+```
+
+After editing Juggler, prefs, or copied resources, use `make build-js`. After
+editing C++, use `make build-cpp`. `make sync` only copies changed additions
+and settings. `make dir` preserves `obj-*` by default; use
+`CAMOUFOX_CLOBBER=1 make dir` for a clean rebuild. The optional Docker build
+can use sccache and persistent compiler-cache volumes without changing release
+flags. Patch authoring and regeneration are covered in
+[`docs/patch-upgrading-guide.md`](docs/patch-upgrading-guide.md).
 
 ## Installing
 
