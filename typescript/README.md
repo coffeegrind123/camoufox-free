@@ -323,7 +323,7 @@ names. Any other key is passed to Playwright's `firefox.launch()` (or
 | `proxy` | `{ server, username?, password?, bypass? }` | none | Playwright proxy. Authenticated SOCKS5 credentials move to the launch environment; see [SOCKS5 authentication](#socks5-authentication). |
 | `geoip` | `boolean \| string` | none | `true` finds the public IP (through `proxy` if set); a string uses that IP. Sets timezone, locale, geolocation and the WebRTC IP. Without a proxy, also decides whether IPv6 stays on. |
 | `geoip_db` | `string` | the `camoufox set --geoip` choice | GeoIP database name, e.g. `"GeoIP AIO by daijro"`. |
-| `locale` | `string \| string[]` | from `geoip`, else the drawn identity's | Locale(s), e.g. `"en-US"`. The first is used for `Intl`. |
+| `locale` | `string \| string[]` | from `geoip`, else the drawn identity's | Locale(s), e.g. `"en-US"`. The first drives `Intl`; the list is used by `navigator.languages` and Accept-Language. Context locales also reach workers, isolated worlds, worklets, requests and built-in strings. |
 | `humanize` | `boolean \| number` | off | Human cursor movement. A number caps one movement at that many seconds (default cap 1.5). |
 | `humanize_engine` | `string` | `"cursory"` | The generator behind `humanize`: `"cursory"` replays recorded human movements, `"mousecrack"` synthesizes them with a trained network. Needs `humanize`. |
 | `screen` | `Screen \| { max_width?, max_height?, min_width?, min_height? }` | the real display when headed | Bounds the generated screen. |

@@ -69,6 +69,11 @@ For an identity whose OS is not the host's. Offered upstream in
   stay coherent; DNT and context locale are stable across navigation.
   WebSocket close arguments follow Firefox 158, and a failed promise-reaction
   attach rejects immediately instead of leaving Juggler hanging.
+- **Per-context locale follows every scope.** A context's locale reaches
+  `Intl`, `navigator.languages`, Accept-Language q-values, isolated worlds,
+  dedicated/shared/service workers, AudioWorklets, requests without a browsing
+  context, and built-in strings. Changing one context does not overwrite the
+  launch locale or another context.
 - **Pinned viewport and GPU behaviour are deterministic.** A config that pins
   `window.innerWidth`/`innerHeight` no longer deadlocks viewport updates.
   Explicit `webgl_config` replaces a preset's GPU as one complete pair in both
