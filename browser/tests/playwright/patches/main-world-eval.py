@@ -161,7 +161,8 @@ async def _run_enabled() -> bool:
         )
         await page.evaluate(
             "mw:window.__originalThen = Promise.prototype.then;"
-            "Promise.prototype.then = () => { throw new Error('reaction attach refused') }"
+            "Promise.prototype.then = () => { throw new Error('reaction attach refused') };"
+            "void 0"
         )
         attach_result = "returned"
         try:
@@ -171,7 +172,9 @@ async def _run_enabled() -> bool:
         except Exception:  # noqa: BLE001 - rejection is the expected outcome
             attach_result = "rejected"
         finally:
-            await page.evaluate("mw:Promise.prototype.then = window.__originalThen")
+            await page.evaluate(
+                "mw:Promise.prototype.then = window.__originalThen; void 0"
+            )
         _check(results, "failed promise attach rejects", attach_result, "rejected")
         _check(results, "evaluate still works", await page.evaluate("mw:window.pageSecret"), 41)
 
