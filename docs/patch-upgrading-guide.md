@@ -410,6 +410,20 @@ From the repository root,
 `python3 -m ci.run_patch_guards --binary <camoufox-bin>` is the most direct
 evidence that a patch which still applies was not neutered by the upgrade.
 
+Native headless WebGL is a separate upgrade gate. The guard removes
+`DISPLAY` and `WAYLAND_DISPLAY` from the browser environment, pins a recorded
+GPU, and requires a real context that compiles, links, draws and reports that
+GPU. Mesa's EGL and DRI drivers must be installed on the runner:
+
+```bash
+env -u DISPLAY -u WAYLAND_DISPLAY \
+  python3 -m ci.run_patch_guards --binary <camoufox-bin> \
+  --only webgl-headless-parity
+```
+
+The patch scope, runtime dependencies and failure mode are in
+[Native headless WebGL](headless-webgl.md).
+
 ### Browser-Owned GPU Values
 
 The launchers build WebGL from fpgen's recordings, which an older Firefox made.

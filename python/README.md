@@ -189,7 +189,7 @@ browser claim the launch's OS and GPU.
 | `headless=` | What runs | Notes |
 |---|---|---|
 | `False` (default) | A normal window | Needs a display. |
-| `True` | Firefox headless | Camoufox patches the headless tells it knows about. |
+| `True` | Firefox headless | Native headless WebGL/WebGL2 render on Mesa EGL and llvmpipe without `DISPLAY` or Xvfb on Linux; install the Mesa EGL/DRI packages from [`headless-webgl.md`](../docs/headless-webgl.md). |
 | `"virtual"` | A headed browser on a private Xvfb display | Linux only, needs `Xvfb` and `setpriv` (util-linux). Handled by `Camoufox`, `AsyncCamoufox`, `NewBrowser` and `launch_server`. The display is 1x1 unless `CAMOUFOX_VIRTUAL_DISPLAY_SIZE` (e.g. `1920x1080x24`) says otherwise. Xvfb has no GPU: canvas and WebGL render in software. |
 | `"virtual-gpu"` | A headed browser on a private, headless Xorg server bound to one GPU | Linux only, needs Xorg and the card's driver. Canvas and WebGL render on the card. Handled like `"virtual"`. See [The GPU display](#the-gpu-display). |
 

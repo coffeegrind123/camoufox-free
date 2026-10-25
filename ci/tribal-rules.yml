@@ -466,6 +466,25 @@ rules:
       shipped one differ on the same machine and Camoufox does not follow the
       shipped one.
 
+  - id: headless-webgl-has-a-real-egl-context
+    title: Native headless WebGL takes Mesa's EGL provider and renders without X11
+    check: manual   # browser/tests/playwright/patches/webgl-headless-parity.py
+    evidence:
+      - "41a07534cce: browser/patches/webgl-headless-egl.patch"
+      - "native headless with DISPLAY unset returned null from canvas.getContext('webgl') and webgl2; the glxtest probe needs X11, so GfxInfo disabled WebGL and CreateHeadless selected GLX"
+      - "browser/tests/playwright/patches/webgl-headless-parity.py launches with DISPLAY and WAYLAND_DISPLAY removed, compiles and links shaders, draws and reads back vec4(0.2, 0.7, 0.4, 1.0), and checks the pinned GPU's identity"
+      - "04facb9d: Mesa EGL and DRI packages in the shared browser CI action; libxul dlopens libEGL.so.1"
+      - "65b75b9e and 8d1df682: final guard uses fpgen's recorded device and canvas_noise=False; 67d65d97 carries Firefox 158's EXT_polygon_offset_clamp into the expected identity"
+    rationale: >-
+      WebGL spoofing only rewrites a context that exists. A display-less
+      browser that claims a GPU in every other signal but returns null from
+      canvas.getContext() is a headless tell, and Xvfb is not a valid runtime
+      dependency for native headless mode. The patch changes only the
+      offscreen factory and the GTK headless gate, leaving DMABUF, video
+      decoding, compositor EGL and other window-system behaviour alone. Mesa's
+      surfaceless EGL or swrast device supplies a real GL ES context and
+      llvmpipe renders it on the CPU.
+
   - id: canvas-fingerprint-is-hashed-not-truncated
     title: The canvas check hashes pixels, not a prefix of the data URL
     check: automated

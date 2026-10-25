@@ -82,6 +82,22 @@ already set up, and do not add the include or `LOCAL_INCLUDES` themselves:
 | `windows-keyboard.patch` | `touchscreen-fingerprint-spoofing.patch` for `/camoucfg` in `dom/events/moz.build` |
 | `zz-stock-cost-parity.patch` | `cross-process-storage.patch` for `RoverfoxStorageManager::Generation()`; `screen-spoofing.patch` for `ScreenDimensionManager` in `dom/base/nsScreen.cpp` |
 
+## Headless WebGL
+
+`webgl-headless-egl.patch` has no source dependency on `webgl-spoofing.patch`.
+It touches only `gfx/gl/GLContextProviderLinux.cpp` and
+`gfx/thebes/gfxPlatform.cpp`, and applies in file-name order before the
+spoofing patch without sharing either file. The two are one behavioural unit:
+EGL creates a real context when `DISPLAY` is unset, and `webgl-spoofing.patch`
+makes that context report the identity's GPU. The
+`webgl-headless-parity.py` guard fails if either half is missing.
+
+Linux needs Mesa's EGL and DRI drivers at runtime: `libegl1`, `libegl-mesa0`
+and `libgl1-mesa-dri` on Debian/Ubuntu, or `mesa-libEGL` and
+`mesa-dri-drivers` on Fedora/RHEL. `libxul` dlopens `libEGL.so.1`; without the
+stack the browser starts but native-headless WebGL returns `null`. Xvfb is not
+needed for native headless.
+
 ## RoverfoxStorageManager
 
 Per-context values set from Playwright (WebRTC IP, timezone,

@@ -20,6 +20,10 @@ For an identity whose OS is not the host's. Offered upstream in
 - **Per-script font fallback** follows the claimed OS's tables and `font.*`
   defaults, so Thai, emoji, Mongolian and other scripts draw with the faces
   stock Firefox uses there. ([7c8e6a9](https://github.com/coffeegrind123/camoufox-free/commit/7c8e6a9d8b3312846c26fe8e31984c10a1d3d6c6))
+- **Native headless WebGL** uses Mesa EGL and llvmpipe with `DISPLAY` unset,
+  so WebGL and WebGL2 return real rendering contexts and still report the
+  identity's pinned GPU. Xvfb is not required. See
+  [Native headless WebGL](docs/headless-webgl.md).
 - **DirectWrite line metrics** for a Windows identity (`fonts:metrics`), so
   line boxes match Windows instead of FreeType. ([c8cd204](https://github.com/coffeegrind123/camoufox-free/commit/c8cd20423c9640bbb381fc33a293c33ccbbddadf), [6023d01](https://github.com/coffeegrind123/camoufox-free/commit/6023d01bd194ad38e1fae7a3660c0c02d5c200fa))
 - **Subpixel glyph positions** for a Windows or macOS identity, so text and
