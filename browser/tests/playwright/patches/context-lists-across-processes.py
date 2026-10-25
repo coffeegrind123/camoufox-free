@@ -11,11 +11,14 @@ fonts and voices instead. An OffscreenCanvas in a worker has no document, so
 its text was measured with the launch-level fonts, and once a worker had
 measured, so was the text on its page's main thread.
 
-The probe gives one context its own short lists through an init script, then
-opens it on several loopback addresses. Each address is its own site, so the
-pages spread across content processes, and each reports which of the
-launch-level fonts and voices it can see, measuring fonts on an OffscreenCanvas
-in a worker first and then on one on its main thread.
+The probe gives one context the full Windows list except one visible font
+through an init script, then opens it on several loopback addresses. The list
+is over 4 KiB, the size above which Firefox does not sync a string pref to a
+content process. Each address is its own site; the parent's ProcessIsolation
+log must show two of them isolated apart, so the guard cannot pass by using one
+content process. Each page reports which launch-level fonts and voices it can
+see, measuring fonts on an OffscreenCanvas in a worker first and then on one on
+its main thread.
 
 What PASS means: every page of the context, and a worker on each, sees the
 same fonts and voices as the first, and fewer than the launch level does.
@@ -25,7 +28,11 @@ same fonts and voices as the first, and fewer than the launch level does.
 
 import asyncio
 import json
+import os
+import re
+import shutil
 import sys
+import tempfile
 import threading
 from functools import partial
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
@@ -38,7 +45,7 @@ CAMOUFOX = Path(__file__).resolve().parents[4] / "python" / "src" / "camoufox"
 
 HOSTS = [f"127.0.0.{n}" for n in range(1, 9)]
 
-PROBE = """async (fonts) => {
+PROBE = """async ({fonts, probe}) => {
   // document.fonts.check() is true for any font that needs no download,
   // installed or not, so measure: a font is there if it changes the width of
   // the text against both fallbacks.
@@ -59,7 +66,8 @@ PROBE = """async (fonts) => {
       speechSynthesis.onvoiceschanged = () => r(speechSynthesis.getVoices());
       setTimeout(() => r(speechSynthesis.getVoices()), 2000);
     });
-  return {fonts: visible(fonts), workerFonts, voices: voices.map(v => v.name).sort()};
+  return {fonts: visible(fonts), probeVisible: visible([probe]).length === 1,
+          workerFonts, voices: voices.map(v => v.name).sort()};
 }"""
 
 
@@ -68,39 +76,103 @@ class Quiet(SimpleHTTPRequestHandler):
         pass
 
 
+def context_origins(logdir: Path, port: int):
+    """Context id -> origin -> isolation behaviours from the parent log."""
+    parent = "".join(p.read_text(errors="replace") for p in logdir.glob("cfx-main*"))
+    by_context = {}
+    pattern = re.compile(
+        rf"Using IsolationBehavior (\w+) for http://([^:/\s]+):{port}(\S*)")
+    for match in pattern.finditer(parent):
+        behavior, host, suffix = match.groups()
+        if "font-fallback.html?context" not in suffix:
+            continue
+        line_start = parent.rfind("\n", 0, match.start()) + 1
+        line_end = parent.find("\n", match.end())
+        line = parent[line_start:len(parent) if line_end < 0 else line_end]
+        context = re.search(r"userContextId=(\d+)", line)
+        if not context:
+            continue
+        origins = by_context.setdefault(context.group(1), {})
+        origins.setdefault(host, set()).add(behavior)
+    return by_context
+
+
 async def main() -> int:
     from camoufox.async_api import AsyncCamoufox
 
-    candidates = json.loads((CAMOUFOX / "fonts.json").read_text())["win"]
+    candidates = sorted(set(json.loads((CAMOUFOX / "fonts.json").read_text())["win"]))
     root = Path(__file__).resolve().parent / "assets"
     server = ThreadingHTTPServer(("0.0.0.0", 0), partial(Quiet, directory=str(root)))
     threading.Thread(target=server.serve_forever, daemon=True).start()
     port = server.server_address[1]
+    work = Path(__file__).resolve().parents[4] / ".ci-work"
+    work.mkdir(exist_ok=True)
+    logdir = Path(tempfile.mkdtemp(prefix="cross-process-log-", dir=work))
+    old_log = os.environ.get("MOZ_LOG")
+    old_log_file = os.environ.get("MOZ_LOG_FILE")
+    os.environ["MOZ_LOG"] = "ProcessIsolation:4,sync,append"
+    os.environ["MOZ_LOG_FILE"] = str(logdir / "cfx%PID")
+    origins = {}
 
-    # The launch level allows every candidate; the context narrows both lists.
-    async with AsyncCamoufox(headless=True, os="windows", config={"fonts": candidates},
-                             i_know_what_im_doing=True,
-                             executable_path=str(resolve_binary())) as browser:
-        launch_page = await browser.new_page()
-        await launch_page.goto(f"http://{HOSTS[0]}:{port}/")
-        launch = await launch_page.evaluate(PROBE, candidates)
-        # The probe measures against monospace and serif, so the fonts those
-        # resolve to on Windows must stay visible in the context too.
-        fonts = sorted({*sorted(launch["fonts"])[:18], "Courier New", "Times New Roman"})
-        voices = launch["voices"][:1]
+    try:
+        # The launch level allows every candidate; the context narrows both lists.
+        async with AsyncCamoufox(headless=True, os="windows", config={"fonts": candidates},
+                                 i_know_what_im_doing=True,
+                                 executable_path=str(resolve_binary())) as browser:
+            launch_page = await browser.new_page()
+            await launch_page.goto(f"http://{HOSTS[0]}:{port}/font-fallback.html?launch")
+            launch = await launch_page.evaluate(
+                PROBE, {"fonts": candidates, "probe": candidates[0]})
+            probe = next((font for font in launch["fonts"]
+                          if font not in {"Courier New", "Times New Roman"}), None)
+            if probe is None:
+                print("  FAIL: the launch level exposed no font that the context can omit")
+                return 1
+            # Keep every launch-level family but one. The joined value is over
+            # Firefox's 4 KiB pref limit, so only chunked storage carries it.
+            fonts = [font for font in candidates if font != probe]
+            voices = launch["voices"][:1]
 
-        context = await browser.new_context()
-        await context.add_init_script(
-            f"if (typeof setFontList === 'function') setFontList({json.dumps(','.join(fonts))});"
-            f"if (typeof setSpeechVoices === 'function') setSpeechVoices({json.dumps(','.join(voices))});"
-        )
-        seen = {}
-        for host in HOSTS:
-            page = await context.new_page()
-            await page.goto(f"http://{host}:{port}/")
-            seen[host] = await page.evaluate(PROBE, candidates)
+            context = await browser.new_context()
+            await context.add_init_script(
+                f"if (typeof setFontList === 'function') setFontList({json.dumps(','.join(fonts))});"
+                f"if (typeof setSpeechVoices === 'function') setSpeechVoices({json.dumps(','.join(voices))});"
+            )
+            seen = {}
+            for host in HOSTS:
+                page = await context.new_page()
+                await page.goto(
+                    f"http://{host}:{port}/font-fallback.html?context=1")
+                seen[host] = await page.evaluate(
+                    PROBE, {"fonts": candidates, "probe": probe})
+        origins = context_origins(logdir, port)
+    finally:
+        if old_log is None:
+            os.environ.pop("MOZ_LOG", None)
+        else:
+            os.environ["MOZ_LOG"] = old_log
+        if old_log_file is None:
+            os.environ.pop("MOZ_LOG_FILE", None)
+        else:
+            os.environ["MOZ_LOG_FILE"] = old_log_file
+        shutil.rmtree(logdir, ignore_errors=True)
     server.shutdown()
 
+    size = len(",".join(fonts).encode())
+    print(f"  context list: {len(fonts)} names, {size} bytes joined; omitted {probe!r}")
+    if size <= 4096:
+        print("  FAIL: the context list is not over 4 KiB, so this run cannot see a "
+              "value Firefox refuses to sync")
+        return 1
+    isolated = max(origins.values(), key=len, default={})
+    print(f"  isolation for the context: "
+          f"{ {host: sorted(behaviours) for host, behaviours in isolated.items()} }")
+    if len(isolated) < 2:
+        print("  FAIL: the parent log does not show the context on two isolated origins")
+        return 1
+    if any(behaviours & {"Parent", "Anywhere"} for behaviours in isolated.values()):
+        print("  FAIL: a context origin was not isolated from the others")
+        return 1
     if len(launch["voices"]) < 2:
         print(f"  FAIL: the launch level has {len(launch['voices'])} voices; narrowing needs two")
         return 1
@@ -108,6 +180,9 @@ async def main() -> int:
     # listed font's aliases (Helvetica for Arial) show there as on Windows.
     passed = True
     first = seen[HOSTS[0]]
+    if first["probeVisible"] or probe in first["fonts"]:
+        passed = False
+        print(f"  FAIL fonts: the context still exposes the omitted font {probe!r}")
     for kind in ("fonts", "voices"):
         if len(first[kind]) >= len(launch[kind]):
             passed = False
