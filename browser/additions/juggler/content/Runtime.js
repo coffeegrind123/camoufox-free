@@ -553,15 +553,22 @@ class Runtime {
     if (this._pendingPromises.size === 1)
       this._debugger.onDebuggerStatement = this._onDebuggerStatement.bind(this);
     // Page code can replace `then` in a main-world promise. The pending entry
-    // is already registered, so a failed attach must reject it or the evaluate
-    // would wait forever.
-    const attached = executionContext._debuggee.executeInGlobalWithBindings(
-        'p.then(() => { debugger; }, () => { debugger; })', {p: obj}, {useInnerBindings: true});
+    // is already registered, so a failed attach must remove it and report an
+    // evaluation error or the evaluate would wait forever.
+    let attached;
+    try {
+      attached = executionContext._debuggee.executeInGlobalWithBindings(
+          'p.then(() => { debugger; }, () => { debugger; })', {p: obj}, {useInnerBindings: true});
+    } catch (e) {
+      attached = null;
+    }
     if (!attached || 'throw' in attached) {
       this._pendingPromises.delete(obj);
       if (!this._pendingPromises.size)
         this._debugger.onDebuggerStatement = undefined;
-      reject(new Error('Cannot await promise: failed to observe when it settles'));
+      exceptionDetails.text =
+          'Cannot await promise: failed to observe when it settles';
+      return {success: false, obj: null};
     }
     return await promise;
   }

@@ -17,6 +17,7 @@ defaultProxyInfo would return the direct markdown.
 """
 
 import http.server
+import ipaddress
 import json
 import os
 import socket
@@ -156,10 +157,20 @@ class QuietServer(http.server.ThreadingHTTPServer):
         pass
 
 
-def direct_marker_available(port: int) -> bool:
+def direct_target_host() -> str:
+    """A local non-loopback address, which Firefox does not proxy-bypass."""
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+        sock.connect(("192.0.2.1", 9))
+        host = sock.getsockname()[0]
+    if ipaddress.ip_address(host).is_loopback:
+        raise RuntimeError("no non-loopback address for the direct control")
+    return host
+
+
+def direct_http_available(host: str, port: int) -> bool:
     try:
         opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
-        with opener.open(f"http://127.0.0.1:{port}/", timeout=3) as response:
+        with opener.open(f"http://{host}:{port}/", timeout=3) as response:
             return response.read().decode() == MARKER
     except OSError:
         return False
@@ -176,6 +187,19 @@ def page_fetch(page: object, url: str) -> Dict[str, object]:
         }""",
         url,
     )
+
+
+def direct_browser_fetch(host: str, port: int) -> Dict[str, object]:
+    from camoufox.sync_api import Camoufox
+
+    with Camoufox(
+        headless=True,
+        executable_path=str(resolve_binary()),
+        i_know_what_im_doing=True,
+    ) as browser:
+        page = browser.new_page()
+        page.goto("about:blank")
+        return page_fetch(page, f"http://{host}:{port}/")
 
 
 def authenticated_fetch(proxy: AuthenticatedSocks5) -> Dict[str, object]:
@@ -198,7 +222,7 @@ def authenticated_fetch(proxy: AuthenticatedSocks5) -> Dict[str, object]:
 
 
 def fetch_with_overridden_credentials(
-    proxy: AuthenticatedSocks5, credentials_value: str
+    proxy: AuthenticatedSocks5, credentials_value: str, target_host: str
 ) -> Dict[str, object]:
     from camoufox.sync_api import Camoufox
 
@@ -208,21 +232,27 @@ def fetch_with_overridden_credentials(
         executable_path=str(resolve_binary()),
         proxy={"server": f"socks5://127.0.0.1:{proxy.port}"},
         env=env,
+        firefox_user_prefs={"network.proxy.no_proxies_on": ""},
         i_know_what_im_doing=True,
     ) as browser:
         page = browser.new_page()
         page.goto("about:blank")
-        return page_fetch(page, f"http://127.0.0.1:{proxy.target_port}/")
+        return page_fetch(page, f"http://{target_host}:{proxy.target_port}/")
 
 
 def main() -> int:
-    target = QuietServer(("127.0.0.1", 0), Target)
+    direct_host = direct_target_host()
+    target = QuietServer(("", 0), Target)
     threading.Thread(target=target.serve_forever, daemon=True).start()
     proxy = AuthenticatedSocks5()
     proxy.start(target.server_address[1])
     try:
-        if not direct_marker_available(target.server_address[1]):
+        if not direct_http_available(direct_host, target.server_address[1]):
             print("FAIL: the direct control target is unreachable, so the negative checks are vacuous")
+            return 1
+        direct = direct_browser_fetch(direct_host, target.server_address[1])
+        if direct.get("body") != MARKER:
+            print(f"FAIL: the browser cannot reach the direct control target: {direct}")
             return 1
 
         good = authenticated_fetch(proxy)
@@ -238,14 +268,14 @@ def main() -> int:
         wrong_env = json.dumps({
             f"127.0.0.1:{proxy.port}": {"username": USERNAME, "password": "wrong-password"}
         })
-        wrong_password = fetch_with_overridden_credentials(proxy, wrong_env)
+        wrong_password = fetch_with_overridden_credentials(proxy, wrong_env, direct_host)
         print(f"wrong-password result: {wrong_password}")
         if "error" not in wrong_password:
             failures.append("a rejected password fell back to a direct connection")
         if not proxy.failed_auth:
             failures.append("the browser never attempted SOCKS5 username/password authentication")
 
-        malformed = fetch_with_overridden_credentials(proxy, "{broken")
+        malformed = fetch_with_overridden_credentials(proxy, "{broken", direct_host)
         print(f"malformed-env result: {malformed}")
         if "error" not in malformed:
             failures.append("malformed credentials fell back to a direct connection")
