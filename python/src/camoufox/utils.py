@@ -218,16 +218,15 @@ def _generate_fontconfig(
     groups_path = os.path.join(fonts_dir, "groups.json")
     os_key = OS_KEYS.get(os_dir or '')
     if os_key and os.path.exists(groups_path):
-        try:
-            with open(groups_path, 'rb') as fh:
-                read_by = json.loads(fh.read()).get('readBy', {}).get(os_key, [])
-            scan_dirs = [
-                os.path.join(fonts_dir, g)
-                for g in read_by
-                if os.path.isdir(os.path.join(fonts_dir, g))
-            ]
-        except (OSError, ValueError):
-            scan_dirs = []
+        # A damaged groups.json raises: the fallback below would widen the scan to
+        # every OS's fonts (#186). Only an absent one means a legacy bundle.
+        with open(groups_path, 'rb') as fh:
+            read_by = json.loads(fh.read()).get('readBy', {}).get(os_key, [])
+        scan_dirs = [
+            os.path.join(fonts_dir, g)
+            for g in read_by
+            if os.path.isdir(os.path.join(fonts_dir, g))
+        ]
     if not scan_dirs:
         # Older bundles ship fonts/<os>/ with each OS's set duplicated in full.
         if os_dir and os.path.isdir(os.path.join(fonts_dir, os_dir)):
@@ -1335,6 +1334,7 @@ def launch_options(
     # the rest. The post-generation fix-ups below must
     # only touch generated values, never override what the user passed.
     _user_set_navigator = is_domain_set(config, 'navigator.')
+    _user_set_arch = is_domain_set(config, 'navigator.platform', 'navigator.oscpu')
     _user_set_screen_window = is_domain_set(config, 'screen.', 'window.')
     _user_set_media_devices = is_domain_set(config, 'mediaDevices:')
     _user_set_fonts = bool(fonts) or is_domain_set(config, 'fonts')
@@ -1440,8 +1440,9 @@ def launch_options(
 
     # Correct fingerprint inconsistencies that leak as headless /
     # impossible-geometry tells, unless the user is driving these themselves.
-    if not _user_set_navigator:
+    if not _user_set_arch:
         fix_navigator_arch(config, target_os)
+    if not _user_set_navigator:
         fix_hardware_concurrency(config, can_pin=bool(pin_cpu_cores))
     if not _user_set_screen_window:
         # Lift netbook-era geometry to something current hardware reports,

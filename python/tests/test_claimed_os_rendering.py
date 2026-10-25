@@ -9,6 +9,7 @@ Linux host claiming Windows (2026-09-24).
 
 import pytest
 
+from camoufox import fingerprints as fp
 from camoufox import utils
 
 from test_launch_environment import isolated_launch_dependencies  # noqa: F401
@@ -36,6 +37,32 @@ def launch(monkeypatch, isolated_launch_dependencies):  # noqa: F811
         return seen["config"], prefs
 
     return run
+
+
+def test_a_caller_user_agent_alone_still_fixes_the_drawn_platform(
+    launch, monkeypatch
+):
+    """A Linux draw can carry another OS's platform beside its Linux oscpu.
+    The caller set only the user agent, so platform and oscpu follow it."""
+    monkeypatch.setattr(utils, "from_fpgen", fp.from_fpgen)
+    monkeypatch.setattr(utils, "fix_navigator_arch", fp.fix_navigator_arch)
+    fingerprint = fp.generate_fingerprint(os="linux")
+    fingerprint["navigator"]["platform"] = "Win32"
+    config, _ = launch(LIN_UA, fingerprint=fingerprint)
+
+    assert config["navigator.platform"] == "Linux x86_64"
+    assert config["navigator.oscpu"] == "Linux x86_64"
+
+
+def test_a_callers_platform_is_kept_when_the_user_agent_is_set(
+    launch, monkeypatch
+):
+    monkeypatch.setattr(utils, "fix_navigator_arch", fp.fix_navigator_arch)
+    config, _ = launch(
+        LIN_UA, config={"navigator.platform": "Linux i686"}
+    )
+
+    assert config["navigator.platform"] == "Linux i686"
 
 
 class TestFontPrefs:

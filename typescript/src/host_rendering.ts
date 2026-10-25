@@ -121,6 +121,31 @@ export function setWebgpu(
 
 const probes = new Map<string, Promise<Gpu | null>>();
 
+/** A browser that cannot answer a WebGL probe must not hold the launch forever. */
+export const HOST_GPU_PROBE_TIMEOUT_MS = 30_000;
+const HOST_GPU_CLOSE_TIMEOUT_MS = 1_000;
+
+function within<T>(
+	promise: Promise<T>,
+	timeoutMs: number,
+	message: string,
+): Promise<T> {
+	return new Promise<T>((resolve, reject) => {
+		const timer = setTimeout(() => reject(new Error(message)), timeoutMs);
+		timer.unref();
+		promise.then(
+			(value) => {
+				clearTimeout(timer);
+				resolve(value);
+			},
+			(error) => {
+				clearTimeout(timer);
+				reject(error);
+			},
+		);
+	});
+}
+
 /**
  * The [vendor, renderer] this machine's Firefox reports, or null without WebGL.
  *
@@ -174,35 +199,72 @@ async function readGpu(
 	prefs: Record<string, any>,
 	raw: boolean,
 ): Promise<Gpu | null> {
+	const deadline = Date.now() + HOST_GPU_PROBE_TIMEOUT_MS;
+	const timeoutMessage =
+		`Host GPU probe timed out after ${HOST_GPU_PROBE_TIMEOUT_MS} ms ` +
+		`while launching ${executablePath}. The browser did not answer the ` +
+		"WebGL probe; check that the display accepts X connections.";
+	const remaining = () => Math.max(1, deadline - Date.now());
 	const firefoxUserPrefs: Record<string, any> = {
 		...prefs,
 		"webgl.force-enabled": true,
 	};
 	if (raw) firefoxUserPrefs[SANITIZE_RENDERER_PREF] = false;
-	const browser = await firefox.launch({
-		executablePath,
-		headless,
-		env,
-		// The launch forces WebGL on, which can choose another device.
-		firefoxUserPrefs,
-	});
+	let browser: Awaited<ReturnType<typeof firefox.launch>> | undefined;
+	let result: Gpu | null = null;
+	let failed = false;
+	let failure: unknown;
+	let closeFailure: unknown;
 	try {
-		const page = await browser.newPage();
-		return await page.evaluate((): Gpu | null => {
-			const gl = (globalThis as any).document
-				.createElement("canvas")
-				.getContext("webgl");
-			const info = gl?.getExtension("WEBGL_debug_renderer_info");
-			return info
-				? [
-						gl.getParameter(info.UNMASKED_VENDOR_WEBGL),
-						gl.getParameter(info.UNMASKED_RENDERER_WEBGL),
-					]
-				: null;
-		});
+		browser = await within(
+			firefox.launch({
+				executablePath,
+				headless,
+				env,
+				timeout: remaining(),
+				// The launch forces WebGL on, which can choose another device.
+				firefoxUserPrefs,
+			}),
+			remaining(),
+			timeoutMessage,
+		);
+		const page = await within(browser.newPage(), remaining(), timeoutMessage);
+		result = await within(
+			page.evaluate((): Gpu | null => {
+				const gl = (globalThis as any).document
+					.createElement("canvas")
+					.getContext("webgl");
+				const info = gl?.getExtension("WEBGL_debug_renderer_info");
+				return info
+					? [
+							gl.getParameter(info.UNMASKED_VENDOR_WEBGL),
+							gl.getParameter(info.UNMASKED_RENDERER_WEBGL),
+						]
+					: null;
+			}),
+			remaining(),
+			timeoutMessage,
+		);
+	} catch (error) {
+		failed = true;
+		failure = error;
 	} finally {
-		await browser.close();
+		if (browser) {
+			try {
+				await within(
+					browser.close(),
+					HOST_GPU_CLOSE_TIMEOUT_MS,
+					`Host GPU probe browser.close timed out after ${HOST_GPU_CLOSE_TIMEOUT_MS} ms`,
+				);
+			} catch (error) {
+				closeFailure = error;
+			}
+		}
 	}
+	// Preserve the read failure; report a close-only failure.
+	if (failed) throw failure;
+	if (closeFailure !== undefined) throw closeFailure;
+	return result;
 }
 
 /**

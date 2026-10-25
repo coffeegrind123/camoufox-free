@@ -8,6 +8,7 @@ Run with:
 import os
 import re
 import sys
+import threading
 import warnings
 from contextlib import contextmanager
 from unittest import mock
@@ -17,7 +18,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 import orjson  # noqa: E402
 import pytest  # noqa: E402
 
-from camoufox import sync_api, utils  # noqa: E402
+from camoufox import host_rendering, sync_api, utils  # noqa: E402
 from camoufox._warnings import LeakWarning  # noqa: E402
 from camoufox.host_rendering import (  # noqa: E402
     BASELINE_OVERRIDES_PREF,
@@ -273,6 +274,37 @@ def test_the_probe_ignores_what_the_launcher_adds_to_the_environment():
         )
 
     assert probe.call_args_list[0] == probe.call_args_list[1]
+
+
+def test_the_host_gpu_probe_times_out_and_says_so(monkeypatch):
+    release = threading.Event()
+    monkeypatch.setattr(host_rendering, 'HOST_GPU_PROBE_TIMEOUT_S', 0.05)
+    monkeypatch.setattr(
+        host_rendering, '_read_host_gpu', lambda *args: release.wait(2)
+    )
+    host_rendering._host_gpu.cache_clear()
+
+    try:
+        with pytest.raises(
+            TimeoutError,
+            match=r'Host GPU probe timed out after 0\.05 s',
+        ):
+            host_gpu('/bin/camoufox', True, {'DISPLAY': ':99'}, {})
+    finally:
+        release.set()
+        host_rendering._host_gpu.cache_clear()
+
+
+def test_the_host_gpu_probe_propagates_a_read_error(monkeypatch):
+    def fail(*args):
+        raise RuntimeError('browser died')
+
+    monkeypatch.setattr(host_rendering, '_read_host_gpu', fail)
+    host_rendering._host_gpu.cache_clear()
+
+    with pytest.raises(RuntimeError, match='browser died'):
+        host_gpu('/bin/camoufox', True, {}, {})
+    host_rendering._host_gpu.cache_clear()
 
 
 def browser_on_host(gpu):
