@@ -4,9 +4,16 @@ A fork of [Camoufox](https://github.com/daijro/camoufox), the Firefox build
 that spoofs device fingerprints in C++. For what Camoufox is, its features and
 how to build it, read [upstream's README](https://github.com/daijro/camoufox#readme).
 
-This fork follows upstream `main` and currently pins Firefox 158.0 in
-[`browser/upstream.sh`](browser/upstream.sh). It releases its own builds.
-Everything it adds is listed below; fixes are offered upstream.
+This fork follows upstream `main` and pins Firefox `158.0` / Camoufox `beta.33`
+in [`browser/upstream.sh`](browser/upstream.sh). The newest published build is
+[`v158.0-beta.33-cg.9`](https://github.com/coffeegrind123/camoufox-free/releases/tag/v158.0-beta.33-cg.9),
+built from [f597fa6](https://github.com/coffeegrind123/camoufox-free/commit/f597fa67fe29030b38c10dab193679adf84c073d);
+it predates
+[PR #2](https://github.com/coffeegrind123/camoufox-free/pull/2), where the
+current feature set was merged. The newest stable release remains
+[`v152.0.4-beta.31-cg.4`](https://github.com/coffeegrind123/camoufox-free/releases/tag/v152.0.4-beta.31-cg.4).
+Features below that landed after cg.9 require a newer build or a source
+checkout. Fixes are offered upstream when appropriate.
 
 > [!NOTE]
 > Under development. Test a release against your own targets before relying on it.
@@ -21,9 +28,11 @@ For an identity whose OS is not the host's. Offered upstream in
 - **Per-script font fallback** follows the claimed OS's tables and `font.*`
   defaults, so Thai, emoji, Mongolian and other scripts draw with the faces
   stock Firefox uses there. ([7c8e6a9](https://github.com/coffeegrind123/camoufox-free/commit/7c8e6a9d8b3312846c26fe8e31984c10a1d3d6c6))
-- **Native headless WebGL** uses Mesa EGL and llvmpipe with `DISPLAY` unset,
-  so WebGL and WebGL2 return real rendering contexts and still report the
-  identity's pinned GPU. Xvfb is not required. See
+- **Native headless WebGL** uses Mesa EGL with `DISPLAY` and
+  `WAYLAND_DISPLAY` unset. WebGL returns real rendering output, and WebGL2 does
+  so when the recorded GPU supports it, while both report the identity's pinned
+  GPU. Linux needs Mesa's EGL and DRI packages (`libegl1`, `libegl-mesa0` and
+  `libgl1-mesa-dri` on Debian/Ubuntu); Xvfb is not required. See
   [Native headless WebGL](docs/headless-webgl.md).
 - **DirectWrite line metrics** for a Windows identity (`fonts:metrics`), so
   line boxes match Windows instead of FreeType. ([c8cd204](https://github.com/coffeegrind123/camoufox-free/commit/c8cd20423c9640bbb381fc33a293c33ccbbddadf), [6023d01](https://github.com/coffeegrind123/camoufox-free/commit/6023d01bd194ad38e1fae7a3660c0c02d5c200fa))
@@ -42,17 +51,23 @@ For an identity whose OS is not the host's. Offered upstream in
   string pref over 4 KiB. Font and voice lists over 3 KiB are stored in chunks
   and reassembled from a generation header, so every content-process page and
   worker sees the context's own lists. A context font list replaces the launch
-  list instead of intersecting it.
+  list instead of intersecting it. ([efcb4c6](https://github.com/coffeegrind123/camoufox-free/commit/efcb4c6c192dc20228995625616661a943f00ce3))
 - **Context identity and proxy settings stay isolated.** Proxy credentials are
   isolated per container/private context, and a NewContext behind a proxy
   derives its WebRTC IP, timezone, locale and geolocation from that proxy's
-  exit IP. Context viewports are bounded by the shared launch window.
+  exit IP. Context viewports are bounded by the shared launch window. A guard
+  also asserts that contexts never share Firefox's web-content process, so a
+  cached font, locale or other context value cannot cross identities.
+  ([b84880a](https://github.com/coffeegrind123/camoufox-free/commit/b84880ae39c173aa8250d377b8e0679689c4cad2), [3777eaf](https://github.com/coffeegrind123/camoufox-free/commit/3777eaf09cc91a2eb1d7d1522a425785d8b23353))
 - **Authenticated SOCKS5 proxies.** Playwright rejects SOCKS5 credentials
   before Juggler receives the proxy, so the launchers pass them through an
   endpoint-scoped launch environment and Juggler builds the proxy with
-  `newProxyInfoWithAuth`. `socks5h` resolves names at the proxy. A setup error
-  fails the request closed instead of falling back to the host's direct
-  connection. Ported from liasica's [2f0be40](https://github.com/liasica/camoufox/commit/2f0be400e53b88bb9b00b3faf2356503ae9dbfab).
+  `newProxyInfoWithAuth`. This applies to launch-level proxies. Credentials
+  passed to `NewContext` are rejected: put the endpoint in
+  `CAMOU_PROXY_CREDENTIALS` and pass the context proxy without credentials.
+  `socks5h` resolves names at the proxy. A setup error fails the request closed
+  instead of falling back to the host's direct connection. Ported from
+  liasica's [2f0be40](https://github.com/liasica/camoufox/commit/2f0be400e53b88bb9b00b3faf2356503ae9dbfab).
 - **Fontconfig memo keyed by context.** One context's font allow-list no longer
   answers for other contexts in the same content process. Offered upstream in
   [#942](https://github.com/daijro/camoufox/pull/942). ([6950149](https://github.com/coffeegrind123/camoufox-free/commit/6950149e920820710122e176ab66bd14d66db4c4))
@@ -69,21 +84,23 @@ For an identity whose OS is not the host's. Offered upstream in
   stay coherent; DNT and context locale are stable across navigation.
   WebSocket close arguments follow Firefox 158, and a failed promise-reaction
   attach rejects immediately instead of leaving Juggler hanging.
+  ([a645377](https://github.com/coffeegrind123/camoufox-free/commit/a645377641887a9443c5e6be0d0f7e1e209eed39), [bf238e4](https://github.com/coffeegrind123/camoufox-free/commit/bf238e4a9f41f026674a0e6361f4ec496f5f542a), [3cebf99](https://github.com/coffeegrind123/camoufox-free/commit/3cebf99c8f486c211a5502099c9ecfdc91164813))
 - **Per-context locale follows every scope.** A context's locale reaches
   `Intl`, `navigator.languages`, Accept-Language q-values, isolated worlds,
   dedicated/shared/service workers, AudioWorklets, requests without a browsing
   context, and built-in strings. Changing one context does not overwrite the
-  launch locale or another context.
+  launch locale or another context. ([1bd1dc3](https://github.com/coffeegrind123/camoufox-free/commit/1bd1dc3c2d263bff41abcbb07d50f965129d3e5c), [a173ea1](https://github.com/coffeegrind123/camoufox-free/commit/a173ea1673b0f9af17ab645b337f687c1ea79c4f))
 - **Pinned viewport and GPU behaviour are deterministic.** A config that pins
   `window.innerWidth`/`innerHeight` no longer deadlocks viewport updates.
   Explicit `webgl_config` replaces a preset's GPU as one complete pair in both
-  launchers.
+  launchers. ([1fcfad6](https://github.com/coffeegrind123/camoufox-free/commit/1fcfad6245cf91797d80d3943903cbf46ec3b017), [6932314](https://github.com/coffeegrind123/camoufox-free/commit/6932314b3b76380af9ab4c714d069c02f9e7f2be))
 - **Corrupt font data fails closed.** A damaged `groups.json` refuses the launch
   instead of widening the scan to every OS's fonts. Windows font-unit rates and
   essential-font aliases are regenerated from the pinned fpgen model.
 - **Launcher failures are bounded and explicit.** Transient downloads retry
   429/5xx/connection failures, and the host GPU probe has a 30-second deadline
   that reports the executable and display it was probing instead of hanging.
+  ([6fee36f](https://github.com/coffeegrind123/camoufox-free/commit/6fee36f05286233ea8c854faca4e53123fd283b6), [d5e2850](https://github.com/coffeegrind123/camoufox-free/commit/d5e28506cf2bca5a7d1a70083fa29bd5f3c2e3f8))
 
 ### Kept here after upstream declined
 
@@ -108,10 +125,15 @@ For an identity whose OS is not the host's. Offered upstream in
   and version, then stages it under `addons/UBO/`. Bundle updates stay disabled,
   and the selected filter lists are pinned to the ten lists inside that bundle,
   so a first run downloads no regional list before pages load.
-  ([`build.yml`](.github/workflows/build.yml), [`policies.json`](browser/settings/distribution/policies.json))
+  ([`build.yml`](.github/workflows/build.yml), [`policies.json`](browser/settings/distribution/policies.json), [7ac4b21](https://github.com/coffeegrind123/camoufox-free/commit/7ac4b2132c3a6f7d3ee1a5e821d01da5d31f9586))
 - **Linux x86_64 releases built by this repo's CI**
   ([`build.yml`](.github/workflows/build.yml)), with sha256 digests. No PyPI or
   npm packages are published, and upstream's release train doesn't run. ([b70dc6c](https://github.com/coffeegrind123/camoufox-free/commit/b70dc6c52c1605ad8bcf7c7770cf99d2235dd8a0))
+- **Releases are tag-driven and do not wait for Tests.** Pushing a matching
+  `v<version>-<release>-cg.<n>` tag starts the release workflow; pushing to
+  `main` does not create a release. The publish job does not call the Tests
+  workflow or require `All tests passed`, so a release tag must point at an
+  already-tested commit.
 - **Cross-language LTO and PGO** with a pinned profile, as stock Firefox builds
   ([`ci/pgo.py`](ci/pgo.py)). A release is refused until a profile is pinned.
   Offered upstream in [#886](https://github.com/daijro/camoufox/pull/886). ([3381943](https://github.com/coffeegrind123/camoufox-free/commit/3381943c57abebf06301bebee4e8f4a230781c44))
@@ -125,13 +147,30 @@ For an identity whose OS is not the host's. Offered upstream in
   changed additions are synced without rewriting unchanged files. `make
   build-js`, `make build-cpp`, and strict `make verify-patches` reduce rebuild
   time without changing the release build.
+  ([8960323](https://github.com/coffeegrind123/camoufox-free/commit/8960323299e7bb3905dad47f5c0353b156dd20af), [2dd90d6](https://github.com/coffeegrind123/camoufox-free/commit/2dd90d65fe7546b3a10cb730cf8124f0d348e80d))
 - **Read-only PropertyTracer audit.** [`audit-property-tracer.py`](browser/scripts/audit-property-tracer.py)
   checks the 77 native source sites behind page-observable properties after a
   Firefox upgrade. It does not inject runtime tracing or shipping code. See
   [Property tracer source audit](docs/property-tracer-audit.md).
-- **CI and the TypeScript launcher.** The TypeScript jobs don't gate merges,
-  and the package install gate runs on upstream only. The TypeScript launcher
-  is kept as upstream has it, but not every Python change is ported to it. ([f9e1994](https://github.com/coffeegrind123/camoufox-free/commit/f9e1994f29824bb0a58a192867e85fa7ba2cc5da), [6978636](https://github.com/coffeegrind123/camoufox-free/commit/697863638dbaa4f2c16635f62e6ae0797fbc9a17))
+  ([8473213](https://github.com/coffeegrind123/camoufox-free/commit/84732136d0181a7796e6dfbbcec7c47f5427baf9))
+- **CI and the TypeScript launcher.** The TypeScript unit and browser jobs run
+  type checks, lint/build checks and Vitest, but are advisory: they use
+  `continue-on-error` and are excluded from the workflow's aggregate gate. The
+  package install job is restricted to upstream. `main` currently has neither
+  branch protection nor repository rulesets, so CI reports a verdict but GitHub
+  does not enforce it. The TypeScript launcher is kept as upstream has it, but
+  not every Python change is ported to it. ([f9e1994](https://github.com/coffeegrind123/camoufox-free/commit/f9e1994f29824bb0a58a192867e85fa7ba2cc5da), [6978636](https://github.com/coffeegrind123/camoufox-free/commit/697863638dbaa4f2c16635f62e6ae0797fbc9a17))
+
+## Maintenance
+
+- [CI pipeline](ci/README.md) documents every merge-gating suite, shard and
+  artifact.
+- [Fork and closed-PR scanning](AGENTS.md#fork-and-upstream-review) defines how
+  external Camoufox work is inventoried, measured and accepted or rejected.
+- [Patch upgrading](docs/patch-upgrading-guide.md) covers Firefox and Playwright
+  syncs, patch regeneration and the required replay checks.
+- [PropertyTracer audit](docs/property-tracer-audit.md) rechecks the native
+  source sites behind page-observable properties after Firefox upgrades.
 
 ## Building locally
 
@@ -156,9 +195,10 @@ flags. Patch authoring and regeneration are covered in
 
 ## Installing
 
-Each [release](https://github.com/coffeegrind123/camoufox-free/releases)
-carries a Linux x86_64 browser zip and its sha256. Install the launcher from
-the commit the release tag points at, so the two agree about config
+Each [release](https://github.com/coffeegrind123/camoufox-free/releases) is one
+Linux x86_64 browser zip. There is no separate checksum asset; GitHub exposes
+the zip's SHA-256 in the release asset's `digest` field. Install the launcher
+from the commit the release tag points at, so the two agree about config
 properties:
 
 ```bash
@@ -184,7 +224,15 @@ install it ahead of time, for example while building an image:
 python -c "from camoufox.fpgen_model import ensure_fpgen_model; ensure_fpgen_model()"
 ```
 
-`camoufox fetch` downloads upstream's browsers, not this fork's.
+`camoufox fetch` does not install this fork's browser releases. Bare
+`camoufox fetch` first consults a non-empty browser pin; the repository and
+release-tag commits documented here have an empty `browser-pin.json`, so it
+falls back to `official/stable` in
+[`repos.yml`](python/src/camoufox/repos.yml). That source queries
+`daijro/camoufox`, then `camoufox/camoufox`. This fork is not a configured
+source, so its `-cg.N` releases cannot be selected with `camoufox fetch`.
+Install the fork zip and pass `camoufox-bin` through `executable_path`, as
+shown above.
 
 ## Licensing
 
