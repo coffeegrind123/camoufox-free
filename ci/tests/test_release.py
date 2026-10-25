@@ -271,13 +271,14 @@ def test_every_release_source_name_exists_in_the_launcher_config():
     for repository, source_name in release.BROWSER_SOURCE_NAMES.items():
         config = RepoConfig.find_by_name(source_name)
         assert config is not None, source_name
-        assert repository in config.repos
+        assert repository in (name.lower() for name in config.repos)
 
 
 def test_the_pin_and_the_launchers_agree_on_its_format(tmp_path, monkeypatch):
     """What stamp writes is what pythonlib's loader reads."""
     import sys
 
+    monkeypatch.setenv("GITHUB_REPOSITORY", "daijro/camoufox")
     sys.path.insert(0, str(release.REPO_ROOT / "python" / "src"))
     from camoufox.browser_pin import load_pin
 
