@@ -49,11 +49,11 @@ import {
 	addCanvasPlaceholder,
 	type Gpu,
 	gpuFamily,
-	WINDOWS_WEBGPU_LIMITS,
 	hasCanvasPlaceholder,
 	hostGpu,
 	rendersOnHardware,
 	setWebgpu,
+	WINDOWS_WEBGPU_LIMITS,
 } from "./host_rendering.js";
 import {
 	type ProxyConfig,
@@ -1025,6 +1025,36 @@ export function spoofsWindowDimensions(
 }
 
 /**
+ * Record the launch window and screen on the browser for NewContext (#164).
+ * The launch window is process-wide (CamoufoxWindow.sys.mjs resizes the real
+ * window once), so every context shares it. 1280x1040 is the startup default
+ * when the config sets no outer size.
+ */
+export function attachLaunchWindow(
+	browser: any,
+	fromOptions: Record<string, any>,
+): void {
+	try {
+		const config = JSON.parse(camouConfigBlob(fromOptions) || "{}");
+		if (typeof config !== "object" || config === null || Array.isArray(config))
+			return;
+		browser._camoufoxLaunchWindow = {
+			outer: [
+				config["window.outerWidth"] || 1280,
+				config["window.outerHeight"] || 1040,
+			],
+			inner: [
+				config["window.innerWidth"] ?? null,
+				config["window.innerHeight"] ?? null,
+			],
+			screen: [config["screen.width"] ?? null, config["screen.height"] ?? null],
+		};
+	} catch (error) {
+		if (!(error instanceof SyntaxError)) throw error;
+	}
+}
+
+/**
  * Playwright emulates four media features on every context it creates, whether
  * or not the caller asked: `colorScheme` defaults to "light" and reducedMotion /
  * forcedColors / contrast to their no-preference values. That is an override,
@@ -1171,7 +1201,10 @@ export async function hostIdentity(
 		const config = JSON.parse(camouConfigBlob(fromOptions) || "{}");
 		const vendor = config["webGl:vendor"];
 		const renderer = config["webGl:renderer"];
-		return [getTargetOs(config), vendor && renderer ? [vendor, renderer] : null];
+		return [
+			getTargetOs(config),
+			vendor && renderer ? [vendor, renderer] : null,
+		];
 	}
 	const prefs = fromOptions.firefoxUserPrefs ?? {};
 	if (canvasNoise != null || hasCanvasPlaceholder(prefs)) return null;
@@ -2139,7 +2172,13 @@ export async function launchOptions({
 				? [config["webGl:vendor"], config["webGl:renderer"]]
 				: null;
 		passthroughFamily = await planPassthrough(namedGpu, () =>
-			utilsDeps.hostGpu(resolvedExecutable, headless, env, firefox_user_prefs, true),
+			utilsDeps.hostGpu(
+				resolvedExecutable,
+				headless,
+				env,
+				firefox_user_prefs,
+				true,
+			),
 		);
 		[coverCanvas, host] = [false, null];
 	} else {
@@ -2151,7 +2190,12 @@ export async function launchOptions({
 					pyTruthy(config["webGl:renderer"])),
 			Boolean(block_webgl),
 			() =>
-				utilsDeps.hostGpu(resolvedExecutable, headless, env, firefox_user_prefs),
+				utilsDeps.hostGpu(
+					resolvedExecutable,
+					headless,
+					env,
+					firefox_user_prefs,
+				),
 		);
 	}
 	if (coverCanvas) {

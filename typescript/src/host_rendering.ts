@@ -144,7 +144,13 @@ export function hostGpu(
 	const hostPrefs = Object.keys(GPU_PREFS)
 		.filter((key) => key in prefs)
 		.map((key) => [key, prefs[key]]);
-	const key = JSON.stringify([executablePath, headless, hostEnv, hostPrefs, raw]);
+	const key = JSON.stringify([
+		executablePath,
+		headless,
+		hostEnv,
+		hostPrefs,
+		raw,
+	]);
 	let gpu = probes.get(key);
 	if (!gpu) {
 		gpu = readGpu(

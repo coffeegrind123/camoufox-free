@@ -23,6 +23,7 @@ import { SELECTOR } from "./locales.js";
 import {
 	applyNoViewport,
 	attachDesktopOnlyWarning,
+	attachLaunchWindow,
 	attachNoViewportDefault,
 	attachStockMediaDefaults,
 	attachVirtualDisplay,
@@ -213,6 +214,7 @@ async function launchWith(
 	attachStockMediaDefaults(browser);
 	attachDesktopOnlyWarning(browser);
 	(browser as any)._camoufoxHostIdentity = identity;
+	attachLaunchWindow(browser, fromOptions);
 	return attachVirtualDisplay(browser, virtualDisplay);
 }
 
@@ -307,16 +309,27 @@ export async function NewContext(
 		ff_version: ffVersion,
 		webrtc_ip: webrtcIp,
 		webgl_config: webglConfig,
+		launch_window: (browser as any)._camoufoxLaunchWindow,
 	});
 
 	// Merge the generated context options with user overrides (user wins). They
 	// are already Playwright's JS names (userAgent, deviceScaleFactor,
 	// timezoneId); re-casing them turned userAgent into `useragent`, which
 	// Playwright ignores, so the HTTP User-Agent contradicted navigator's.
-	const opts: Record<string, any> = {
+	let opts: Record<string, any> = {
 		...fp.context_options,
 		...contextOptions,
 	};
+	if (contextOptions.noViewport || contextOptions.viewport === null) {
+		// An explicit no-viewport beats the fingerprint's viewport, and Playwright
+		// rejects deviceScaleFactor with a null viewport.
+		for (const key of ["viewport", "deviceScaleFactor"]) {
+			if (!(key in contextOptions)) delete opts[key];
+		}
+	}
+	if ("noViewport" in opts) {
+		opts = applyNoViewport(opts);
+	}
 	if (proxy) opts.proxy = proxy;
 	if (position) {
 		opts.geolocation = position;
