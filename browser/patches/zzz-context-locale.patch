@@ -1,0 +1,670 @@
+diff --git a/dom/base/NavigatorManager.h b/dom/base/NavigatorManager.h
+--- a/dom/base/NavigatorManager.h
++++ b/dom/base/NavigatorManager.h
+@@ -93,12 +93,38 @@ class NavigatorManager {
+     return RoverfoxStorageManager::GetString(key, aOut);
+   }
+ 
+   static bool IsAppVersionFunctionEnabledForWebIDL(JSContext* aCx,
+                                                    JSObject* aObj);
+ 
++  // Expand a single context locale into the language list Firefox reports for
++  // it. A list supplied explicitly is kept verbatim.
++  static void ExpandLanguageOverride(const nsACString& aOverride,
++                                     nsACString& aOut);
++
++  // The top browsing context's language override, stored for service workers
++  // and request channels that have no browsing context of their own.
++  static bool SetLocale(uint32_t aId, const nsACString& aLocale) {
++    nsAutoCString stored;
++    if (GetLocale(aId, stored) ? stored.Equals(aLocale) : aLocale.IsEmpty()) {
++      return false;
++    }
++    nsAutoString key;
++    key.AppendPrintf("nav_locale_%u", aId);
++    RoverfoxStorageManager::PutString(key, NS_ConvertUTF8toUTF16(aLocale));
++    return true;
++  }
++
++  static bool GetLocale(uint32_t aId, nsACString& aOut) {
++    nsAutoString locale;
++    if (!RoverfoxStorageManager::GetString("nav_locale_", aId, locale)) {
++      return false;
++    }
++    aOut = NS_ConvertUTF16toUTF8(locale);
++    return true;
++  }
+ };
+ 
+ }  // namespace dom
+ }  // namespace mozilla
+ 
+ #endif  // mozilla_dom_NavigatorManager_h
+diff --git a/dom/base/NavigatorManager.cpp b/dom/base/NavigatorManager.cpp
+--- a/dom/base/NavigatorManager.cpp
++++ b/dom/base/NavigatorManager.cpp
+@@ -42,8 +42,22 @@ bool NavigatorManager::IsUaFunctionEnabledForWebIDL(JSContext* aCx,
+ /* static */
+ bool NavigatorManager::IsAppVersionFunctionEnabledForWebIDL(JSContext* aCx,
+                                                             JSObject* aObj) {
+   return RoverfoxStorageManager::IsSetterOffered(aObj, "nav_appver");
+ }
+ 
++/* static */
++void NavigatorManager::ExpandLanguageOverride(const nsACString& aOverride,
++                                              nsACString& aOut) {
++  aOut.Assign(aOverride);
++  if (aOverride.FindChar(',') != kNotFound) {
++    return;
++  }
++  const int32_t dash = aOverride.FindChar('-');
++  if (dash > 0) {
++    aOut.AppendLiteral(", ");
++    aOut.Append(Substring(aOverride, 0, dash));
++  }
++}
++
+ }  // namespace dom
+ }  // namespace mozilla
+diff --git a/dom/base/Navigator.cpp b/dom/base/Navigator.cpp
+--- a/dom/base/Navigator.cpp
++++ b/dom/base/Navigator.cpp
+@@ -373,13 +373,13 @@ void Navigator::GetAcceptLanguages(nsTArray<nsString>& aLanguages,
+ 
+   aLanguages.Clear();
+ 
+   // E.g. "de-de, en-us,en".
+   nsAutoCString acceptLang;
+   if (aLanguageOverride) {
+-    acceptLang.Assign(aLanguageOverride->get());
++    NavigatorManager::ExpandLanguageOverride(*aLanguageOverride, acceptLang);
+   } else {
+     intl::LocaleService::GetInstance()->GetAcceptLanguages(acceptLang);
+   }
+ 
+   // Split values on commas.
+   for (nsDependentCSubstring lang :
+diff --git a/netwerk/protocol/http/HttpBaseChannel.cpp b/netwerk/protocol/http/HttpBaseChannel.cpp
+--- a/netwerk/protocol/http/HttpBaseChannel.cpp
++++ b/netwerk/protocol/http/HttpBaseChannel.cpp
+@@ -38,12 +38,13 @@
+ #include "mozilla/dom/BrowsingContext.h"
+ #include "mozilla/dom/CanonicalBrowsingContext.h"
+ #include "mozilla/dom/ContentChild.h"
+ #include "mozilla/dom/Document.h"
+ #include "mozilla/dom/FetchPriority.h"
+ #include "mozilla/dom/LoadURIOptionsBinding.h"
++#include "mozilla/dom/NavigatorManager.h"
+ #include "mozilla/dom/ParentProcessChannelHandle.h"
+ #include "mozilla/dom/Performance.h"
+ #include "mozilla/dom/PerformanceStorage.h"
+ #include "mozilla/dom/PolicyContainer.h"
+ #include "mozilla/dom/ProcessIsolation.h"
+ #include "mozilla/dom/RequestBinding.h"
+@@ -397,15 +398,19 @@ nsresult HttpBaseChannel::Init(nsIURI* aURI, uint32_t aCaps,
+   RefPtr<mozilla::dom::BrowsingContext> browsingContext;
+   mLoadInfo->GetBrowsingContext(getter_AddRefs(browsingContext));
+   if (!browsingContext) {
+     mLoadInfo->GetAssociatedBrowsingContext(getter_AddRefs(browsingContext));
+   }
+ 
+-  const nsCString& languageOverride =
+-      browsingContext ? browsingContext->Top()->GetLanguageOverride()
+-                      : EmptyCString();
++  nsAutoCString languageOverride;
++  if (browsingContext) {
++    languageOverride = browsingContext->Top()->GetLanguageOverride();
++  } else {
++    dom::NavigatorManager::GetLocale(
++        mLoadInfo->GetOriginAttributes().mUserContextId, languageOverride);
++  }
+ 
+   rv = gHttpHandler->AddStandardRequestHeaders(
+       &mRequestHead, aURI, isHTTPS, contentPolicyType,
+       nsContentUtils::ShouldResistFingerprinting(this,
+                                                  RFPTarget::HttpUserAgent),
+       languageOverride);
+@@ -535,12 +540,21 @@ HttpBaseChannel::SetTRRMode(nsIRequest::TRRMode aTRRMode) {
+ 
+ NS_IMETHODIMP
+ HttpBaseChannel::SetDocshellUserAgentOverride() {
+   RefPtr<dom::BrowsingContext> bc;
+   MOZ_ALWAYS_SUCCEEDS(mLoadInfo->GetBrowsingContext(getter_AddRefs(bc)));
+   if (!bc) {
++    const uint32_t userContextId =
++        mLoadInfo->GetOriginAttributes().mUserContextId;
++    nsAutoString contextUserAgent;
++    if (dom::NavigatorManager::GetUserAgent(userContextId, contextUserAgent) &&
++        !contextUserAgent.IsEmpty()) {
++      return SetRequestHeaderInternal(
++          "User-Agent"_ns, NS_ConvertUTF16toUTF8(contextUserAgent), false,
++          nsHttpHeaderArray::eVarietyRequestEnforceDefault);
++    }
+     return NS_OK;
+   }
+ 
+   nsAutoCString customUserAgent;
+   bc->GetCustomUserAgent(customUserAgent);
+   if (customUserAgent.IsEmpty() || customUserAgent.IsVoid()) {
+diff --git a/netwerk/protocol/http/nsHttpHandler.cpp b/netwerk/protocol/http/nsHttpHandler.cpp
+--- a/netwerk/protocol/http/nsHttpHandler.cpp
++++ b/netwerk/protocol/http/nsHttpHandler.cpp
+@@ -36,12 +36,13 @@
+ #include "mozilla/StaticPrefs_privacy.h"
+ #include "mozilla/StaticPrefs_security.h"
+ #include "mozilla/StoragePrincipalHelper.h"
+ #include "mozilla/SyncRunnable.h"
+ #include "mozilla/dom/ContentParent.h"
+ #include "mozilla/dom/Navigator.h"
++#include "mozilla/dom/NavigatorManager.h"
+ #include "mozilla/dom/Promise.h"
+ #include "mozilla/dom/network/Connection.h"
+ #include "mozilla/glean/GleanPings.h"
+ #include "mozilla/glean/NetwerkProtocolHttpMetrics.h"
+ #include "mozilla/intl/LocaleService.h"
+ #include "mozilla/ipc/URIUtils.h"
+@@ -744,12 +745,15 @@ nsresult nsHttpHandler::AddAcceptAndDictionaryHeaders(
+     }
+   }
+   // guard may call aCallback here
+   return rv;
+ }
+ 
++static nsresult PrepareAcceptLanguages(const char* i_AcceptLanguages,
++                                       nsACString& o_AcceptLanguages);
++
+ nsresult nsHttpHandler::AddStandardRequestHeaders(
+     nsHttpRequestHead* request, nsIURI* aURI, bool aIsHTTPS,
+     ExtContentPolicyType aContentPolicyType, bool aShouldResistFingerprinting,
+     const nsCString& aLanguageOverride) {
+   nsresult rv;
+ 
+@@ -782,14 +786,20 @@ nsresult nsHttpHandler::AddStandardRequestHeaders(
+ 
+   rv = request->SetHeader(nsHttp::Accept, accept, false,
+                           nsHttpHeaderArray::eVarietyRequestOverride);
+   if (NS_FAILED(rv)) return rv;
+ 
+   if (!aLanguageOverride.IsEmpty()) {
++    nsAutoCString languages;
++    mozilla::dom::NavigatorManager::ExpandLanguageOverride(aLanguageOverride,
++                                                           languages);
+     nsAutoCString acceptLanguage;
+-    acceptLanguage.Assign(aLanguageOverride.get());
++    rv = PrepareAcceptLanguages(languages.get(), acceptLanguage);
++    if (NS_FAILED(rv)) {
++      return rv;
++    }
+     rv = request->SetHeader(nsHttp::Accept_Language, acceptLanguage, false,
+                             nsHttpHeaderArray::eVarietyRequestOverride);
+     if (NS_FAILED(rv)) return rv;
+   } else {
+     // Add the "Accept-Language" header.  This header is also exposed to the
+     // service worker.
+diff --git a/docshell/base/BrowsingContext.cpp b/docshell/base/BrowsingContext.cpp
+--- a/docshell/base/BrowsingContext.cpp
++++ b/docshell/base/BrowsingContext.cpp
+@@ -2,12 +2,14 @@
+  * License, v. 2.0. If a copy of the MPL was not distributed with this
+  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+ 
+ #include "mozilla/dom/BrowsingContext.h"
+ 
+ #include "ipc/IPCMessageUtils.h"
++#include "js/Context.h"
++#include "js/LocaleSensitive.h"
+ #include "mozilla/GfxMessageUtils.h"
+ 
+ #ifdef ACCESSIBILITY
+ #  include "mozilla/a11y/DocAccessibleParent.h"
+ #  include "mozilla/a11y/Platform.h"
+ #  include "nsAccessibilityService.h"
+@@ -36,12 +38,13 @@
+ #include "mozilla/dom/Location.h"
+ #include "mozilla/dom/LocationBinding.h"
+ #include "mozilla/dom/MediaDevices.h"
+ #include "mozilla/dom/Navigation.h"
+ #include "mozilla/dom/NavigationUtils.h"
+ #include "mozilla/dom/Navigator.h"
++#include "mozilla/dom/NavigatorManager.h"
+ #include "mozilla/dom/PopupBlocker.h"
+ #include "mozilla/dom/ReferrerInfo.h"
+ #include "mozilla/dom/ScriptSettings.h"
+ #include "mozilla/dom/SessionStoreChild.h"
+ #include "mozilla/dom/SessionStorageManager.h"
+ #include "mozilla/dom/StructuredCloneTags.h"
+@@ -59,12 +62,13 @@
+ #include "mozilla/net/RequestContextService.h"
+ #include "mozilla/Assertions.h"
+ #include "mozilla/AsyncEventDispatcher.h"
+ #include "mozilla/ClearOnShutdown.h"
+ #include "mozilla/Components.h"
+ #include "mozilla/GeolocationService.h"
++#include "mozilla/intl/Locale.h"
+ #include "mozilla/Logging.h"
+ #include "mozilla/MediaFeatureChange.h"
+ #include "mozilla/Services.h"
+ #include "mozilla/StaticPrefs_fission.h"
+ #include "mozilla/StaticPrefs_media.h"
+ #include "mozilla/StaticPrefs_page_load.h"
+@@ -3591,12 +3595,26 @@ void BrowsingContext::DidSet(FieldIndex<IDX_AnimationsPlayBackRateMultiplier>,
+ void BrowsingContext::DidSet(FieldIndex<IDX_LanguageOverride>,
+                              nsCString&& aOldValue) {
+   MOZ_ASSERT(IsTop());
+ 
+   const nsCString& languageOverride = GetLanguageOverride();
+ 
++  if (XRE_IsParentProcess()) {
++    const uint32_t userContextId = OriginAttributesRef().mUserContextId;
++    if (NavigatorManager::SetLocale(userContextId, languageOverride)) {
++      ContentParent::UpdateContextLocale(userContextId);
++    }
++  } else {
++    mozilla::intl::Locale::SetContextLocale(languageOverride.get());
++    AutoJSAPI jsapi;
++    if (jsapi.Init()) {
++      JS_ResetDefaultLocale(JS_GetRuntime(jsapi.cx()));
++    }
++    ResetDefaultLocaleInAllWorkers();
++  }
++
+   workerinternals::RuntimeService* rts =
+       workerinternals::RuntimeService::GetService();
+ 
+   PreOrderWalk([&](BrowsingContext* aBrowsingContext) {
+     if (RefPtr<WindowContext> windowContext =
+             aBrowsingContext->GetCurrentWindowContext()) {
+diff --git a/dom/workers/remoteworkers/RemoteWorkerChild.cpp b/dom/workers/remoteworkers/RemoteWorkerChild.cpp
+--- a/dom/workers/remoteworkers/RemoteWorkerChild.cpp
++++ b/dom/workers/remoteworkers/RemoteWorkerChild.cpp
+@@ -18,12 +18,14 @@
+ #include "mozilla/ScopeExit.h"
+ #include "mozilla/Services.h"
+ #include "mozilla/dom/ContentChild.h"
+ #include "mozilla/dom/FetchEventOpProxyChild.h"
+ #include "mozilla/dom/IndexedDatabaseManager.h"
+ #include "mozilla/dom/MessagePort.h"
++#include "mozilla/dom/Navigator.h"
++#include "mozilla/dom/NavigatorManager.h"
+ #include "mozilla/dom/OffThreadCSPContext.h"
+ #include "mozilla/dom/PolicyContainer.h"
+ #include "mozilla/dom/RemoteWorkerTypes.h"
+ #include "mozilla/dom/ServiceWorkerDescriptor.h"
+ #include "mozilla/dom/ServiceWorkerInterceptController.h"
+ #include "mozilla/dom/ServiceWorkerOp.h"
+@@ -353,12 +355,18 @@ nsresult RemoteWorkerChild::ExecWorkerOnMainThread(
+   net::CookieJarSettings::Deserialize(aData.cookieJarSettings(),
+                                       getter_AddRefs(info.mCookieJarSettings));
+   info.mCookieJarSettingsArgs = aData.cookieJarSettings();
+   info.mIsOn3PCBExceptionList = aData.isOn3PCBExceptionList();
+   info.mLanguageOverrideLocale = aData.languageOverrideLocale();
+   info.mLanguageOverride = aData.languageOverride().Clone();
++  if (info.mLanguageOverrideLocale.IsEmpty() &&
++      NavigatorManager::GetLocale(info.mOriginAttributes.mUserContextId,
++                                  info.mLanguageOverrideLocale)) {
++    Navigator::GetAcceptLanguages(info.mLanguageOverride,
++                                  &info.mLanguageOverrideLocale);
++  }
+   info.mTimezoneOverride = aData.timezoneOverride();
+   info.mSecureContext = aData.isSecureContext()
+                             ? WorkerLoadInfo::eSecureContext
+                             : WorkerLoadInfo::eInsecureContext;
+ 
+   WorkerPrivate::OverrideLoadInfoLoadGroup(info, info.mLoadingPrincipal);
+diff --git a/dom/ipc/ContentParent.cpp b/dom/ipc/ContentParent.cpp
+--- a/dom/ipc/ContentParent.cpp
++++ b/dom/ipc/ContentParent.cpp
+@@ -108,12 +108,13 @@
+ #include "mozilla/dom/JSActorService.h"
+ #include "mozilla/dom/JSProcessActorBinding.h"
+ #include "mozilla/dom/LocalStorageCommon.h"
+ #include "mozilla/dom/MediaController.h"
+ #include "mozilla/dom/MediaStatusManager.h"
+ #include "mozilla/dom/MemoryReportRequest.h"
++#include "mozilla/dom/NavigatorManager.h"
+ #include "mozilla/dom/PContentPermissionRequestParent.h"
+ #include "mozilla/dom/PCycleCollectWithLogsParent.h"
+ #include "mozilla/dom/ParentProcessChannelHandle.h"
+ #include "mozilla/dom/ParentProcessMessageManager.h"
+ #include "mozilla/dom/PermissionObserver.h"
+ #include "mozilla/dom/PermissionStatusBinding.h"
+@@ -1204,12 +1205,59 @@ mozilla::ipc::IPCResult ContentParent::RecvRoverfoxStoragePut(
+     return IPC_OK();
+   }
+   RoverfoxStorageManager::StorePref(aPrefName, aValue);
+   return IPC_OK();
+ }
+ 
++bool ContentParent::GetAppLocales(nsTArray<nsCString>& aLocales) const {
++  LocaleService* localeService = LocaleService::GetInstance();
++  localeService->GetAppLocalesAsBCP47(aLocales);
++  nsAutoCString locale;
++  if (!NavigatorManager::GetLocale(mRemoteType.UserContextId(), locale) ||
++      locale.IsEmpty()) {
++    return false;
++  }
++
++  AutoTArray<nsCString, 1> requested{locale};
++  AutoTArray<nsCString, 100> available;
++  nsAutoCString fallback;
++  localeService->GetAvailableLocales(available);
++  localeService->GetLastFallbackLocale(fallback);
++  nsTArray<nsCString> negotiated;
++  localeService->NegotiateLanguages(requested, available, fallback,
++                                    LocaleService::kLangNegStrategyFiltering,
++                                    negotiated);
++  if (negotiated.IsEmpty() || negotiated == aLocales) {
++    return false;
++  }
++  aLocales = std::move(negotiated);
++  return true;
++}
++
++/* static */
++void ContentParent::UpdateContextLocale(uint32_t aUserContextId) {
++  nsCOMPtr<nsIChromeRegistry> registrySvc = nsChromeRegistry::GetService();
++  nsChromeRegistryChrome* chromeRegistry =
++      static_cast<nsChromeRegistryChrome*>(registrySvc.get());
++  for (auto* cp : AllProcesses(eLive)) {
++    if (cp->mRemoteType.UserContextId() != aUserContextId) {
++      continue;
++    }
++
++    chromeRegistry->SendRegisteredChrome(cp);
++    nsTArray<nsCString> locales;
++    cp->GetAppLocales(locales);
++    NS_WARNING_ASSERTION(!locales.IsEmpty(),
++                         "a content process has no app locale");
++    if (!locales.IsEmpty()) {
++      const bool sent = cp->SendUpdateAppLocales(locales);
++      NS_WARNING_ASSERTION(sent, "failed to update a context's app locale");
++    }
++  }
++}
++
+ static mozilla::glean::security::FissionPrincipalsExtra
+ GetAndLogPrincipalValidationFailure(nsIPrincipal* aPrincipal,
+                                     const char* aMethod) {
+   mozilla::glean::security::FissionPrincipalsExtra extra = {};
+   extra.value = Some(aMethod);
+ 
+@@ -1464,12 +1512,16 @@ void ContentParent::GetAllEvenIfDead(nsTArray<ContentParent*>& aArray) {
+   }
+ }
+ 
+ void ContentParent::BroadcastStringBundle(
+     const StringBundleDescriptor& aBundle) {
+   for (auto* cp : AllProcesses(eLive)) {
++    nsTArray<nsCString> locales;
++    if (cp->GetAppLocales(locales)) {
++      continue;
++    }
+     AutoTArray<StringBundleDescriptor, 1> array;
+     array.AppendElement(StringBundleDescriptor(aBundle.bundleURL(),
+                                                aBundle.mapHandle().Clone()));
+     (void)cp->SendRegisterStringBundles(std::move(array));
+   }
+ }
+@@ -2730,13 +2782,13 @@ bool ContentParent::InitInternal(ProcessPriority aInitialPriority) {
+   MOZ_ASSERT(spellChecker, "No spell checker?");
+ 
+   spellChecker->GetDictionaryList(&xpcomInit.dictionaries());
+ 
+   OSPreferences::GetInstance()->GetSystemLocales(xpcomInit.sysLocales());
+ 
+-  LocaleService::GetInstance()->GetAppLocalesAsBCP47(xpcomInit.appLocales());
++  const bool ownLocale = GetAppLocales(xpcomInit.appLocales());
+   LocaleService::GetInstance()->GetRequestedLocales(
+       xpcomInit.requestedLocales());
+ 
+   L10nRegistry::GetParentProcessFileSourceDescriptors(
+       xpcomInit.l10nFileSources());
+ 
+@@ -2873,15 +2925,17 @@ bool ContentParent::InitInternal(ProcessPriority aInitialPriority) {
+ 
+   nsCOMPtr<nsIChromeRegistry> registrySvc = nsChromeRegistry::GetService();
+   nsChromeRegistryChrome* chromeRegistry =
+       static_cast<nsChromeRegistryChrome*>(registrySvc.get());
+   chromeRegistry->SendRegisteredChrome(this);
+ 
+-  nsCOMPtr<nsIStringBundleService> stringBundleService =
+-      components::StringBundle::Service();
+-  stringBundleService->SendContentBundles(this);
++  if (!ownLocale) {
++    nsCOMPtr<nsIStringBundleService> stringBundleService =
++        components::StringBundle::Service();
++    stringBundleService->SendContentBundles(this);
++  }
+ 
+   if (gAppData) {
+     nsCString version(gAppData->version);
+     nsCString buildID(gAppData->buildID);
+     nsCString name(gAppData->name);
+     nsCString UAName(gAppData->UAName);
+diff --git a/dom/ipc/ContentParent.h b/dom/ipc/ContentParent.h
+--- a/dom/ipc/ContentParent.h
++++ b/dom/ipc/ContentParent.h
+@@ -293,12 +293,16 @@ class ContentParent final : public PContentParent,
+   static void GetAll(nsTArray<ContentParent*>& aArray);
+ 
+   static void GetAllEvenIfDead(nsTArray<ContentParent*>& aArray);
+ 
+   static void BroadcastStringBundle(const StringBundleDescriptor&);
+ 
++  bool GetAppLocales(nsTArray<nsCString>& aLocales) const;
++
++  static void UpdateContextLocale(uint32_t aUserContextId);
++
+   static void BroadcastShmBlockAdded(uint32_t aGeneration, uint32_t aIndex);
+ 
+   static void BroadcastThemeUpdate(widget::ThemeChangeKind);
+ 
+   static void BroadcastMediaCodecsSupportedUpdate(
+       RemoteMediaIn aLocation, const media::MediaCodecsSupported& aSupported);
+diff --git a/dom/ipc/ContentChild.cpp b/dom/ipc/ContentChild.cpp
+--- a/dom/ipc/ContentChild.cpp
++++ b/dom/ipc/ContentChild.cpp
+@@ -98,13 +98,16 @@
+ #include "mozilla/gfx/Logging.h"
+ #include "mozilla/gfx/gfxVars.h"
+ #include "mozilla/glean/FOGTransportChild.h"
+ #include "mozilla/hal_sandbox/PHalChild.h"
+ #include "mozilla/image/FetchDecodedImage.h"
+ #include "mozilla/image/RemoteImageProtocolHandler.h"
++#include "js/Context.h"
++#include "js/LocaleSensitive.h"
+ #include "mozilla/intl/L10nRegistry.h"
++#include "mozilla/intl/Locale.h"
+ #include "mozilla/intl/LocaleService.h"
+ #include "mozilla/intl/OSPreferences.h"
+ #include "mozilla/ipc/BackgroundChild.h"
+ #include "mozilla/ipc/Endpoint.h"
+ #include "mozilla/ipc/FileDescriptorUtils.h"
+ #include "mozilla/ipc/GeckoChildProcessHost.h"
+@@ -2475,12 +2478,19 @@ mozilla::ipc::IPCResult ContentChild::RecvFontListShmBlockAdded(
+   return IPC_OK();
+ }
+ 
+ mozilla::ipc::IPCResult ContentChild::RecvUpdateAppLocales(
+     nsTArray<nsCString>&& aAppLocales) {
+   LocaleService::GetInstance()->AssignAppLocales(aAppLocales);
++  nsContentUtils::FlushStringBundles();
++  if (mozilla::intl::Locale::HasContextLocale()) {
++    AutoJSAPI jsapi;
++    if (jsapi.Init()) {
++      JS_ResetDefaultLocale(JS_GetRuntime(jsapi.cx()));
++    }
++  }
+   return IPC_OK();
+ }
+ 
+ mozilla::ipc::IPCResult ContentChild::RecvUpdateRequestedLocales(
+     nsTArray<nsCString>&& aRequestedLocales) {
+   LocaleService::GetInstance()->AssignRequestedLocales(aRequestedLocales);
+diff --git a/chrome/nsChromeRegistryChrome.cpp b/chrome/nsChromeRegistryChrome.cpp
+--- a/chrome/nsChromeRegistryChrome.cpp
++++ b/chrome/nsChromeRegistryChrome.cpp
+@@ -223,23 +223,15 @@ static void SerializeURI(nsIURI* aURI, SerializedURI& aSerializedURI) {
+ 
+   aURI->GetSpec(aSerializedURI.spec);
+ }
+ 
+ void nsChromeRegistryChrome::SendRegisteredChrome(
+     mozilla::dom::PContentParent* aParent) {
+-  nsTArray<ChromePackage> packages;
+   nsTArray<SubstitutionMapping> resources;
+   nsTArray<OverrideMapping> overrides;
+ 
+-  for (const auto& entry : mPackagesHash) {
+-    ChromePackage chromePackage;
+-    ChromePackageFromPackageEntry(entry.GetKey(), entry.GetWeak(),
+-                                  &chromePackage, SKIN);
+-    packages.AppendElement(chromePackage);
+-  }
+-
+   // If we were passed a parent then a new child process has been created and
+   // has requested all of the chrome so send it the resources too. Otherwise
+   // resource mappings are sent by the resource protocol handler dynamically.
+   if (aParent) {
+     nsCOMPtr<nsIIOService> io(do_GetIOService());
+     NS_ENSURE_TRUE_VOID(io);
+@@ -261,42 +253,62 @@ void nsChromeRegistryChrome::SendRegisteredChrome(
+     SerializeURI(entry.GetWeak(), overrideURI);
+ 
+     overrides.AppendElement(
+         OverrideMapping{std::move(chromeURI), std::move(overrideURI)});
+   }
+ 
+-  nsAutoCString appLocale;
+-  LocaleService::GetInstance()->GetAppLocaleAsBCP47(appLocale);
++  auto send = [&](ContentParent* aChild, bool aReset) {
++    nsTArray<nsCString> appLocales;
++    aChild->GetAppLocales(appLocales);
++    if (appLocales.IsEmpty()) {
++      return false;
++    }
++    nsTArray<ChromePackage> packages;
++    for (const auto& entry : mPackagesHash) {
++      ChromePackage chromePackage;
++      ChromePackageFromPackageEntry(entry.GetKey(), entry.GetWeak(),
++                                    &chromePackage, SKIN, appLocales[0]);
++      packages.AppendElement(chromePackage);
++    }
++    return aChild->SendRegisterChrome(packages, resources, overrides,
++                                      appLocales[0], aReset);
++  };
+ 
+   if (aParent) {
+-    bool success = aParent->SendRegisterChrome(packages, resources, overrides,
+-                                               appLocale, false);
++    bool success = send(static_cast<ContentParent*>(aParent), false);
+     NS_ENSURE_TRUE_VOID(success);
+   } else {
+     nsTArray<ContentParent*> parents;
+     ContentParent::GetAll(parents);
+     if (!parents.Length()) return;
+ 
+     for (uint32_t i = 0; i < parents.Length(); i++) {
+-      DebugOnly<bool> success = parents[i]->SendRegisterChrome(
+-          packages, resources, overrides, appLocale, true);
++      DebugOnly<bool> success = send(parents[i], true);
+       NS_WARNING_ASSERTION(success,
+                            "couldn't reset a child's registered chrome");
+     }
+   }
+ }
+ 
+ /* static */
+ void nsChromeRegistryChrome::ChromePackageFromPackageEntry(
+     const nsACString& aPackageName, PackageEntry* aPackage,
+     ChromePackage* aChromePackage, const nsCString& aSelectedSkin) {
+   nsAutoCString appLocale;
+   LocaleService::GetInstance()->GetAppLocaleAsBCP47(appLocale);
++  ChromePackageFromPackageEntry(aPackageName, aPackage, aChromePackage,
++                                aSelectedSkin, appLocale);
++}
+ 
++/* static */
++void nsChromeRegistryChrome::ChromePackageFromPackageEntry(
++    const nsACString& aPackageName, PackageEntry* aPackage,
++    ChromePackage* aChromePackage, const nsCString& aSelectedSkin,
++    const nsACString& aAppLocale) {
+   SerializeURI(aPackage->baseURI, aChromePackage->contentBaseURI);
+-  SerializeURI(aPackage->locales.GetBase(appLocale, nsProviderArray::LOCALE),
++  SerializeURI(aPackage->locales.GetBase(aAppLocale, nsProviderArray::LOCALE),
+                aChromePackage->localeBaseURI);
+   SerializeURI(aPackage->skins.GetBase(aSelectedSkin, nsProviderArray::ANY),
+                aChromePackage->skinBaseURI);
+   aChromePackage->package = aPackageName;
+   aChromePackage->flags = aPackage->flags;
+ }
+diff --git a/chrome/nsChromeRegistryChrome.h b/chrome/nsChromeRegistryChrome.h
+--- a/chrome/nsChromeRegistryChrome.h
++++ b/chrome/nsChromeRegistryChrome.h
+@@ -42,12 +42,16 @@ class nsChromeRegistryChrome : public nsChromeRegistry {
+  private:
+   struct PackageEntry;
+   static void ChromePackageFromPackageEntry(const nsACString& aPackageName,
+                                             PackageEntry* aPackage,
+                                             ChromePackage* aChromePackage,
+                                             const nsCString& aSelectedSkin);
++  static void ChromePackageFromPackageEntry(
++      const nsACString& aPackageName, PackageEntry* aPackage,
++      ChromePackage* aChromePackage, const nsCString& aSelectedSkin,
++      const nsACString& aAppLocale);
+ 
+   nsresult OverrideLocalePackage(const nsACString& aPackage,
+                                  nsACString& aOverride);
+   nsIURI* GetBaseURIFromPackage(const nsCString& aPackage,
+                                 const nsCString& aProvider,
+                                 const nsCString& aPath) override;
+diff --git a/dom/base/nsContentUtils.cpp b/dom/base/nsContentUtils.cpp
+--- a/dom/base/nsContentUtils.cpp
++++ b/dom/base/nsContentUtils.cpp
+@@ -5765,12 +5765,28 @@ void nsContentUtils::AsyncPrecreateStringBundles() {
+                                }),
+         EventQueuePriority::Idle);
+     (void)NS_WARN_IF(NS_FAILED(rv));
+   }
+ }
+ 
++/* static */
++void nsContentUtils::FlushStringBundles() {
++  MOZ_ASSERT(NS_IsMainThread());
++  if (!sStringBundleService) {
++    nsresult rv =
++        CallGetService(NS_STRINGBUNDLE_CONTRACTID, &sStringBundleService);
++    (void)NS_WARN_IF(NS_FAILED(rv));
++  }
++  if (sStringBundleService) {
++    (void)NS_WARN_IF(NS_FAILED(sStringBundleService->FlushBundles()));
++  }
++  for (StaticRefPtr<nsIStringBundle>& bundle : sStringBundles) {
++    bundle = nullptr;
++  }
++}
++
+ static PropertiesFile GetMaybeSpoofedPropertiesFile(PropertiesFile aFile,
+                                                     const char* aKey,
+                                                     const Document* aDocument) {
+   // When we spoof English, use en-US properties in strings that are accessible
+   // by content.
+   bool spoofLocale = nsContentUtils::ShouldResistFingerprinting(
+diff --git a/dom/base/nsContentUtils.h b/dom/base/nsContentUtils.h
+--- a/dom/base/nsContentUtils.h
++++ b/dom/base/nsContentUtils.h
+@@ -3544,12 +3544,14 @@ class nsContentUtils {
+    * @param aMsg  The message to check
+    */
+   static bool IsMessageCriticalInputEvent(const IPC::Message& aMsg);
+ 
+   static void AsyncPrecreateStringBundles();
+ 
++  static void FlushStringBundles();
++
+   static bool ContentIsLink(nsIContent* aContent);
+ 
+   static already_AddRefed<mozilla::dom::ContentFrameMessageManager>
+   TryGetBrowserChildGlobal(nsISupports* aFrom);
+ 
+   /**

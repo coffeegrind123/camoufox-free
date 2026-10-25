@@ -945,6 +945,10 @@ jobs:
     timeout-minutes: 60
     permissions:
       contents: read
+    env:
+      # The unpackaged CI browser has no packaged locales, so the guard names
+      # this gap instead of proving built-in strings with an en-US fallback.
+      CAMOUFOX_TEST_ALLOW_MISSING: packaged-locales
     steps:
       - uses: actions/checkout@v4
         with:

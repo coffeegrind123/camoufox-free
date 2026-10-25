@@ -3054,6 +3054,25 @@ def test_the_patch_guard_matrix_runs_every_group():
     assert legs == set(GROUPS) | {"skiplist"}
 
 
+def test_context_locale_guard_covers_every_scope_and_wire_identity():
+    from ci._util import REPO_ROOT
+
+    guard = REPO_ROOT / "browser/tests/playwright/patches/context-locale-follows.py"
+    source = guard.read_text(encoding="utf-8")
+    for probe in (
+        "new Worker(",
+        "new SharedWorker(",
+        "navigator.serviceWorker.register(",
+        "audio.audioWorklet.addModule(",
+        "navigator.languages",
+        "new Intl.DateTimeFormat",
+        "Accept-Language",
+        "User-Agent",
+        '"de-DE,de;q="',
+    ):
+        assert probe in source, f"context-locale-follows does not cover {probe!r}"
+
+
 def test_leftover_browsers_sees_content_processes(tmp_path):
     """Firefox's Linux content processes run plugin-container, beside the binary."""
     import shutil
