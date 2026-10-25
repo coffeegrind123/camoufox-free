@@ -410,15 +410,13 @@ function generateFontconfig(
 		{ linux: "lin", macos: "mac", windows: "win" } as Record<string, string>
 	)[osDir ?? ""];
 	if (osKey && fs.existsSync(groupsPath)) {
-		try {
-			const parsed = JSON.parse(fs.readFileSync(groupsPath, "utf-8"));
-			const readBy: string[] = parsed?.readBy?.[osKey] ?? [];
-			scanDirs = readBy
-				.map((g) => path.join(fontsDir, g))
-				.filter((d) => isDir(d));
-		} catch {
-			scanDirs = [];
-		}
+		// A damaged groups.json throws: the fallback below would widen the scan to
+		// every OS's fonts (#186). Only an absent one means a legacy bundle.
+		const parsed = JSON.parse(fs.readFileSync(groupsPath, "utf-8"));
+		const readBy: string[] = parsed?.readBy?.[osKey] ?? [];
+		scanDirs = readBy
+			.map((g) => path.join(fontsDir, g))
+			.filter((d) => isDir(d));
 	}
 	if (!scanDirs.length) {
 		// Older bundles ship fonts/<os>/ with each OS's set duplicated in full.

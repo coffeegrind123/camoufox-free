@@ -132,6 +132,61 @@ describe("getEnvVars", () => {
 	});
 });
 
+describe("the runtime fontconfig's font directories", () => {
+	const roots: string[] = [];
+
+	afterEach(() => {
+		vi.restoreAllMocks();
+		for (const root of roots.splice(0)) {
+			fs.rmSync(root, { recursive: true, force: true });
+		}
+	});
+
+	const bundle = (groups: string | null) => {
+		const root = fs.mkdtempSync(path.join(os.tmpdir(), "camoufox-groups-"));
+		roots.push(root);
+		vi.spyOn(utilsDeps, "osName").mockReturnValue("lin");
+		vi.spyOn(utilsDeps, "installDir").mockReturnValue(path.join(root, "cache"));
+		fs.mkdirSync(path.join(root, "fontconfig", "windows"), {
+			recursive: true,
+		});
+		fs.writeFileSync(
+			path.join(root, "fontconfig", "windows", "fonts.conf"),
+			'<fontconfig><dir prefix="cwd">fonts</dir></fontconfig>',
+		);
+		for (const group of ["L", "LW", "M", "W", "windows"]) {
+			fs.mkdirSync(path.join(root, "fonts", group), { recursive: true });
+		}
+		if (groups !== null) {
+			fs.writeFileSync(path.join(root, "fonts", "groups.json"), groups);
+		}
+		return path.join(root, "camoufox-bin");
+	};
+	const scanned = (exe: string) =>
+		[
+			...fs
+				.readFileSync(
+					getEnvVars({}, "win", exe).FONTCONFIG_FILE as string,
+					"utf-8",
+				)
+				.matchAll(/<dir>([^<]+)<\/dir>/g),
+		].map((match) => path.basename(match[1]));
+
+	it("groups.json picks the OS's groups", () => {
+		const readBy = { lin: ["L", "LW"], mac: ["M"], win: ["W", "LW"] };
+
+		expect(scanned(bundle(JSON.stringify({ readBy })))).toEqual(["W", "LW"]);
+	});
+
+	it("a corrupt groups.json fails instead of scanning every OS", () => {
+		expect(() => getEnvVars({}, "win", bundle("{not json"))).toThrow();
+	});
+
+	it("a missing groups.json keeps the legacy per-OS layout", () => {
+		expect(scanned(bundle(null))).toEqual(["windows"]);
+	});
+});
+
 describe("spoofsWindowDimensions", () => {
 	it("reassembles chunks before looking for a window dimension key", () => {
 		const config = { "window.outerWidth": 1280 };
