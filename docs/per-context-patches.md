@@ -87,7 +87,7 @@ its own id).
 |---|---|
 | 1 | The setter resolves `userContextId` from the window's `BrowsingContext`. |
 | 2 | The value goes into the in-process cache. |
-| 3 | It is also written as a pref with the `roverfox.s.` prefix (every type serialized as a string). |
+| 3 | It is also written as a pref with the `roverfox.s.` prefix (every type serialized as a string), in chunks when it is over 3 KiB (below). |
 | 4 | In a content process, it is sent to the parent with sync IPC (`SendRoverfoxStoragePut`). |
 | 5 | Navigator, screen, timezone and WebGL also store it under id 0, for workers that cannot resolve their context. Fonts, voices and WebRTC do not. |
 
@@ -115,9 +115,22 @@ what the stock getter does.
 `cross-process-storage.patch` adds a sync message to `PContent.ipdl`,
 `RoverfoxStoragePut`. The parent accepts only pref names starting with
 `roverfox.s.`. Put is synchronous so the value is in the
-parent before any worker process starts. The patch also adds `roverfox.s.` to
-`sDynamicPrefOverrideList` in `Preferences.cpp`, because Firefox otherwise
-strips dynamically created string prefs from content processes.
+parent before any worker process starts. The patch also adds `roverfox.s.` and
+`roverfox.c.` to `sDynamicPrefOverrideList` in `Preferences.cpp`, because
+Firefox otherwise strips dynamically created string prefs without a default
+value from content processes. The values live on the default branch, so today
+that list is not what lets them through.
+
+Firefox sends no string pref longer than 4 KiB to another process
+(`MAX_ADVISABLE_PREF_LENGTH`, checked by `Pref::HasAdvisablySizedValues()` in
+both the snapshot a new process starts with and every later update). A value
+over 3 KiB, such as a font list of a few hundred names, is therefore written as
+chunk prefs `roverfox.c.<key>.<i>`, cut on UTF-8 code point boundaries, and then
+`roverfox.s.<key>` is written as a header: byte `0x01`, the chunk count, `:`,
+and a generation that makes every header differ from the last. Only the header
+matches the `roverfox.s.` callback, and pref updates reach a process in the
+order the parent made them, so the callback runs once, after every chunk has
+arrived. `StorePref` and `LoadPref` are the one writer and reader (#231).
 
 Files: `dom/base/RoverfoxStorageManager.cpp/h`, `ContentParent.cpp/h`,
 `PContent.ipdl`, `ipc/ipdl/sync-messages.ini`, `modules/libpref/Preferences.cpp`.
