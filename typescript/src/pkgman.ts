@@ -67,42 +67,48 @@ function githubHeaders(url: string): Record<string, string> {
 		: {};
 }
 
-/** Delays before each retry of a request that failed without a response. */
+/** Delays before each retry of a request that failed or got a transient answer. */
 const NETWORK_RETRY_DELAYS_MS = [1000, 2000];
 
 /**
- * fetch(), retried when the request fails without any response, and naming
- * the URL and cause when it gives up. Node's own error is only "fetch failed",
- * which says neither what was being downloaded nor why (DNS, refused, reset,
- * timeout).
+ * fetch(), retried when the request fails without any response or gets a 429
+ * or a 5xx, and naming the URL and cause when it gives up. Node's own error is
+ * only "fetch failed", which says neither what was being downloaded nor why
+ * (DNS, refused, reset, timeout).
  *
  * Unlike requests.get(), which opens a connection per call, fetch() reuses
  * pooled keep-alive connections, and a server may close one just as it is
  * reused ("other side closed"). On GitHub's runners that failed `camoufox
  * fetch` right after the browser download, before any byte of the GeoIP
- * request was answered. HTTP errors are responses, never retried.
+ * request was answered. A 429 or 5xx is the host being briefly down, and the
+ * last one is returned for the caller to raise; any other HTTP error is a real
+ * answer, never retried.
  */
 async function request(url: string, init: RequestInit): Promise<Response> {
 	for (let attempt = 0; ; attempt++) {
+		const last = attempt >= NETWORK_RETRY_DELAYS_MS.length;
 		try {
-			return await fetch(url, init);
-		} catch (error) {
-			if (attempt < NETWORK_RETRY_DELAYS_MS.length) {
-				await new Promise((resolve) =>
-					setTimeout(resolve, NETWORK_RETRY_DELAYS_MS[attempt]),
-				);
-				continue;
+			const response = await fetch(url, init);
+			if (last || (response.status !== 429 && response.status < 500)) {
+				return response;
 			}
-			const cause = (error as { cause?: { code?: string; message?: string } })
-				.cause;
-			const detail = cause
-				? `${cause.code ?? ""} ${cause.message ?? ""}`.trim()
-				: "";
-			throw new Error(
-				`Could not download ${url}: ${(error as Error).message}${detail ? ` (${detail})` : ""}`,
-				{ cause: error },
-			);
+			await response.body?.cancel();
+		} catch (error) {
+			if (last) {
+				const cause = (error as { cause?: { code?: string; message?: string } })
+					.cause;
+				const detail = cause
+					? `${cause.code ?? ""} ${cause.message ?? ""}`.trim()
+					: "";
+				throw new Error(
+					`Could not download ${url}: ${(error as Error).message}${detail ? ` (${detail})` : ""}`,
+					{ cause: error },
+				);
+			}
 		}
+		await new Promise((resolve) =>
+			setTimeout(resolve, NETWORK_RETRY_DELAYS_MS[attempt]),
+		);
 	}
 }
 

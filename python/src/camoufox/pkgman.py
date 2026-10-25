@@ -4,6 +4,7 @@ import platform
 import re
 import sys
 import tempfile
+import time
 from dataclasses import dataclass
 from functools import total_ordering
 from io import BufferedWriter, BytesIO
@@ -1011,6 +1012,32 @@ def selected_launch_path(specifier: str) -> str:
 ProgressCallback: TypeAlias = 'Callable[[int, int], None]'
 
 
+# Seconds to wait before each retry of a download that failed transiently.
+DOWNLOAD_RETRY_DELAYS = (1, 2)
+
+
+def _get_with_retry(url: str, headers: Dict[str, str]) -> requests.Response:
+    """requests.get(), retried on a connection error, a 429 or a 5xx.
+
+    The host is briefly down and the download is an idempotent GET of a pinned
+    file. Any other 4xx is a real answer and returned at once.
+    """
+    for delay in (*DOWNLOAD_RETRY_DELAYS, None):
+        try:
+            response = requests.get(url, stream=True, headers=headers)
+        except requests.ConnectionError:
+            if delay is None:
+                raise
+        else:
+            if delay is None or (
+                response.status_code != 429 and response.status_code < 500
+            ):
+                return response
+            response.close()
+        time.sleep(delay)
+    raise AssertionError('unreachable: the last attempt returns or raises')
+
+
 def webdl(
     url: str,
     desc: Optional[str] = None,
@@ -1024,7 +1051,7 @@ def webdl(
     headers = (
         {"Authorization": f"Bearer {GITHUB_TOKEN}"} if "api.github" in url and GITHUB_TOKEN else {}
     )
-    response = requests.get(url, stream=True, headers=headers)
+    response = _get_with_retry(url, headers)
     response.raise_for_status()
 
     total_size = int(response.headers.get('content-length', 0))
