@@ -572,6 +572,20 @@ describe("font distribution (test_font_distribution.py)", () => {
 	const BASES = data("font-bases.json");
 	const GROUPS = data("font-groups.json");
 	const REPORTABLE = data("fonts.json");
+	const ESSENTIAL = data("essential-fonts.json");
+	const BASE_ONLY_ALIASES: Record<string, readonly string[]> = {
+		mac: [
+			"American Typewriter Semibold",
+			"Apple SD Gothic Neo ExtraBold",
+			"Futura Bold",
+			"InaiMathi Bold",
+			"Kohinoor Devanagari Medium",
+			"Noto Sans Canadian Aboriginal Regular",
+			"STIX Two Math Regular",
+			"STIX Two Text Regular",
+		],
+		lin: ["Calibri", "Cambria"],
+	};
 	const samples: Record<string, Set<string>[]> = {};
 	for (const os of Object.keys(OS_KEYS)) {
 		samples[os] = Array.from(
@@ -597,6 +611,32 @@ describe("font distribution (test_font_distribution.py)", () => {
 			unit.fonts.filter((f: string) => !others.has(f) && !inBase.has(f)),
 		);
 	};
+
+	for (const os of ["macos", "linux"]) {
+		const key = OS_KEYS[os];
+		it(`${os}: aliases outside the essential floor come only from their base`, () => {
+			const aliases = BASE_ONLY_ALIASES[key];
+			expect(
+				ESSENTIAL[key].filter((font: string) => aliases.includes(font)),
+			).toEqual([]);
+
+			const bases = BASES[key].map((base: any) => new Set<string>(base.fonts));
+			for (let seed = 0; seed < 300; seed++) {
+				const fonts = new Set(generateRandomFontSubset(os, seed));
+				for (const alias of aliases) {
+					if (!fonts.has(alias)) continue;
+					const completeBaseHasIt = bases.some(
+						(base) =>
+							base.has(alias) && [...base].every((font) => fonts.has(font)),
+					);
+					expect(
+						completeBaseHasIt,
+						`${os} draw #${seed} reports ${alias} without a base that has it`,
+					).toBe(true);
+				}
+			}
+		});
+	}
 
 	for (const os of Object.keys(OS_KEYS)) {
 		const key = OS_KEYS[os];

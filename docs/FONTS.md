@@ -152,10 +152,18 @@ Deliberate choices:
   `browser/bundle/fontconfig/windows/fonts.conf` because there is no per-launch
   fontconfig hook, and the names are in `essential-fonts.json`'s Windows list. That matches
   reality: every Windows install resolves all of them.
-- **macOS TTC weight names are reported.** The confs rewrite `American
-  Typewriter Semibold`, `Futura Bold`, `STIX Two Math Regular`, ... to their base
-  family. A real Mac registers those as families but `fc-scan` cannot see them,
-  so the ones whose target is bundled are forced in.
+- **macOS TTC weight names are reported where the version has them.** The
+  confs rewrite `American Typewriter Semibold`, `Futura Bold`, `STIX Two Math
+  Regular`, ... to their base family. A real Mac registers those as families but
+  `fc-scan` cannot see them, so the ones whose target is bundled are forced into
+  `fonts.json`. Only Sonoma's base lists all of them; `Kohinoor Devanagari
+  Medium` is one of the names whose absence identifies macOS 27. A base carries
+  an alias only when it lists the name (`base_has_alias` in
+  `browser/scripts/_font_bundle.py`), and `essential-fonts.json` holds only the
+  aliases every base of the OS carries. On Linux, where fontconfig never lists a
+  metric alias, a base carries one when it has the target: `Calibri` and
+  `Cambria` are not essential there, because no Ubuntu base has Carlito or
+  Caladea.
 - **`Twemoji Mozilla` is reportable on Linux** (a CreepJS Linux marker, and
   Firefox exposes its bundled font to content). Not reported on macOS.
 - One name renders for every Linux identity but is not always reported
@@ -180,7 +188,7 @@ plus independent per-unit draws. Not a uniform percentage of a pool.
    families and is identified by the *absence* of `Noto Sans Brahmi` /
    `Noto Sans CanAborig`.
 
-2. **The essential floor** (`essential-fonts.json`: 125 / 369 / 274) — the
+2. **The essential floor** (`essential-fonts.json`: 125 / 361 / 272) — the
    intersection of that OS's bases, so it holds whichever base was drawn.
 
 3. **Per-unit Bernoulli draws, per OS.** Each addition is one independent
@@ -225,8 +233,8 @@ plus independent per-unit draws. Not a uniform percentage of a pool.
 
 4. **Marker fonts** appended if missing (`_ensure_marker_fonts`).
 
-Resulting list sizes over 20 draws: 125–281 of 335 (Windows), 369–526 of 567
-(macOS), 278–319 of 358 (Linux).
+Resulting list sizes over 20 draws: 125–281 of 335 (Windows), 361–526 of 567
+(macOS), 276–319 of 358 (Linux).
 
 For a **native** identity — the host's own OS — on macOS and Windows the draw
 claims the OS base only, because the real system fonts are the right ones there

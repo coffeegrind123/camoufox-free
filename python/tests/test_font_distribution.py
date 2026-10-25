@@ -35,9 +35,11 @@ manifest value rather than an equality, and the sample is drawn once per OS and
 shared (module-scoped fixture) to keep the suite fast.
 """
 
+import importlib.util
 import json
 import math
 import os
+import sys
 from collections import Counter
 
 import pytest
@@ -275,3 +277,44 @@ def test_no_duplicate_families_in_a_draw(os_name, samples):
     for i in range(min(N, 200)):
         lst = draw(os_name, seed=i)
         assert len(lst) == len(set(lst)), f'{os_name} draw #{i} repeats a family'
+
+
+def _font_scripts():
+    """gen-fonts-json.py's ALIASES and the rule for which bases carry one."""
+    repo = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    scripts = os.path.join(repo, 'browser', 'scripts')
+    sys.path.insert(0, scripts)
+    try:
+        spec = importlib.util.spec_from_file_location(
+            'gen_fonts_json', os.path.join(scripts, 'gen-fonts-json.py')
+        )
+        gen = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(gen)
+        from _font_bundle import base_has_alias
+    finally:
+        sys.path.remove(scripts)
+    return gen.ALIASES, base_has_alias
+
+
+@pytest.mark.parametrize('os_name', sorted(OS_KEYS))
+def test_essential_fonts_are_in_every_base(os_name):
+    """The essential floor is reported by every identity, so every base has it.
+
+    A name only some OS versions have would erase the versions identified by
+    its absence ("Kohinoor Devanagari Medium" separates macOS 26 from 27). The
+    one exception is a Linux metric alias ("Arial" -> Liberation Sans):
+    fontconfig never lists it, and a stock install resolves it wherever its
+    target is.
+    """
+    os_key = OS_KEYS[os_name]
+    aliases, base_has_alias = _font_scripts()
+    for base in BASES[os_key]:
+        missing = sorted(
+            name for name in fingerprints._ESSENTIAL[os_key]
+            if name not in base['fonts']
+            and not (
+                name in aliases[os_key]
+                and base_has_alias(os_key, name, aliases[os_key][name], base['fonts'])
+            )
+        )
+        assert not missing, f'{os_name}: essential names base {base["id"]} lacks: {missing}'
