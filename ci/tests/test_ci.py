@@ -3267,6 +3267,6 @@ def test_the_install_gate_runs_on_upstream_only():
     jobs = _jobs()
     assert "github.repository == 'daijro/camoufox'" in jobs["install"]["if"]
     assert "install" in _required_suites("true", "false")
-    assert "install" not in _required_suites("true", "false", "coffeegrind123/camoufox-beta")
+    assert "install" not in _required_suites("true", "false", "coffeegrind123/camoufox-free")
     gate = "\n".join(s.get("run") or "" for s in jobs["gate"]["steps"])
     assert '"install": os.environ.get("REPOSITORY") != "daijro/camoufox"' in gate

@@ -60,7 +60,7 @@ from .webgl import firefox_gpus, sample_webgl_for_screen, webgl_for_gpu
 
 ListOrString: TypeAlias = Union[Tuple[str, ...], List[str], str]
 
-# This fork's default where it differs from upstream's (camoufox-beta only;
+# This fork's default where it differs from upstream's (camoufox-free only;
 # the upstream pull requests keep upstream's): the canvas is never covered
 # with random readback, as in every cg release. canvas_noise=None gives
 # upstream's automatic cover for another OS or GPU.

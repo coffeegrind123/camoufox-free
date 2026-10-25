@@ -327,7 +327,7 @@ def test_the_manifest_declares_the_interface_both_libraries_speak():
 
 
 def test_this_fork_releases_by_tag_and_publishes_to_no_registry():
-    """coffeegrind123/camoufox-beta ships one browser zip per tag (build.yml).
+    """coffeegrind123/camoufox-free ships one browser zip per tag (build.yml).
 
     Upstream's release.yml cuts on a schedule and publishes to PyPI and npm;
     merged in from upstream it would run here. Keep it out.
