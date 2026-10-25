@@ -195,6 +195,11 @@ is in it, and they will not ask what a file was for.
 - **Documentation is never stale.** Update the README, `docs/` and the package
   READMEs in the same pull request as the code that changed them, never
   "later". Every snippet must run as written.
+- **README records this fork's delta from upstream.** Add every fork-only
+  browser, launcher, build, release, default or maintenance behaviour to
+  `README.md` in the same pull request, with implementation links and the
+  relevant test or guard. Remove it or move it to the declined-upstream section
+  when upstream absorbs or rejects it; never leave the list stale.
 
 ## Code
 
