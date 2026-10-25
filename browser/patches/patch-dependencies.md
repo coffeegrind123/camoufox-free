@@ -82,6 +82,11 @@ already set up, and do not add the include or `LOCAL_INCLUDES` themselves:
 | `windows-keyboard.patch` | `touchscreen-fingerprint-spoofing.patch` for `/camoucfg` in `dom/events/moz.build` |
 | `zz-stock-cost-parity.patch` | `cross-process-storage.patch` for `RoverfoxStorageManager::Generation()`; `screen-spoofing.patch` for `ScreenDimensionManager` in `dom/base/nsScreen.cpp` |
 
+`zzz-context-locale.patch` applies last and depends on `locale-spoofing.patch`
+for the default-locale hook, `navigator-spoofing.patch` for
+`NavigatorManager`, `cross-process-storage.patch` for the context store, and
+`network-patches.patch` for the request-header path it extends.
+
 ## Headless WebGL
 
 `webgl-headless-egl.patch` has no source dependency on `webgl-spoofing.patch`.
@@ -115,6 +120,12 @@ at hand. A browsing context is not used, because a document created by
 `document.implementation.createHTMLDocument()` or `DOMParser` has none, while it
 shares its creator's principal. A value is stored only under its own context;
 nothing writes a fallback copy under context 0.
+
+`zzz-context-locale.patch` stores a context's Playwright `locale` as
+`nav_locale_<userContextId>`. Worker scripts, shared and service worker
+requests, and service workers without a browsing context read that key. The
+context's process gets the locale as its default and app locale, covering
+isolated worlds, worklets, form widgets and built-in strings.
 
 ## Backports
 
