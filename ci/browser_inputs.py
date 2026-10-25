@@ -98,7 +98,7 @@ BUILD_ENTRY_POINTS = (
     "browser/multibuild.py",
     "browser/scripts/patch.py",
     "browser/scripts/package.py",
-    "browser/scripts/copy-additions.sh",
+    "browser/scripts/sync_additions.py",
     "browser/scripts/_mixin.py",
 )
 
