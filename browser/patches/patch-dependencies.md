@@ -20,7 +20,7 @@ WebRTC host socket's port range in `webrtc-ip-spoofing.patch`); anything a page
 can observe asks `NavigatorManager::GetSpoofedOS()` (`navigator-spoofing.patch`)
 for its own context's OS, which is that context's `navigator.platform` when it
 set one and the launch's otherwise.
-`scripts/copy-additions.sh` copies it into the source tree before any patch
+`scripts/sync_additions.py --baseline` copies it into the source tree before any patch
 applies. A patch that calls MaskConfig from a directory whose `moz.build` does
 not already see `/camoucfg` must add `LOCAL_INCLUDES += ["/camoucfg"]` itself.
 
