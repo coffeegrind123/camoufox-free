@@ -163,17 +163,27 @@ index 0192e5f6f2..a43ecf238e 100644
    if (aShouldResistFingerprinting && !mSpoofedUserAgent.IsEmpty()) {
      LOG(("using spoofed userAgent : %s\n", mSpoofedUserAgent.get()));
      return mSpoofedUserAgent;
-@@ -2107,6 +2117,10 @@ nsresult nsHttpHandler::SetAcceptLanguages() {
+@@ -2113,15 +2134,19 @@ nsresult nsHttpHandler::SetAcceptLanguages() {
+           rv = gHttpHandler->SetAcceptLanguages();
+         }));
+     return rv;
    }
  
    MOZ_ASSERT(NS_IsMainThread());
+-
+   mAcceptLanguagesIsDirty = false;
+ 
 +  if (auto value = MaskConfig::GetString("headers.Accept-Language")) {
 +    mAcceptLanguages.Assign(nsCString(value.value().c_str()));
 +    return NS_OK;
 +  }
++
+   nsAutoCString acceptLanguages;
+   intl::LocaleService::GetInstance()->GetAcceptLanguages(acceptLanguages);
  
-   mAcceptLanguagesIsDirty = false;
- 
+   nsAutoCString buf;
+   nsresult rv = PrepareAcceptLanguages(acceptLanguages.get(), buf);
+   if (NS_SUCCEEDED(rv)) {
 @@ -2123,6 +2137,11 @@ nsresult nsHttpHandler::SetAcceptLanguages() {
  
  nsresult nsHttpHandler::SetAcceptEncodings(const char* aAcceptEncodings,
