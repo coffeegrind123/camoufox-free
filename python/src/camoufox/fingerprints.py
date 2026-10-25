@@ -1459,8 +1459,8 @@ def generate_context_fingerprint(
             context_options['locale'] for Playwright.
         config_overrides: Dict of CAMOU_CONFIG keys to override after config
             is built but before init_script is rendered (e.g. {'timezone': 'UTC'}).
-        webgl_config: The (vendor, renderer) a drawn identity claims, instead of
-            drawing one.
+        webgl_config: The (vendor, renderer) a drawn identity claims. It outranks
+            a preset's GPU; otherwise the GPU is drawn.
         launch_window: The browser's launch window, as attach_launch_window records it
             ({'outer': (w, h), 'inner': (w|None, h|None), 'screen': (w|None, h|None)}).
             The window is process-wide, so the context's viewport is its inner size,
@@ -1485,6 +1485,10 @@ def generate_context_fingerprint(
         and all(_dimension(value, optional=True) for value in launch_window['screen'])
     ):
         launch_window = None
+
+    def _target_os(current: Dict[str, Any]) -> str:
+        return OS_KEYS.get(os or '') or OS_KEYS[platform_to_os(current.get('navigator.platform', ''))]
+
     if preset is not None:
         # Use real fingerprint preset
         config = from_preset(preset, ff_version)
@@ -1530,24 +1534,21 @@ def generate_context_fingerprint(
 
         # Draw the GPU and its WebGL data (fpgen.yml does not map these)
         if not config.get('webGl:vendor') or not config.get('webGl:renderer'):
-            # Not at the top: camoufox.webgl imports this module.
-            from .webgl import sample_webgl_for_screen, webgl_for_gpu
-
-            _target_os = OS_KEYS.get(os or '') or OS_KEYS[platform_to_os(config.get('navigator.platform', ''))]
             # Same coherence treatment launch_options applies (#729): lift
             # netbook geometry, then keep the GPU consistent with whatever
             # screen this identity ended up with. This path has no real
             # display to reconcile against, so the floor is unconditional.
             raise_screen_to_modern_floor(config)
-            if webgl_config:
-                webgl_fp = webgl_for_gpu(_target_os, *webgl_config)
-            else:
+            if not webgl_config:
+                # Not at the top: camoufox.webgl imports this module.
+                from .webgl import sample_webgl_for_screen
+
                 webgl_fp = sample_webgl_for_screen(
-                    _target_os, config.get('screen.width'), config.get('screen.height'),
+                    _target_os(config), config.get('screen.width'), config.get('screen.height'),
                     cores=config.get('navigator.hardwareConcurrency'),
                 )
-            webgl_fp.pop('webGl2Enabled')
-            config.update(webgl_fp)
+                webgl_fp.pop('webGl2Enabled')
+                config.update(webgl_fp)
 
         # Build source dicts from the fingerprint config for init_values
         nav = {
@@ -1565,6 +1566,24 @@ def generate_context_fingerprint(
             'unmaskedRenderer': config.get('webGl:renderer'),
         }
         preset = {'navigator': nav, 'screen': screen, 'webgl': webgl}
+
+    # An explicit pair outranks the preset's pair, just as it does in
+    # launch_options(). Replace the whole WebGL record so the init script and
+    # config cannot name different devices.
+    if webgl_config:
+        from .webgl import webgl_for_gpu
+
+        webgl_fp = webgl_for_gpu(_target_os(config), *webgl_config)
+        webgl_fp.pop('webGl2Enabled')
+        config.update(webgl_fp)
+        webgl = {
+            'unmaskedVendor': config['webGl:vendor'],
+            'unmaskedRenderer': config['webGl:renderer'],
+        }
+        preset = {
+            **preset,
+            'webgl': {**preset.get('webgl', {}), **webgl},
+        }
 
     # Inject explicit timezone/locale into config (takes priority over preset)
     if timezone:

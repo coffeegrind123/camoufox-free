@@ -148,10 +148,13 @@ def test_unknown_webgl_config_raises():
         launch(os="windows", webgl_config=("Apple", "Apple M1, or similar"))
 
 
-def test_preset_keeps_its_own_gpu():
+def test_preset_gpu_precedes_the_default_sampler(monkeypatch):
     preset = fp.load_presets("152")["presets"]["linux"][0]
     gpu = (preset["webgl"]["unmaskedVendor"], preset["webgl"]["unmaskedRenderer"])
+    monkeypatch.setattr(utils, "sample_webgl_for_screen", lambda *args, **kwargs: pytest.fail("sampled over preset"))
+
     config = launch(os="linux", fingerprint_preset=preset)
+
     assert (config["webGl:vendor"], config["webGl:renderer"]) == gpu
     pinned = (webgl._pin("gpu", {"vendor": gpu[0], "renderer": gpu[1]}),)
     recorded = [
@@ -160,6 +163,49 @@ def test_preset_keeps_its_own_gpu():
         for w2 in webgl._trace("webgl2", "lin", (*pinned, webgl._pin("webgl", w1.value)))
     ]
     assert config["webGl:parameters"] in recorded
+
+
+def test_explicit_webgl_config_replaces_preset_gpu_as_a_pair():
+    preset = fp.load_presets("152")["presets"]["linux"][0]
+    preset_gpu = (preset["webgl"]["unmaskedVendor"], preset["webgl"]["unmaskedRenderer"])
+    assert preset_gpu != _GTX_980_LINUX
+
+    config = launch(os="linux", fingerprint_preset=preset, webgl_config=_GTX_980_LINUX)
+
+    assert (config["webGl:vendor"], config["webGl:renderer"]) == _GTX_980_LINUX
+    recorded = {
+        json.dumps(device["webGl:parameters"], sort_keys=True)
+        for device in webgl.recorded_devices("lin", *_GTX_980_LINUX)
+    }
+    assert json.dumps(config["webGl:parameters"], sort_keys=True) in recorded
+
+
+def test_default_sampler_supplies_a_gpu_when_nothing_names_one(monkeypatch):
+    sampled = webgl_for_gpu("lin", *_GTX_980_LINUX, seed=0)
+    monkeypatch.setattr(utils, "sample_webgl_for_screen", lambda *args, **kwargs: dict(sampled))
+
+    config = launch(os="linux")
+
+    assert (config["webGl:vendor"], config["webGl:renderer"]) == _GTX_980_LINUX
+    assert config["webGl:parameters"] == sampled["webGl:parameters"]
+
+
+def test_context_explicit_webgl_config_replaces_preset_gpu():
+    preset = fp.load_presets("152")["presets"]["linux"][0]
+    preset_gpu = (preset["webgl"]["unmaskedVendor"], preset["webgl"]["unmaskedRenderer"])
+    assert preset_gpu != _GTX_980_LINUX
+
+    context = fp.generate_context_fingerprint(
+        preset=preset, os="linux", ff_version="152", webgl_config=_GTX_980_LINUX
+    )
+
+    config = context["config"]
+    assert (config["webGl:vendor"], config["webGl:renderer"]) == _GTX_980_LINUX
+    assert f"setWebGLRenderer({json.dumps(_GTX_980_LINUX[1])})" in context["init_script"]
+    assert (
+        context["preset"]["webgl"]["unmaskedVendor"],
+        context["preset"]["webgl"]["unmaskedRenderer"],
+    ) == _GTX_980_LINUX
 
 
 def test_preset_gpu_fpgen_has_never_seen_raises():

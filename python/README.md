@@ -306,7 +306,7 @@ passed to Playwright's `firefox.launch()` (or `launch_persistent_context()`).
 | `block_images` | `bool` | `False` | Block image loading. Warns: some WAFs detect it. |
 | `block_webrtc` | `bool` | `False` | Disable WebRTC entirely. |
 | `block_webgl` | `bool` | `False` | Disable WebGL. Warns: many WAFs check for it. |
-| `webgl_config` | `(vendor, renderer)` | drawn | Use one GPU fpgen has recorded for Firefox on `os` (see `camoufox.webgl.firefox_gpus`); any other pair raises `ValueError`. Needs `os`. |
+| `webgl_config` | `(vendor, renderer)` | drawn | Use one GPU fpgen has recorded for Firefox on `os` (see `camoufox.webgl.firefox_gpus`); any other pair raises `ValueError`. An explicit pair replaces a preset's GPU. Needs `os`. |
 | `canvas_noise` | `bool` | on for another OS or GPU | Random canvas and WebGL readback, as in LibreWolf. Warns. See [The canvas on another OS](#the-canvas-on-another-os). |
 | `gpu_passthrough` | `bool` | `False` | The host renders on the claimed GPU's vendor under another OS (a Linux container on a Windows host's GPU through WSL's d3d12). Checks the host's GPU and raises unless it is hardware from that vendor; leaves the canvas uncovered and WebGPU on. Not with `canvas_noise` on or `block_webgl`. See [The canvas on another OS](#the-canvas-on-another-os). |
 | `disable_coop` | `bool` | `False` | Turn off Cross-Origin-Opener-Policy so elements in cross-origin iframes (such as the Turnstile checkbox) can be clicked. Warns. |

@@ -1870,8 +1870,8 @@ def launch_options(
         firefox_user_prefs['webgl.disabled'] = True
         LeakWarning.warn('block_webgl', i_know_what_im_doing)
     else:
-        # A pair the caller named, or the preset's own GPU, keeps its name and
-        # gets that device's recorded parameters. webgl_for_gpu raises for a GPU
+        # GPU source precedence is explicit webgl_config, caller/preset pair,
+        # host GPU, then the default sampler. webgl_for_gpu raises for a GPU
         # fpgen has never seen: the caller asked for something that does not exist.
         if webgl_config:
             webgl_fp = webgl_for_gpu(target_os, *webgl_config, seed=identity_seed(config, _identity_salt))
@@ -1896,6 +1896,12 @@ def launch_options(
             )
         enable_webgl2 = webgl_fp.pop('webGl2Enabled')
 
+        # merge_into() never replaces an existing key. Drop a preset's pair so an
+        # explicit webgl_config cannot leave its names over the pinned device's
+        # measured parameters.
+        if webgl_config:
+            config.pop('webGl:vendor', None)
+            config.pop('webGl:renderer', None)
         # Merge the WebGL fingerprint into the config
         merge_into(config, webgl_fp)
         # Set the WebGL preferences

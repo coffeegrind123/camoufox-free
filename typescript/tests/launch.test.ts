@@ -39,6 +39,7 @@ const { Version } = await import("../src/pkgman.js");
 const { InvalidPropertyType, UnknownIPLocation } = await import(
 	"../src/exceptions.js"
 );
+const webgl = await import("../src/webgl.js");
 const cpuAffinity = await import("../src/cpu_affinity.js");
 
 // Imported after launch-host, which has to set the cache directory first.
@@ -53,6 +54,10 @@ const MAC_UA =
 	"Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:152.0) Gecko/20100101 Firefox/152.0";
 const WIN_UA =
 	"Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:152.0) Gecko/20100101 Firefox/152.0";
+const EXPLICIT_LINUX_GPU: [string, string] = [
+	"NVIDIA Corporation",
+	"NVIDIA GeForce GTX 980, or similar",
+];
 
 afterEach(() => restoreDeps());
 afterAll(() => fs.rmSync(SCRATCH, { recursive: true, force: true }));
@@ -1268,8 +1273,11 @@ describe.skipIf(!MODEL.ok)(
 			expect(config.fonts.length).toBeGreaterThan(0);
 		});
 
-		it("a preset keeps its own GPU (test_webgl.py)", async () => {
+		it("a preset GPU precedes the default sampler", async () => {
 			const preset = fingerprints.loadPresets("152")?.presets.linux[0];
+			deps.sampleWebglForScreen = async () => {
+				throw new Error("sampled over preset");
+			};
 			const config = await launchConfig({
 				os: "linux",
 				fingerprint_preset: preset,
@@ -1278,6 +1286,41 @@ describe.skipIf(!MODEL.ok)(
 				preset.webgl.unmaskedVendor,
 				preset.webgl.unmaskedRenderer,
 			]);
+		});
+
+		it("an explicit GPU replaces the preset's GPU as a pair", async () => {
+			const preset = fingerprints.loadPresets("152")?.presets.linux[0];
+			expect([
+				preset.webgl.unmaskedVendor,
+				preset.webgl.unmaskedRenderer,
+			]).not.toEqual(EXPLICIT_LINUX_GPU);
+			const explicitFp = webgl.webglForGpu("lin", ...EXPLICIT_LINUX_GPU, 0);
+			deps.webglForGpu = async () => structuredClone(explicitFp);
+
+			const config = await launchConfig({
+				os: "linux",
+				fingerprint_preset: preset,
+				webgl_config: EXPLICIT_LINUX_GPU,
+			});
+
+			expect([config["webGl:vendor"], config["webGl:renderer"]]).toEqual(
+				EXPLICIT_LINUX_GPU,
+			);
+			expect(config["webGl:parameters"]).toEqual(
+				explicitFp["webGl:parameters"],
+			);
+		});
+
+		it("the default sampler supplies a GPU when nothing names one", async () => {
+			const sampledFp = webgl.webglForGpu("lin", ...EXPLICIT_LINUX_GPU, 0);
+			deps.sampleWebglForScreen = async () => structuredClone(sampledFp);
+
+			const config = await launchConfig({ os: "linux" });
+
+			expect([config["webGl:vendor"], config["webGl:renderer"]]).toEqual(
+				EXPLICIT_LINUX_GPU,
+			);
+			expect(config["webGl:parameters"]).toEqual(sampledFp["webGl:parameters"]);
 		});
 
 		it("a preset GPU is checked against the host core count (test_coherence.py)", async () => {

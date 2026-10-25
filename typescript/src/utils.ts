@@ -2212,9 +2212,9 @@ export async function launchOptions({
 		let webglFp: Record<string, any>;
 		const seed = () =>
 			utilsDeps.identitySeed(config as Record<string, any>, salt);
-		// A pair the caller named, or the preset's own GPU, keeps its name and
-		// gets that device's recorded parameters. webglForGpu raises for a GPU
-		// fpgen has never seen: the caller asked for something that does not exist.
+		// GPU source precedence is explicit webgl_config, caller/preset pair,
+		// host GPU, then the default sampler. webglForGpu raises for a GPU fpgen
+		// has never seen: the caller asked for something that does not exist.
 		if (pyTruthy(webgl_config)) {
 			const [vendor, renderer] = webgl_config as [string, string];
 			webglFp = await utilsDeps.webglForGpu(targetOs, vendor, renderer, seed());
@@ -2247,6 +2247,13 @@ export async function launchOptions({
 		const enableWebgl2 = webglFp.webGl2Enabled;
 		delete webglFp.webGl2Enabled;
 
+		// mergeInto() never replaces an existing key. Drop a preset's pair so an
+		// explicit webgl_config cannot leave its names over the pinned device's
+		// measured parameters.
+		if (pyTruthy(webgl_config)) {
+			delete config["webGl:vendor"];
+			delete config["webGl:renderer"];
+		}
 		// Merge the WebGL fingerprint into the config
 		mergeInto(config, webglFp);
 		// Set the WebGL preferences
