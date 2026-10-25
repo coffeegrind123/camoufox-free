@@ -1618,8 +1618,8 @@ function isLaunchWindow(value: unknown): value is LaunchWindow {
  * @param locale BCP-47 locale; also sets context_options.locale.
  * @param config_overrides CAMOU_CONFIG keys applied after the config is built
  *   and before the init script is rendered.
- * @param webgl_config The [vendor, renderer] a drawn identity claims, instead
- *   of drawing one.
+ * @param webgl_config The [vendor, renderer] a drawn identity claims. It
+ *   outranks a preset's GPU; otherwise the GPU is drawn.
  * @param launch_window The browser's launch window and screen. The window is
  *   process-wide, so the context viewport is its inner size, or the preset
  *   viewport clamped inside the outer window (#164).
@@ -1653,6 +1653,21 @@ export function generateContextFingerprint({
 	let screen: Record<string, any>;
 	let webgl: Record<string, any>;
 	let resolvedPreset: Preset;
+	const targetOsFor = (current: Config): TargetOS => {
+		const osMap: Record<string, TargetOS> = {
+			macos: "mac",
+			linux: "lin",
+			windows: "win",
+		};
+		const named = osMap[os ?? ""];
+		if (named) return named;
+		const platform = pyStr(get(current, "navigator.platform", ""));
+		return platform === "Win32"
+			? "win"
+			: platform.includes("Linux") || platform.includes("linux")
+				? "lin"
+				: "mac";
+	};
 
 	if (!isNone(preset)) {
 		const p = preset as Preset;
@@ -1722,35 +1737,21 @@ export function generateContextFingerprint({
 			!pyTruthy(config["webGl:vendor"]) ||
 			!pyTruthy(config["webGl:renderer"])
 		) {
-			const osMap: Record<string, TargetOS> = {
-				macos: "mac",
-				linux: "lin",
-				windows: "win",
-			};
-			let targetOs: TargetOS | undefined = osMap[os ?? ""];
-			if (!targetOs) {
-				const plat = pyStr(get(config, "navigator.platform", ""));
-				targetOs =
-					plat === "Win32"
-						? "win"
-						: plat.includes("Linux") || plat.includes("linux")
-							? "lin"
-							: "mac";
-			}
+			const targetOs = targetOsFor(config);
 			// Same coherence treatment launchOptions applies (#729): lift netbook
 			// geometry, then keep the GPU consistent with the resulting screen.
 			raiseScreenToModernFloor(config);
-			const webglFp = webgl_config
-				? webglForGpu(targetOs, ...webgl_config)
-				: sampleWebglForScreen(
-						targetOs,
-						config["screen.width"],
-						config["screen.height"],
-						undefined,
-						config["navigator.hardwareConcurrency"],
-					);
-			delete webglFp.webGl2Enabled;
-			Object.assign(config, webglFp);
+			if (!webgl_config) {
+				const webglFp = sampleWebglForScreen(
+					targetOs,
+					config["screen.width"],
+					config["screen.height"],
+					undefined,
+					config["navigator.hardwareConcurrency"],
+				);
+				delete webglFp.webGl2Enabled;
+				Object.assign(config, webglFp);
+			}
 		}
 
 		nav = {
@@ -1768,6 +1769,23 @@ export function generateContextFingerprint({
 			unmaskedRenderer: config["webGl:renderer"],
 		};
 		resolvedPreset = { navigator: nav, screen, webgl };
+	}
+
+	// An explicit pair outranks the preset's pair, just as it does in
+	// launchOptions(). Replace the whole WebGL record so the init script and
+	// config cannot name different devices.
+	if (webgl_config) {
+		const webglFp = webglForGpu(targetOsFor(config), ...webgl_config);
+		delete webglFp.webGl2Enabled;
+		Object.assign(config, webglFp);
+		webgl = {
+			unmaskedVendor: config["webGl:vendor"],
+			unmaskedRenderer: config["webGl:renderer"],
+		};
+		resolvedPreset = {
+			...resolvedPreset,
+			webgl: { ...resolvedPreset.webgl, ...webgl },
+		};
 	}
 
 	if (timezone) config.timezone = timezone;
