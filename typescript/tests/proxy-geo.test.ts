@@ -66,7 +66,6 @@ describe("NewContext proxy lookup", () => {
 		["1.2.3.4:8080", "http://u:p@1.2.3.4:8080"],
 		["proxy.example.com:8080", "http://u:p@proxy.example.com:8080"],
 		["http://proxy.example.com:8080", "http://u:p@proxy.example.com:8080"],
-		["socks5://proxy.example.com:1080", "socks5://u:p@proxy.example.com:1080"],
 	])("%s is looked up through %s", async (server, expected) => {
 		const { browser, calls } = fakeBrowser();
 		await NewContext(browser, {

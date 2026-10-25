@@ -76,7 +76,6 @@ def _new_context(api, proxy, **kwargs):
         ("1.2.3.4:8080", "http://u:p@1.2.3.4:8080"),
         ("proxy.example.com:8080", "http://u:p@proxy.example.com:8080"),
         ("http://proxy.example.com:8080", "http://u:p@proxy.example.com:8080"),
-        ("socks5://proxy.example.com:1080", "socks5://u:p@proxy.example.com:1080"),
     ],
 )
 def test_lookup_goes_through_the_proxy_with_its_credentials(api, server, expected):

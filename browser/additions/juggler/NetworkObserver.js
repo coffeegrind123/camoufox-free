@@ -26,6 +26,89 @@ const StorageStream = CC('@mozilla.org/storagestream;1', 'nsIStorageStream', 'in
 // Cap response storage with 100Mb per tracked tab.
 const MAX_RESPONSE_STORAGE_SIZE = 100 * 1024 * 1024;
 
+const PROXY_CREDENTIALS_ENV = 'CAMOU_PROXY_CREDENTIALS';
+let proxyCredentialsFromEnv;
+
+function loadProxyCredentialsFromEnv() {
+  const credentials = new Map();
+  let raw = '';
+  try {
+    raw = Services.env.get(PROXY_CREDENTIALS_ENV);
+  } catch (e) {
+    return credentials;
+  }
+  if (!raw)
+    return credentials;
+
+  let entries;
+  try {
+    entries = JSON.parse(raw);
+  } catch (e) {
+    throw new Error(`Invalid ${PROXY_CREDENTIALS_ENV}: ${e.message}`);
+  }
+  if (!entries || typeof entries !== 'object' || Array.isArray(entries))
+    throw new Error(`Invalid ${PROXY_CREDENTIALS_ENV}: expected an endpoint map`);
+
+  for (const [endpoint, value] of Object.entries(entries)) {
+    if (!value || typeof value !== 'object' || Array.isArray(value))
+      throw new Error(`Invalid ${PROXY_CREDENTIALS_ENV} entry for ${endpoint}`);
+    const {username, password = ''} = value;
+    if (typeof username !== 'string' || !username || typeof password !== 'string')
+      throw new Error(`Invalid ${PROXY_CREDENTIALS_ENV} credentials for ${endpoint}`);
+    credentials.set(endpoint.toLowerCase(), {username, password});
+  }
+  return credentials;
+}
+
+// Playwright rejects SOCKS5 credentials before sending Browser.setContextProxy.
+// The launchers move them into this endpoint-keyed environment map instead.
+function socksProxyCredentials(proxy) {
+  const type = String(proxy.type || '').toLowerCase();
+  if (type !== 'socks' && type !== 'socks4')
+    return null;
+
+  const username = proxy.username == null ? '' : proxy.username;
+  const password = proxy.password == null ? '' : proxy.password;
+  if (typeof username !== 'string' || typeof password !== 'string')
+    throw new Error('Invalid proxy credentials');
+  if (password && !username)
+    throw new Error('A SOCKS proxy password requires a username');
+  if (username)
+    return {username, password};
+
+  if (!proxyCredentialsFromEnv)
+    proxyCredentialsFromEnv = loadProxyCredentialsFromEnv();
+  return proxyCredentialsFromEnv.get(`${proxy.host}:${proxy.port}`.toLowerCase()) || null;
+}
+
+function proxyInfo(protocolProxyService, proxy) {
+  const credentials = socksProxyCredentials(proxy);
+  if (credentials) {
+    return protocolProxyService.newProxyInfoWithAuth(
+        proxy.type,
+        proxy.host,
+        proxy.port,
+        credentials.username,
+        credentials.password,
+        '', /* aProxyAuthorizationHeader */
+        '', /* aConnectionIsolationKey */
+        Ci.nsIProxyInfo.TRANSPARENT_PROXY_RESOLVES_HOST, /* aFlags */
+        UINT32_MAX, /* aFailoverTimeout */
+        null, /* failover proxy */
+    );
+  }
+  return protocolProxyService.newProxyInfo(
+      proxy.type,
+      proxy.host,
+      proxy.port,
+      '', /* aProxyAuthorizationHeader */
+      '', /* aConnectionIsolationKey */
+      Ci.nsIProxyInfo.TRANSPARENT_PROXY_RESOLVES_HOST, /* aFlags */
+      UINT32_MAX, /* aFailoverTimeout */
+      null, /* failover proxy */
+  );
+}
+
 const pageNetworkSymbol = Symbol('PageNetwork');
 
 export class PageNetwork {
@@ -628,24 +711,30 @@ export class NetworkObserver {
     this._channelIdsFulfilledByServiceWorker = new Set();  // http channel ids that were fulfilled by service worker
 
     const protocolProxyService = Cc['@mozilla.org/network/protocol-proxy-service;1'].getService();
+    // Gecko resumes the remaining filters with defaultProxyInfo when this filter
+    // throws. A configured proxy must never turn into that direct fallback.
+    this._failClosedProxyInfo = protocolProxyService.newProxyInfo(
+        'socks',
+        '',
+        0,
+        '', /* aProxyAuthorizationHeader */
+        '', /* aConnectionIsolationKey */
+        0, /* aFlags */
+        UINT32_MAX, /* aFailoverTimeout */
+        null, /* failover proxy */
+    );
     this._channelProxyFilter = {
       QueryInterface: ChromeUtils.generateQI([Ci.nsIProtocolProxyChannelFilter]),
       applyFilter: (channel, defaultProxyInfo, proxyFilter) => {
-        const proxy = this._targetRegistry.getProxyInfo(channel);
-        if (!proxy) {
-          proxyFilter.onProxyFilterResult(defaultProxyInfo);
-          return;
+        let result;
+        try {
+          const proxy = this._targetRegistry.getProxyInfo(channel);
+          result = proxy ? proxyInfo(protocolProxyService, proxy) : defaultProxyInfo;
+        } catch (e) {
+          dump(`WARNING: proxy setup failed; refusing a direct connection: ${e}\n`);
+          result = this._failClosedProxyInfo;
         }
-        proxyFilter.onProxyFilterResult(protocolProxyService.newProxyInfo(
-            proxy.type,
-            proxy.host,
-            proxy.port,
-            '', /* aProxyAuthorizationHeader */
-            '', /* aConnectionIsolationKey */
-            Ci.nsIProxyInfo.TRANSPARENT_PROXY_RESOLVES_HOST, /* aFlags */
-            UINT32_MAX, /* aFailoverTimeout */
-            null, /* failover proxy */
-        ));
+        proxyFilter.onProxyFilterResult(result);
       },
     };
     protocolProxyService.registerChannelFilter(this._channelProxyFilter, 0 /* position */);

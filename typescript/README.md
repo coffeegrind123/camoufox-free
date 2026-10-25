@@ -74,6 +74,81 @@ const browser = await Camoufox({
 locale, geolocation and the WebRTC IP from it. Pass an IP string instead to
 skip the lookup.
 
+### SOCKS5 authentication
+
+Playwright's driver rejects a `socks5` proxy carrying a username or password
+before the request reaches Juggler. Camoufox removes those credentials from the
+proxy handed to Playwright and injects them into the browser through the
+`CAMOU_PROXY_CREDENTIALS` environment variable. `socks5h` is normalized to
+`socks5`, which has the same proxy-side DNS behavior here.
+
+SOCKS5 endpoints must include an explicit port from 1 through 65535.
+Credentials may be in the server URL, percent-encoded, or in `username` and
+`password`; explicit fields win over the corresponding URL fields.
+
+```javascript
+import { Camoufox } from "camoufox";
+
+const browser = await Camoufox({
+    proxy: {
+        server: "socks5h://url-user:url-pass@proxy.example.com:1080",
+        username: "user",
+        password: "p@ss",
+    },
+    geoip: true,
+});
+```
+
+The credentials above are equivalent to this explicit launch environment.
+A caller-provided `CAMOU_PROXY_CREDENTIALS` wins over the automatically
+generated one.
+
+```javascript
+const browser = await Camoufox({
+    proxy: { server: "socks5://proxy.example.com:1080" },
+    env: {
+        ...process.env,
+        CAMOU_PROXY_CREDENTIALS: JSON.stringify({
+            "proxy.example.com:1080": { username: "user", password: "p@ss" },
+        }),
+    },
+    geoip: true,
+});
+```
+
+The map is browser-wide and keyed by normalized `host:port`. Every context
+using the same endpoint therefore shares one credential pair, and contexts
+cannot use different credentials for that endpoint. Launch separate browsers
+when different credentials are required.
+
+`NewContext` cannot deliver SOCKS5 credentials after browser launch. Pass the
+proxy without credentials and declare its endpoint in the launch environment.
+The Node process that creates a context does not inherit the browser's launch
+environment, so an automatic exit lookup would use an unauthenticated proxy.
+Supply all four geo values to skip it:
+
+```javascript
+import { Camoufox, NewContext } from "camoufox";
+
+const browser = await Camoufox({
+    proxy: { server: "socks5://proxy.example.com:1080" },
+    env: {
+        ...process.env,
+        CAMOU_PROXY_CREDENTIALS: JSON.stringify({
+            "proxy.example.com:1080": { username: "user", password: "p@ss" },
+        }),
+    },
+});
+
+const context = await NewContext(browser, {
+    proxy: { server: "socks5://proxy.example.com:1080" },
+    webrtc_ip: "198.51.100.1",
+    timezoneId: "UTC",
+    locale: "en-US",
+    geolocation: { latitude: 40.7128, longitude: -74.006 },
+});
+```
+
 Without a proxy, sites can reach this machine over IPv6. IPv6 stays on when the
 machine's IPv6 address geolocates where the IPv4 identity does. Otherwise, the
 browser behaves as on an IPv4-only network, and a `LeakWarning` says why.
@@ -115,7 +190,7 @@ await browser.close();
 | `os` | `"windows"`, `"macos"` or `"linux"` for the drawn identity. On a browser without canvas noise, the host's OS, and anything else throws `ValueError`. |
 | `ff_version` | Firefox major version claimed in the User-Agent. Defaults to the browser's own. |
 | `webrtc_ip` | IPv4 or IPv6 address WebRTC reports. |
-| `proxy` | Per-context proxy, in Playwright's format. The context is placed where the proxy exits: `webrtc_ip`, `timezoneId`, `locale` and `geolocation` each default to the exit IP's, looked up through the proxy unless all four are given, and `InvalidIP` is thrown if the lookup fails. |
+| `proxy` | Per-context proxy, in Playwright's format. SOCKS5 credentials are not accepted here; declare them in the launch environment and pass an endpoint without credentials. The context is placed where the proxy exits: `webrtc_ip`, `timezoneId`, `locale` and `geolocation` each default to the exit IP's, looked up through the proxy unless all four are given, and `InvalidIP` is thrown if the lookup fails. |
 | `geolocation` | `{ latitude, longitude }`; also grants the `geolocation` permission. |
 | anything else | Passed to Playwright's `browser.newContext()` (camelCase, e.g. `timezoneId`), overriding the generated value. |
 
@@ -245,7 +320,7 @@ names. Any other key is passed to Playwright's `firefox.launch()` (or
 | `headless` | `boolean \| "virtual" \| "virtual-gpu"` | `false` | See [Headless modes](#headless-modes). |
 | `gpu` | `string \| number` | `CAMOUFOX_GPU`, or the only GPU | The card for `headless: "virtual-gpu"`. Not taken by `launchOptions()`. |
 | `require_gpu` | `boolean` | `true` | With `headless: "virtual-gpu"`, fail the launch when the browser does not render on the card; `false` warns. Not taken by `launchOptions()`. |
-| `proxy` | `{ server, username?, password?, bypass? }` | none | Playwright proxy. |
+| `proxy` | `{ server, username?, password?, bypass? }` | none | Playwright proxy. Authenticated SOCKS5 credentials move to the launch environment; see [SOCKS5 authentication](#socks5-authentication). |
 | `geoip` | `boolean \| string` | none | `true` finds the public IP (through `proxy` if set); a string uses that IP. Sets timezone, locale, geolocation and the WebRTC IP. Without a proxy, also decides whether IPv6 stays on. |
 | `geoip_db` | `string` | the `camoufox set --geoip` choice | GeoIP database name, e.g. `"GeoIP AIO by daijro"`. |
 | `locale` | `string \| string[]` | from `geoip`, else the drawn identity's | Locale(s), e.g. `"en-US"`. The first is used for `Intl`. |

@@ -138,3 +138,14 @@ that channel through its context's proxy and must not globally clear the auth
 cache while other contexts are authenticating. `TargetRegistry.setProxy()` clears
 `clear-origin-attributes-data` only for its own `userContextId` when replacing an
 existing proxy.
+
+`NetworkObserver.js` also constructs SOCKS and SOCKS4 proxies with
+`nsIProtocolProxyService.newProxyInfoWithAuth`. Playwright rejects SOCKS5
+credentials before Juggler receives a proxy, so the launchers remove them from
+the Playwright proxy and export an endpoint-keyed `CAMOU_PROXY_CREDENTIALS`
+map: `{"host:port": {"username": "...", "password": "..."}}`. They also
+normalize Playwright's unrecognized `socks5h` scheme to `socks5`; Juggler sets
+`TRANSPARENT_PROXY_RESOLVES_HOST`, so both resolve names at the proxy. Invalid
+credential data or proxy construction produces an unusable proxy result instead
+of returning `defaultProxyInfo`: Gecko resumes its filter chain with the default
+when a channel filter throws, which would be a direct connection.
