@@ -1,9 +1,9 @@
 # AGENTS.md
 
-Instructions for any coding agent working in this repository or writing code
-against Camoufox: Claude Code, Codex, Cursor, Copilot, Gemini or anything else.
-`CLAUDE.md` and `GEMINI.md` only import this file, and `.aider.conf.yml` reads
-it, so there is one set of rules. Edit them here.
+This is the only agent-instruction file in the repository. It applies to any
+coding agent working in this repository or writing code against Camoufox,
+including Codex, Claude Code, Cursor, Copilot, Gemini, Aider or anything else.
+Edit the rules here.
 
 ---
 
@@ -124,7 +124,7 @@ persist a change there as a patch, never as an edit to that tree.
 | Path | What it is |
 |---|---|
 | `browser/` | The browser build: `Makefile`, `upstream.sh`, `multibuild.py`, `Dockerfile`, and the directories below. |
-| `browser/patches/` | Diffs applied to Firefox (42 top level, plus `playwright/`, `librewolf/`, `ghostery/`). Browser behaviour changes here. |
+| `browser/patches/` | Diffs applied to Firefox, including `playwright/`, `librewolf/` and `ghostery/`. Browser behaviour changes here. |
 | `browser/additions/camoucfg/` | The C++ config layer. `MaskConfig.hpp` reads `CAMOU_CONFIG`, which the patches consult. |
 | `browser/additions/juggler/` | Camoufox's Juggler, Playwright's Firefox protocol. The page agent runs in an isolated world. `input/` holds the cursor trajectory generators: Cursory (default) and mousecrack. |
 | `browser/settings/` | `camoufox.cfg` (prefs), `properties.json` (every config key and its type; a key the browser stops reading is marked `removed`, never deleted), policies. |
@@ -144,8 +144,9 @@ it. `mach` needs Python 3.11 or newer.
 
 ```bash
 cd browser
-make dir                       # fetch Firefox, copy additions, apply every patch
-make bootstrap                 # one time: scripts/install-deps.sh + mach bootstrap
+make bootstrap                 # one time: host packages and mach bootstrap
+make dir                       # fetch Firefox, sync additions, apply every patch
+make verify-patches compare=true
 make build                     # ./mach build
 make run                       # run the build (wipes ~/.camoufox)
 make package-linux arch=x86_64 # or package-macos / package-windows
@@ -153,7 +154,10 @@ python3 multibuild.py --target linux windows macos --arch x86_64 arm64
 ```
 
 Install `ccache`. A cold build takes about 40 minutes, and an incremental one
-about 5.
+about 5. After editing Juggler, prefs or copied resources, run `make build-js`;
+after editing C++, run `make build-cpp`. `make sync` copies changed additions
+without reapplying patches. `make dir` preserves `obj-*` unless
+`CAMOUFOX_CLOBBER=1` is set.
 
 ## Changing a patch
 
@@ -166,10 +170,13 @@ make diff > patches/my-change.patch        # (git add -N new files first)
 
 make dir && make workspace ./patches/x.patch   # an existing patch: edit, then
 make diff > patches/x.patch
+
+make verify-patches compare=true              # replay and compare the whole stack
 ```
 
 `make patch` and `make unpatch` apply or reverse one patch. `make revert` resets
-the tree to unpatched Firefox. Every make target is described in
+the tree to unpatched Firefox. A fuzz, reject or partial application is a hard
+failure. Every make target is described in
 [`docs/patch-upgrading-guide.md`](docs/patch-upgrading-guide.md#the-source-tree-and-its-make-targets),
 which also covers porting patches to a new Firefox and porting Playwright. Keep
 the `Makefile` diff minimal: host dependencies belong in
@@ -184,7 +191,7 @@ change while you work:
 
 | You changed | Run |
 |---|---|
-| Patches, C++, Juggler | `python3 -m ci.run_build_tester --binary <camoufox-bin>` (the anti-detect suite) and `python3 -m ci.run_patch_guards --binary <camoufox-bin>` (one guard per shipped behaviour, in three groups: `--group spoofing|automation|parity`) |
+| Patches, C++, Juggler | `make -C browser verify-patches compare=true`, then `python3 -m ci.run_build_tester --binary <camoufox-bin>` and `python3 -m ci.run_patch_guards --binary <camoufox-bin>` (one guard per shipped behaviour, in groups `spoofing`, `automation` and `parity`) |
 | Automation behaviour | `make -C browser tests`, the upstream Playwright suite with `ci/skiplist.yml` applied |
 | `python/` | `python3 -m ci.run_pythonlib` |
 | `typescript/` | `python3 -m ci.run_typescript` (add `--browser <camoufox-bin>` for the end-to-end half) |
