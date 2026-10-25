@@ -38,6 +38,8 @@ What PASS means:
       accepts statements and arguments, round-trips values Playwright's format
       would otherwise corrupt, awaits promises, and reports page errors with
       their real message;
+    * a promise whose reactions cannot be attached is rejected instead of
+      hanging, and the same session can evaluate again afterwards;
     * writes made through "mw:" are visible to page script;
     * unprefixed evaluation stays isolated even with the flag on.
 """
@@ -157,6 +159,21 @@ async def _run_enabled() -> bool:
             (await page.evaluate("mw:new Date('2020-01-02T03:04:05.000Z')")).timestamp(),
             1577934245.0,
         )
+        await page.evaluate(
+            "mw:window.__originalThen = Promise.prototype.then;"
+            "Promise.prototype.then = () => { throw new Error('reaction attach refused') }"
+        )
+        attach_result = "returned"
+        try:
+            await asyncio.wait_for(page.evaluate("mw:new Promise(() => {})"), timeout=5)
+        except asyncio.TimeoutError:
+            attach_result = "timeout"
+        except Exception:  # noqa: BLE001 - rejection is the expected outcome
+            attach_result = "rejected"
+        finally:
+            await page.evaluate("mw:Promise.prototype.then = window.__originalThen")
+        _check(results, "failed promise attach rejects", attach_result, "rejected")
+        _check(results, "evaluate still works", await page.evaluate("mw:window.pageSecret"), 41)
 
         print("  -- writes land in the page --")
         await page.evaluate("mw:window.writtenFromMw = 'from-mw'")
