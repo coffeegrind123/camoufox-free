@@ -1581,6 +1581,32 @@ export function targetOsFromPlatform(plat: string): SupportedOS {
 	return "macos";
 }
 
+/** The launch window and screen NewBrowser records on a browser (#164). */
+export interface LaunchWindow {
+	outer: [number, number];
+	inner: [number | null, number | null];
+	screen: [number | null, number | null];
+}
+
+function isLaunchWindow(value: unknown): value is LaunchWindow {
+	if (typeof value !== "object" || value === null) return false;
+	const candidate = value as Record<string, unknown>;
+	const hasShape = (key: string) =>
+		Array.isArray(candidate[key]) && candidate[key].length === 2;
+	if (!["outer", "inner", "screen"].every(hasShape)) return false;
+	const positive = (dimension: unknown) =>
+		typeof dimension === "number" &&
+		Number.isFinite(dimension) &&
+		dimension > 0;
+	const optionalPositive = (dimension: unknown) =>
+		dimension === null || positive(dimension);
+	return (
+		(candidate.outer as unknown[]).every(positive) &&
+		(candidate.inner as unknown[]).every(optionalPositive) &&
+		(candidate.screen as unknown[]).every(optionalPositive)
+	);
+}
+
 /**
  * Fingerprint values for a single per-context identity: the init script plus
  * the Playwright context options (camelCase, for playwright-core).
@@ -1594,6 +1620,9 @@ export function targetOsFromPlatform(plat: string): SupportedOS {
  *   and before the init script is rendered.
  * @param webgl_config The [vendor, renderer] a drawn identity claims, instead
  *   of drawing one.
+ * @param launch_window The browser's launch window and screen. The window is
+ *   process-wide, so the context viewport is its inner size, or the preset
+ *   viewport clamped inside the outer window (#164).
  */
 export function generateContextFingerprint({
 	preset,
@@ -1604,6 +1633,7 @@ export function generateContextFingerprint({
 	locale,
 	config_overrides,
 	webgl_config,
+	launch_window,
 }: {
 	preset?: Preset | null;
 	os?: string | null;
@@ -1613,7 +1643,11 @@ export function generateContextFingerprint({
 	locale?: string | null;
 	config_overrides?: Config | null;
 	webgl_config?: [string, string] | null;
+	launch_window?: LaunchWindow | null;
 } = {}): ContextFingerprint {
+	// Only a well-formed record counts; a mock, a half-built object or
+	// non-numeric dimensions describes no real launch window.
+	const launchWindow = isLaunchWindow(launch_window) ? launch_window : null;
 	let config: Config;
 	let nav: Record<string, any>;
 	let screen: Record<string, any>;
@@ -1751,6 +1785,32 @@ export function generateContextFingerprint({
 		Object.assign(config, overrides);
 	}
 
+	// The launch window is process-wide, so every context's screen must hold it.
+	if (launchWindow) {
+		const [outerWidth, outerHeight] = launchWindow.outer;
+		const [launchScreenWidth, launchScreenHeight] = launchWindow.screen;
+		const screenWidth = screen.width;
+		const screenHeight = screen.height;
+		const holdsWindow =
+			pyTruthy(screenWidth) &&
+			pyTruthy(screenHeight) &&
+			num(screenWidth) >= outerWidth &&
+			num(screenHeight) >= outerHeight;
+		if (
+			!holdsWindow &&
+			pyTruthy(launchScreenWidth) &&
+			pyTruthy(launchScreenHeight)
+		) {
+			screen = {
+				...screen,
+				width: launchScreenWidth,
+				height: launchScreenHeight,
+			};
+			config["screen.width"] = launchScreenWidth;
+			config["screen.height"] = launchScreenHeight;
+		}
+	}
+
 	const initValues: InitValues = {
 		navigatorPlatform: nav.platform,
 		navigatorOscpu: config["navigator.oscpu"],
@@ -1779,8 +1839,30 @@ export function generateContextFingerprint({
 	if (pyTruthy(ua)) contextOptions.userAgent = ua;
 	const sw = screen.width;
 	const sh = screen.height;
-	if (pyTruthy(sw) && pyTruthy(sh))
-		contextOptions.viewport = { width: sw, height: Math.max(sh - 28, 600) };
+	if (pyTruthy(sw) && pyTruthy(sh)) {
+		const [innerWidth, innerHeight] = launchWindow
+			? launchWindow.inner
+			: [null, null];
+		if (pyTruthy(innerWidth) && pyTruthy(innerHeight)) {
+			// The launch window's own inner size: inner <= outer by construction.
+			contextOptions.viewport = { width: innerWidth, height: innerHeight };
+		} else if (launchWindow) {
+			// No pinned inner: hold the preset viewport inside the launch outer.
+			const window: Config = {
+				"window.outerWidth": launchWindow.outer[0],
+				"window.outerHeight": launchWindow.outer[1],
+				"window.innerWidth": sw,
+				"window.innerHeight": Math.max(num(sh) - 28, 600),
+			};
+			clampWindowDimensions(window);
+			contextOptions.viewport = {
+				width: window["window.innerWidth"],
+				height: window["window.innerHeight"],
+			};
+		} else {
+			contextOptions.viewport = { width: sw, height: Math.max(sh - 28, 600) };
+		}
+	}
 	const dpr = screen.devicePixelRatio;
 	if (pyTruthy(dpr)) contextOptions.deviceScaleFactor = dpr;
 	let tz = config.timezone;

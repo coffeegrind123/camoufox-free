@@ -811,6 +811,40 @@ def attach_context_defaults(browser: Any, no_viewport_default: bool) -> None:
     attach_desktop_only_warning(browser)
 
 
+def attach_launch_window(target: Any, from_options: Optional[Dict[str, Any]]) -> Any:
+    """Record the launch window and screen on the browser for NewContext (#164).
+
+    The launch window is process-wide (CamoufoxWindow.sys.mjs resizes the real
+    window once), so every context shares it; a context can only claim a viewport
+    inside it and a screen that holds it. 1280x1040 is the startup default when
+    the config sets no outer size.
+    """
+    try:
+        config = orjson.loads(_camou_config_blob(from_options or {}) or '{}')
+    except (AttributeError, orjson.JSONDecodeError, TypeError, ValueError):
+        return target
+    if not isinstance(config, dict):
+        return target
+    try:
+        target._camoufox_launch_window = {
+            'outer': (
+                config.get('window.outerWidth') or 1280,
+                config.get('window.outerHeight') or 1040,
+            ),
+            'inner': (
+                config.get('window.innerWidth'),
+                config.get('window.innerHeight'),
+            ),
+            'screen': (
+                config.get('screen.width'),
+                config.get('screen.height'),
+            ),
+        }
+    except AttributeError:
+        pass
+    return target
+
+
 def plan_rendering(
     target_os: str,
     canvas_noise: Optional[bool],
@@ -926,6 +960,12 @@ def new_context_options(
     """new_context() options for a generate_context_fingerprint() identity; the
     caller's own options win."""
     opts: Dict[str, Any] = {**fingerprint['context_options'], **context_kwargs}
+    if context_kwargs.get('no_viewport'):
+        # An explicit no_viewport beats the fingerprint's viewport, and Playwright
+        # rejects deviceScaleFactor with a null viewport.
+        for key in ('viewport', 'device_scale_factor'):
+            if key not in context_kwargs:
+                opts.pop(key, None)
     if proxy:
         opts['proxy'] = proxy
     if geolocation:
