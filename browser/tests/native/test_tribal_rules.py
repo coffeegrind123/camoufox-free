@@ -661,6 +661,17 @@ def test_network_patch_clears_the_accept_language_dirty_flag_on_override():
     )
 
 
+def test_network_patch_overrides_accept_encoding_for_https_only():
+    patch = (BROWSER / "patches" / "network-patches.patch").read_text(encoding="utf-8")
+    condition = patch.index("if (isSecure && !isDictionary)")
+    override = patch.index('MaskConfig::GetString("headers.Accept-Encoding")')
+    scheme_assignment = patch.index("if (isDictionary)", condition)
+    assert condition < override < scheme_assignment, (
+        "headers.Accept-Encoding must replace only Firefox's HTTPS list; "
+        "plain HTTP and dictionary requests keep their native encodings."
+    )
+
+
 def test_a_sandbox_held_over_a_page_window_is_nuked_not_just_dropped():
     """Dropping the reference leaves the compartment to the cycle collector.
 

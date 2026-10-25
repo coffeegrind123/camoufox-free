@@ -184,15 +184,29 @@ index 0192e5f6f2..a43ecf238e 100644
    nsAutoCString buf;
    nsresult rv = PrepareAcceptLanguages(acceptLanguages.get(), buf);
    if (NS_SUCCEEDED(rv)) {
-@@ -2123,6 +2137,11 @@ nsresult nsHttpHandler::SetAcceptLanguages() {
+@@ -2129,13 +2154,25 @@ nsresult nsHttpHandler::SetAcceptLanguages() {
+   }
+   return rv;
+ }
  
  nsresult nsHttpHandler::SetAcceptEncodings(const char* aAcceptEncodings,
                                             bool isSecure, bool isDictionary) {
++  // Camoufox: headers.Accept-Encoding replaces the list sent over https only.
++  // Firefox keeps three lists -- plain http ("gzip, deflate"), https and
++  // dictionary-eligible requests (adds "dcb, dcz") -- and one value written
++  // over all three makes http:// requests claim encodings no Firefox sends
++  // there.
 +  nsCString encodingOverride;
-+  if (auto value = MaskConfig::GetString("headers.Accept-Encoding")) {
-+    encodingOverride.Assign(nsCString(value.value().c_str()));
-+    aAcceptEncodings = encodingOverride.get();
++  if (isSecure && !isDictionary) {
++    if (auto value = MaskConfig::GetString("headers.Accept-Encoding")) {
++      encodingOverride.Assign(value.value().c_str());
++      aAcceptEncodings = encodingOverride.get();
++    }
 +  }
    if (isDictionary) {
      mDictionaryAcceptEncodings = aAcceptEncodings;
    } else if (isSecure) {
+     mHttpsAcceptEncodings = aAcceptEncodings;
+   } else {
+     // use legacy list if a secure override is not specified
+     mHttpAcceptEncodings = aAcceptEncodings;
