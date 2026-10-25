@@ -77,24 +77,18 @@ class Quiet(SimpleHTTPRequestHandler):
 
 
 def context_origins(logdir: Path, port: int):
-    """Context id -> origin -> isolation behaviours from the parent log."""
+    """Origin -> isolation behaviours from the parent log."""
     parent = "".join(p.read_text(errors="replace") for p in logdir.glob("cfx-main*"))
-    by_context = {}
+    by_origin = {}
     pattern = re.compile(
-        rf"Using IsolationBehavior (\w+) for http://([^:/\s]+):{port}(\S*)")
+        rf"Using IsolationBehavior (\w+) for [^()]+ "
+        rf"\(original uri http://([^:/\s]+):{port}(\S*)\)")
     for match in pattern.finditer(parent):
         behavior, host, suffix = match.groups()
         if "font-fallback.html?context" not in suffix:
             continue
-        line_start = parent.rfind("\n", 0, match.start()) + 1
-        line_end = parent.find("\n", match.end())
-        line = parent[line_start:len(parent) if line_end < 0 else line_end]
-        context = re.search(r"userContextId=(\d+)", line)
-        if not context:
-            continue
-        origins = by_context.setdefault(context.group(1), {})
-        origins.setdefault(host, set()).add(behavior)
-    return by_context
+        by_origin.setdefault(host, set()).add(behavior)
+    return by_origin
 
 
 async def main() -> int:
@@ -164,11 +158,11 @@ async def main() -> int:
         print("  FAIL: the context list is not over 4 KiB, so this run cannot see a "
               "value Firefox refuses to sync")
         return 1
-    isolated = max(origins.values(), key=len, default={})
+    isolated = origins
     print(f"  isolation for the context: "
           f"{ {host: sorted(behaviours) for host, behaviours in isolated.items()} }")
     if len(isolated) < 2:
-        print("  FAIL: the parent log does not show the context on two isolated origins")
+        print("  FAIL: the parent log does not show two isolated origins")
         return 1
     if any(behaviours & {"Parent", "Anywhere"} for behaviours in isolated.values()):
         print("  FAIL: a context origin was not isolated from the others")
