@@ -73,7 +73,12 @@ function onHost(
 
 async function launch(opts: Record<string, any>) {
 	const options = await quietly(() =>
-		utils.launchOptions({ env: { HOME }, i_know_what_im_doing: true, ...opts }),
+		utils.launchOptions({
+			env: { HOME },
+			i_know_what_im_doing: true,
+			canvas_noise: null,
+			...opts,
+		}),
 	);
 	return { options, config: configOf(options) };
 }
@@ -91,6 +96,42 @@ const gpuOf = (config: Record<string, any>) => [
 	config["webGl:vendor"],
 	config["webGl:renderer"],
 ];
+
+describe.skipIf(!MODEL.ok)("the fork default", () => {
+	it("another OS stays uncovered without a probe or warning", async () => {
+		const probes = onHost(HOST_GPU);
+		const {
+			result,
+			error,
+			warnings: caught,
+		} = await warnings.recordWarnings(() =>
+			utils.launchOptions({
+				env: { HOME },
+				os: "windows",
+				i_know_what_im_doing: true,
+			}),
+		);
+		if (error) throw error;
+
+		expect(placeholder(result as any)).toBe(false);
+		expect(caught.some((w) => w.message.includes("canvas_noise"))).toBe(false);
+		expect(probes).toEqual([]);
+	});
+
+	it("a named GPU stays uncovered", async () => {
+		onHost(HOST_GPU);
+		const options = await quietly(() =>
+			utils.launchOptions({
+				env: { HOME },
+				os: "linux",
+				webgl_config: OTHER_GPU,
+				i_know_what_im_doing: true,
+			}),
+		);
+
+		expect(placeholder(options)).toBe(false);
+	});
+});
 
 describe.skipIf(!MODEL.ok)("the host's OS", () => {
 	it("a drawn identity claims the host GPU without noise", async () => {
@@ -117,7 +158,11 @@ describe.skipIf(!MODEL.ok)("the host's OS", () => {
 			error,
 			warnings: caught,
 		} = await warnings.recordWarnings(() =>
-			utils.launchOptions({ env: { HOME }, os: "linux" }),
+			utils.launchOptions({
+				env: { HOME },
+				os: "linux",
+				canvas_noise: null,
+			}),
 		);
 		if (error) throw error;
 
@@ -195,7 +240,11 @@ describe.skipIf(!MODEL.ok)("another OS", () => {
 	it("covering the canvas warns", async () => {
 		onHost(HOST_GPU);
 		const { error, warnings: caught } = await warnings.recordWarnings(() =>
-			utils.launchOptions({ env: { HOME }, os: "windows" }),
+			utils.launchOptions({
+				env: { HOME },
+				os: "windows",
+				canvas_noise: null,
+			}),
 		);
 		if (error) throw error;
 
