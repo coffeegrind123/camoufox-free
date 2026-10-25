@@ -174,11 +174,11 @@ Actions:
 python3 -m ci.run_sundial --explain --binary /path/to/camoufox-bin
 ```
 
-## Blocking a merge
+## The aggregate gate
 
-Branch protection on `main` requires one check, **`All tests passed`** (the
-`gate` job), so the list does not change when a suite is added or resharded.
-Anything that is not `success` fails it, including `skipped`, except:
+The `gate` job reports one check, **`All tests passed`**, so the check list does
+not change when a suite is added or resharded. Anything that is not `success`
+fails it, including `skipped`, except:
 
 | May be skipped | When |
 |---|---|
@@ -190,8 +190,10 @@ Anything that is not `success` fails it, including `skipped`, except:
 unreachable. A rejected credential, a full report, or a score under the floor
 still fails.
 
-The settings are in [`ci/branch-protection.json`](branch-protection.json). To
-apply them (needs admin):
+Branch protection and repository rulesets are not currently enabled on this
+fork, so GitHub does not enforce the check. The intended settings are in
+[`ci/branch-protection.json`](branch-protection.json). To apply them (needs
+admin):
 
 ```bash
 gh api -X PUT repos/<owner>/<repo>/branches/main/protection --input ci/branch-protection.json

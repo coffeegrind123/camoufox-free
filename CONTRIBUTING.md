@@ -4,12 +4,13 @@ Thanks for your interest in contributing.
 
 | Contribution | How |
 |---|---|
-| Bug report | Open an issue with steps to reproduce, expected behaviour and actual behaviour. |
-| Detection report | Use the "Camoufox detected" issue template. |
-| Feature request | Open an issue describing the use case. |
-| Code or docs | Fork, branch, and open a pull request tied to an issue. |
+| Bug report | Open a pull request with steps to reproduce, expected behaviour and actual behaviour. |
+| Detection report | Open a pull request with the affected build, a minimal reproduction and the observed result. |
+| Feature request | Open a pull request describing the use case. |
+| Code or docs | Fork, branch, and open a pull request; its body is the tracking record. |
 
-Comment on an issue before you start work on it.
+GitHub issues are disabled in this fork. Keep the reproduction and rationale in
+the pull request body.
 
 ## Setup
 
@@ -29,7 +30,7 @@ The engineering rules in [`AGENTS.md`](AGENTS.md) apply to every change,
 whether a person or an agent wrote it: less code, no band-aids, no flakes, and
 docs that ship with the code.
 
-1. Each pull request is associated with a GitHub issue.
+1. Each pull request is self-contained: reproduction, rationale and verification.
 2. Follow the pull request template.
 3. Keep commits focused: one logical change per commit.
 4. Describe what you changed and why.
@@ -40,9 +41,11 @@ docs that ship with the code.
 **CI runs everything on every pull request.**
 [`.github/workflows/tests.yml`](.github/workflows/tests.yml) builds the browser
 from your branch when you touch browser sources (and tests the published
-release when you do not), then runs every suite. Branch protection requires one
-check, **`All tests passed`**. CI leaves a summary comment on the pull request,
-so there is nothing to attach by hand.
+release when you do not), then runs every suite. The aggregate check is
+**`All tests passed`**; branch protection is not currently enabled on this
+fork, so wait for that check before merging even though GitHub does not enforce
+it. CI leaves a summary comment on the pull request, so there is nothing to
+attach by hand.
 
 The stealth check needs a credential, and GitHub gives secrets only to pull
 requests whose branch is in this repository. If you have write access, push your
