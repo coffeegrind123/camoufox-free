@@ -1194,7 +1194,7 @@ export async function planPassthrough(
  */
 export async function hostIdentity(
 	fromOptions: Record<string, any>,
-	canvasNoise: boolean | undefined,
+	canvasNoise: boolean | null | undefined,
 	gpuPassthrough = false,
 ): Promise<HostIdentity | null> {
 	if (gpuPassthrough) {
@@ -1582,7 +1582,7 @@ export async function launchOptions({
 	debug,
 	virtual_display,
 	pin_cpu_cores,
-	canvas_noise,
+	canvas_noise = false,
 	gpu_passthrough,
 	...passthrough
 }: LaunchOptions = {}): Promise<Record<string, any>> {

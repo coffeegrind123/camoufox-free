@@ -114,11 +114,12 @@ export async function NewBrowser(
 	let fromOptions = from_options;
 	// Options the caller built leave its contexts to the caller
 	// (hostIdentity).
-	let canvasNoise: boolean | undefined = false;
+	let canvasNoise: boolean | null = false;
 	let gpuPassthrough = false;
 	try {
 		if (!fromOptions || !Object.keys(fromOptions).length) {
-			canvasNoise = kwargs.canvas_noise ?? undefined;
+			canvasNoise =
+				kwargs.canvas_noise === undefined ? false : kwargs.canvas_noise;
 			gpuPassthrough = Boolean(kwargs.gpu_passthrough);
 			// Opt-in (2026-09-17). Pinning keeps the identity's core count by
 			// constraining the browser to that many cores; it costs real CPU,
@@ -182,7 +183,7 @@ async function launchWith(
 	persistentContext: boolean,
 	noViewportDefault: boolean,
 	virtualDisplay: VirtualDisplay | null,
-	canvasNoise: boolean | undefined,
+	canvasNoise: boolean | null | undefined,
 	gpuPassthrough: boolean,
 ): Promise<Browser | BrowserContext> {
 	// Persistent context. Python passes user_data_dir inside the options; the
