@@ -237,7 +237,10 @@ this section in step with the launcher options.
 - **`os` values are lowercase** `windows`, `macos`, `linux`; anything else raises `InvalidOS`.
 - **`geoip` in Python needs the extra**: `pip install "camoufox[geoip]"`, else `NotInstalledGeoIPExtra`.
 - **`InvalidIP`** is raised when the public-IP or proxy exit-IP lookup fails, or when `webrtc_ip` is not a valid IPv4/IPv6 address. Pass `webrtc_ip`, `timezone_id`, `locale` and `geolocation` to `NewContext` to skip the lookup.
-- **`InvalidProxy`** means the proxy `server` string could not be parsed.
+- **`InvalidProxy`** means the proxy could not be parsed or configured. SOCKS5
+  credentials at launch are moved out of Playwright through
+  `CAMOU_PROXY_CREDENTIALS`; a credential-bearing SOCKS5 proxy passed to
+  `NewContext` raises because Playwright rejects it before Juggler.
 - **`UnknownIPLocation`**: the IP is not in the GeoIP database; pass `locale` and set coordinates another way.
 - **Version ceilings:** Playwright below 1.63; Node.js 22.15 or newer.
 - **Each package release is paired with one browser build.** `camoufox set` overrides it (with a warning at launch), the `browser` option overrides it for one launch, and `camoufox set --release` restores it.

@@ -56,10 +56,12 @@ import {
 	WINDOWS_WEBGPU_LIMITS,
 } from "./host_rendering.js";
 import {
+	PROXY_CREDENTIALS_ENV,
 	type ProxyConfig,
 	ProxyHelper,
 	publicIP,
 	publicIPv6,
+	splitSocksCredentials,
 	validIPv4,
 	validIPv6,
 } from "./ip.js";
@@ -1584,6 +1586,11 @@ export async function launchOptions({
 	gpu_passthrough,
 	...passthrough
 }: LaunchOptions = {}): Promise<Record<string, any>> {
+	const callerEnv = env;
+	const proxyForLookup = proxy;
+	const [playwrightProxy, proxyCredentials] = splitSocksCredentials(proxy);
+	proxy = playwrightProxy;
+
 	utilsDeps.ensureBrowserProfileDir(env);
 
 	// The launch fills these in, so it works on copies: a caller's object
@@ -1986,8 +1993,8 @@ export async function launchOptions({
 		let geoipIp: string;
 		if (geoip === true) {
 			// Find the user's IP address
-			geoipIp = proxy
-				? await utilsDeps.publicIp(ProxyHelper.asString(proxy))
+			geoipIp = proxyForLookup
+				? await utilsDeps.publicIp(ProxyHelper.asString(proxyForLookup))
 				: await utilsDeps.publicIp();
 		} else {
 			geoipIp = geoip as string;
@@ -2342,6 +2349,12 @@ export async function launchOptions({
 		...getPrefEnvVars(firefox_user_prefs),
 		...env,
 	};
+	if (
+		proxyCredentials &&
+		!(callerEnv != null && Object.hasOwn(callerEnv, PROXY_CREDENTIALS_ENV))
+	) {
+		envVars[PROXY_CREDENTIALS_ENV] = JSON.stringify(proxyCredentials);
+	}
 
 	const result: Record<string, any> = {
 		executablePath: resolvedExecutable,

@@ -690,6 +690,21 @@ rules:
       IPv4-only network. A failed IPv6 lookup counts as no IPv6. Behind a proxy
       the browser reaches sites only through the proxy, so nothing is set.
 
+  - id: proxy-setup-errors-never-connect-directly
+    title: A configured proxy that cannot be constructed fails closed, never direct
+    check: manual   # browser/tests/playwright/patches/socks5-auth.py
+    evidence:
+      - "liasica/camoufox 2f0be400: Playwright rejects SOCKS5 credentials before Juggler; Juggler's filter exception is swallowed and resumes with defaultProxyInfo"
+      - "Gecko nsProtocolProxyService.cpp AsyncApplyFilters::ProcessNextFilter: a false return from ApplyFilter continues with the previous proxy list"
+      - "Firefox 158 netwerk/base/nsIProtocolProxyService.idl: newProxyInfoWithAuth is implemented for SOCKS and SOCKS4; other types with credentials return NS_ERROR_NOT_IMPLEMENTED"
+    rationale: >-
+      A thrown proxy filter is not a navigation error: Gecko continues its filter
+      chain with the proxy chosen before it, and with no proxy configured that is
+      a direct connection. For an anti-detect browser, falling back to the host's
+      IP is a leak. The launcher validates SOCKS credentials before launch, and
+      Juggler catches every remaining setup error and returns an unusable proxy
+      result while still calling onProxyFilterResult exactly once.
+
   # -------------------------------------------------------------------------
   # Branding
   # -------------------------------------------------------------------------

@@ -12,8 +12,15 @@ from typing_extensions import Literal
 
 from camoufox.virtdisplay import VirtualDisplay
 
+from .exceptions import InvalidProxy
 from .fingerprints import generate_context_fingerprint
-from .ip import ExitGeo, Proxy, proxy_exit_geo
+from .ip import (
+    ExitGeo,
+    PROXY_CREDENTIALS_ENV,
+    Proxy,
+    proxy_exit_geo,
+    split_socks_credentials,
+)
 from .utils import (
     DEFAULT_CANVAS_NOISE,
     async_attach_vd,
@@ -249,12 +256,21 @@ async def AsyncNewContext(
         ff_version: Firefox major version to claim in the UA. Defaults to the browser's own.
         webrtc_ip: IPv4 or IPv6 address to spoof for WebRTC ICE candidates.
         proxy: Per-context proxy (Playwright format: {"server": "...", "username": "...", "password": "..."}).
+            SOCKS5 credentials are rejected; declare them in CAMOU_PROXY_CREDENTIALS at launch.
             The context is placed where the proxy exits: webrtc_ip, timezone_id, locale and
             geolocation each default to the exit IP's, looked up through the proxy unless all
             four are given; InvalidIP is raised if that lookup fails.
         geolocation: Per-context geolocation ({"latitude": float, "longitude": float}).
         **context_kwargs: Additional Playwright new_context() options.
     """
+    proxy, socks_credentials = split_socks_credentials(proxy)
+    if socks_credentials:
+        raise InvalidProxy(
+            "Per-context SOCKS5 credentials cannot be delivered after the browser "
+            f"has started. Declare the endpoint in {PROXY_CREDENTIALS_ENV} in the "
+            "launch env, then pass the proxy without credentials to AsyncNewContext."
+        )
+
     # The drawn UA carries fpgen's Firefox version, which must not disagree with
     # the browser the page is actually talking to.
     ff_version = ff_version or browser.version.split('.', 1)[0]

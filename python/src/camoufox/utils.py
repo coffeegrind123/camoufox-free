@@ -25,7 +25,16 @@ from .exceptions import (
 from .fingerprints import Screen, platform_to_os, from_fpgen, from_preset, generate_fingerprint, get_random_preset, _generate_random_font_subset, _generate_random_voice_subset, fix_navigator_arch, fix_hardware_concurrency, identity_salt, drop_audio_seed, identity_seed, follow_baseline_protection, clamp_screen_to_display, clamp_window_dimensions, clamp_window_position, raise_screen_to_modern_floor, set_media_devices_defaults, WINDOWS_11_MARKER_FONTS, OS_KEYS, OS_NAMES
 from . import coherence
 from .geolocation import geoip_allowed, get_geolocation
-from .ip import ExitGeo, Proxy, public_ip, public_ipv6, valid_ipv4, valid_ipv6
+from .ip import (
+    ExitGeo,
+    PROXY_CREDENTIALS_ENV,
+    Proxy,
+    public_ip,
+    public_ipv6,
+    split_socks_credentials,
+    valid_ipv4,
+    valid_ipv6,
+)
 from .locales import SELECTOR, handle_locales
 import warnings
 
@@ -1231,6 +1240,7 @@ def launch_options(
             Firefox user preferences to set.
         proxy (Optional[Dict[str, str]]):
             Proxy to use for the browser.
+            SOCKS5 credentials are moved into CAMOU_PROXY_CREDENTIALS for the launch.
             Note: If geoip is True, a request will be sent through this proxy to find the target IP.
         enable_cache (Optional[bool]):
             Cache previous pages, requests, etc (uses more memory).
@@ -1276,6 +1286,9 @@ def launch_options(
         **launch_options (Dict[str, Any]):
             Additional Firefox launch options.
     """
+    caller_env = env
+    proxy, proxy_credentials = split_socks_credentials(proxy)
+
     ensure_browser_profile_dir(env)
 
     # The launch fills these in, so it works on copies: a caller's mapping
@@ -1690,7 +1703,13 @@ def launch_options(
         if geoip is True:
             # Find the user's IP address
             if proxy:
-                geoip = public_ip(Proxy(**proxy).as_string())
+                lookup_proxy = proxy
+                if proxy_credentials:
+                    lookup_proxy = {
+                        **proxy,
+                        **next(iter(proxy_credentials.values())),
+                    }
+                geoip = public_ip(Proxy(**lookup_proxy).as_string())
             else:
                 geoip = public_ip()
 
@@ -1969,6 +1988,12 @@ def launch_options(
         **get_pref_env_vars(firefox_user_prefs),
         **env,
     }
+    # Juggler reads this once, browser-wide. Only a caller-supplied env map can
+    # predeclare credentials for more than the launch proxy's endpoint.
+    if proxy_credentials and not (
+        caller_env is not None and PROXY_CREDENTIALS_ENV in caller_env
+    ):
+        env_vars[PROXY_CREDENTIALS_ENV] = orjson.dumps(proxy_credentials).decode()
     result = {
         "executable_path": browser_binary,
         "args": args,

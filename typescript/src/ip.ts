@@ -14,6 +14,135 @@ export interface ProxyConfig {
 	bypass?: string;
 }
 
+export const PROXY_CREDENTIALS_ENV = "CAMOU_PROXY_CREDENTIALS";
+
+export interface ProxyCredentials {
+	username: string;
+	password: string;
+}
+
+export type ProxyCredentialsMap = Record<string, ProxyCredentials>;
+
+/**
+ * Split SOCKS5 credentials out of Playwright's public proxy options.
+ *
+ * Playwright's driver rejects SOCKS5 proxies carrying credentials. The
+ * returned proxy is safe to pass through Playwright, and the credentials are
+ * keyed by lower-case `host:port` for the launch environment consumed by
+ * Juggler. Explicit fields override the corresponding URL userinfo fields.
+ */
+export function splitSocksCredentials(
+	proxy: ProxyConfig | null | undefined,
+): [ProxyConfig | undefined, ProxyCredentialsMap | undefined] {
+	if (proxy == null) {
+		return [undefined, undefined];
+	}
+
+	const server = proxy.server;
+	if (typeof server !== "string" || !server) {
+		throw new InvalidProxy(`Invalid proxy server: ${String(server)}`);
+	}
+
+	if (!server.includes("://")) {
+		const scheme = server.split(":", 1)[0].toLowerCase();
+		if (
+			scheme === "socks5" ||
+			scheme === "socks5h" ||
+			/^[/.?#]/.test(server) ||
+			server.includes("/")
+		) {
+			throw new InvalidProxy(`Invalid proxy server: ${server}`);
+		}
+		return [proxy, undefined];
+	}
+
+	let parsed: URL;
+	try {
+		parsed = new URL(server);
+	} catch (error) {
+		throw new InvalidProxy(`Invalid proxy server or port: ${server}`, {
+			cause: error,
+		});
+	}
+
+	const scheme = parsed.protocol.slice(0, -1).toLowerCase();
+	if (scheme !== "socks5" && scheme !== "socks5h") {
+		return [proxy, undefined];
+	}
+	if (!parsed.hostname) {
+		throw new InvalidProxy(`Invalid proxy server, missing host: ${server}`);
+	}
+	if (parsed.pathname || parsed.search || parsed.hash) {
+		throw new InvalidProxy(`Invalid proxy server: ${server}`);
+	}
+
+	const authority = server
+		.slice(server.indexOf("://") + 3)
+		.split(/[/?#]/, 1)[0];
+	const hostPort = authority.slice(authority.lastIndexOf("@") + 1);
+	if (hostPort.endsWith(":")) {
+		throw new InvalidProxy(`Invalid proxy server port: ${server}`);
+	}
+	if (!parsed.port) {
+		throw new InvalidProxy(`A SOCKS5 proxy needs an explicit port: ${server}`);
+	}
+	const port = Number(parsed.port);
+	if (!Number.isInteger(port) || port < 1 || port > 65535) {
+		throw new InvalidProxy(`Invalid proxy server port: ${server}`);
+	}
+
+	for (const field of ["username", "password"] as const) {
+		const value = proxy[field];
+		if (value != null && typeof value !== "string") {
+			throw new InvalidProxy(`Invalid proxy ${field}: expected a string`);
+		}
+	}
+
+	let embeddedUsername: string;
+	let embeddedPassword: string;
+	try {
+		embeddedUsername = decodeURIComponent(parsed.username);
+		embeddedPassword = decodeURIComponent(parsed.password);
+	} catch (error) {
+		throw new InvalidProxy(`Invalid proxy credentials in: ${server}`, {
+			cause: error,
+		});
+	}
+
+	const username = Object.hasOwn(proxy, "username")
+		? (proxy.username ?? "")
+		: embeddedUsername;
+	const password = Object.hasOwn(proxy, "password")
+		? (proxy.password ?? "")
+		: embeddedPassword;
+	if (password && !username) {
+		throw new InvalidProxy("A SOCKS5 proxy password requires a username");
+	}
+
+	const bracketedHost = parsed.hostname.startsWith("[")
+		? parsed.hostname
+		: parsed.hostname.includes(":")
+			? `[${parsed.hostname}]`
+			: parsed.hostname;
+	const normalizedHost = parsed.hostname.replace(/^\[|\]$/g, "").toLowerCase();
+	const playwrightProxy: ProxyConfig = {
+		...proxy,
+		server: `socks5://${bracketedHost.toLowerCase()}:${port}`,
+	};
+	delete playwrightProxy.username;
+	delete playwrightProxy.password;
+
+	if (!username) {
+		return [playwrightProxy, undefined];
+	}
+	return [
+		playwrightProxy,
+		{
+			[`${normalizedHost}:${port}`]: { username, password },
+		},
+	];
+}
+
 // biome-ignore lint/complexity/noStaticOnlyClass: these are the Python Proxy dataclass's methods; the data itself is ProxyConfig
 export class ProxyHelper {
 	/**
@@ -36,18 +165,56 @@ export class ProxyHelper {
 	}
 
 	static asString(proxy: ProxyConfig): string {
-		const { schema, url, port } = ProxyHelper.parseServer(proxy.server);
+		const [sanitized, credentials] = splitSocksCredentials(proxy);
+		const source = sanitized ?? proxy;
+		const selected = credentials ? Object.values(credentials).at(0) : undefined;
+		const { schema, url, port } = ProxyHelper.parseServer(source.server);
+
+		let username = "";
+		let password = "";
+		const authorityAt = url.lastIndexOf("@");
+		if (authorityAt !== -1) {
+			try {
+				const userinfo = url.slice(0, authorityAt);
+				const separator = userinfo.indexOf(":");
+				username = decodeURIComponent(
+					separator === -1 ? userinfo : userinfo.slice(0, separator),
+				);
+				password =
+					separator === -1
+						? ""
+						: decodeURIComponent(userinfo.slice(separator + 1));
+			} catch (error) {
+				throw new InvalidProxy(
+					`Invalid proxy credentials in: ${source.server}`,
+					{ cause: error },
+				);
+			}
+		}
+		if (selected) {
+			username = selected.username;
+			password = selected.password;
+		} else {
+			if (Object.hasOwn(source, "username")) {
+				username = source.username ?? "";
+			}
+			if (Object.hasOwn(source, "password")) {
+				password = source.password ?? "";
+			}
+		}
+
+		const host = authorityAt === -1 ? url : url.slice(authorityAt + 1);
 		let result = `${schema}://`;
 		// Percent-encode the credentials: a raw `#`, `/`, `?` or `@` breaks the
 		// URL, and a raw `%XX` is decoded into a different password.
-		if (proxy.username) {
-			result += encodeURIComponent(proxy.username);
-			if (proxy.password) {
-				result += `:${encodeURIComponent(proxy.password)}`;
+		if (username) {
+			result += encodeURIComponent(username);
+			if (password) {
+				result += `:${encodeURIComponent(password)}`;
 			}
 			result += "@";
 		}
-		result += url;
+		result += host;
 		if (port) {
 			result += `:${port}`;
 		}

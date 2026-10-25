@@ -37,6 +37,12 @@ For an identity whose OS is not the host's. Offered upstream in
 
 ### Other browser fixes
 
+- **Authenticated SOCKS5 proxies.** Playwright rejects SOCKS5 credentials
+  before Juggler receives the proxy, so the launchers pass them through an
+  endpoint-scoped launch environment and Juggler builds the proxy with
+  `newProxyInfoWithAuth`. `socks5h` resolves names at the proxy. A setup error
+  fails the request closed instead of falling back to the host's direct
+  connection. Ported from liasica's [2f0be40](https://github.com/liasica/camoufox/commit/2f0be400e53b88bb9b00b3faf2356503ae9dbfab).
 - **Fontconfig memo keyed by context.** One context's font allow-list no longer
   answers for other contexts in the same content process. Offered upstream in
   [#942](https://github.com/daijro/camoufox/pull/942). ([6950149](https://github.com/coffeegrind123/camoufox-free/commit/6950149e920820710122e176ab66bd14d66db4c4))
