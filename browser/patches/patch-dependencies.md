@@ -112,3 +112,11 @@ the change.
 
 Everything else is written against a tree that already has
 `playwright/0-playwright.patch` and `playwright/1-leak-fixes.patch` applied.
+
+`proxy-auth-isolation.patch` is paired with Juggler's proxy routing in
+`additions/juggler/NetworkObserver.js` and `additions/juggler/TargetRegistry.js`.
+The C++ patch keys proxy credentials by the channel's context; Juggler must route
+that channel through its context's proxy and must not globally clear the auth
+cache while other contexts are authenticating. `TargetRegistry.setProxy()` clears
+`clear-origin-attributes-data` only for its own `userContextId` when replacing an
+existing proxy.
