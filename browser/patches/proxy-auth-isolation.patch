@@ -1,0 +1,83 @@
+diff --git a/netwerk/protocol/http/nsHttpChannelAuthProvider.cpp b/netwerk/protocol/http/nsHttpChannelAuthProvider.cpp
+index cacd523a5..9b4ed4c2f 100644
+--- a/netwerk/protocol/http/nsHttpChannelAuthProvider.cpp
++++ b/netwerk/protocol/http/nsHttpChannelAuthProvider.cpp
+@@ -62,6 +62,28 @@ static void GetOriginAttributesSuffix(nsIChannel* aChan, nsACString& aSuffix) {
+   oa.CreateSuffix(aSuffix);
+ }
+ 
++// Camoufox: stock Firefox keys proxy credentials by proxy host:port alone, so
++// every browser context shares one entry. Automation that gives contexts the
++// same proxy with different credentials (per-session gateway usernames) then
++// sends one context's traffic with another's login, or has an entry replaced
++// mid-handshake and fails with 407. Key the entry by the context instead. Only
++// the container and private-browsing ids are used: the network partition key
++// would force a fresh 407 round trip for every top-level site. The default
++// context has an empty suffix, which is the stock behaviour.
++static void GetProxyAuthOriginAttributesSuffix(nsIChannel* aChan,
++                                               nsACString& aSuffix) {
++  OriginAttributes oa;
++  if (aChan) {
++    OriginAttributes channelOA;
++    StoragePrincipalHelper::GetOriginAttributesForNetworkState(aChan,
++                                                               channelOA);
++    oa.mUserContextId = channelOA.mUserContextId;
++    oa.mPrivateBrowsingId = channelOA.mPrivateBrowsingId;
++  }
++
++  oa.CreateSuffix(aSuffix);
++}
++
+ nsHttpChannelAuthProvider::nsHttpChannelAuthProvider()
+     : mProxyAuth(false),
+       mTriedProxyAuth(false),
+@@ -371,11 +393,11 @@ nsresult nsHttpChannelAuthProvider::UpdateCache(
+   nsHttpAuthCache* authCache = gHttpHandler->AuthCache(mIsPrivate);
+ 
+   nsAutoCString suffix;
++  nsCOMPtr<nsIChannel> chan = do_QueryInterface(mAuthChannel);
+   if (!aProxyAuth) {
+-    // We don't isolate proxy credentials cache entries with the origin suffix
+-    // as it would only annoy users with authentication dialogs popping up.
+-    nsCOMPtr<nsIChannel> chan = do_QueryInterface(mAuthChannel);
+     GetOriginAttributesSuffix(chan, suffix);
++  } else {
++    GetProxyAuthOriginAttributesSuffix(chan, suffix);
+   }
+ 
+   // create a cache entry.  we do this even though we don't yet know that
+@@ -791,8 +813,12 @@ nsresult nsHttpChannelAuthProvider::GetCredentialsForChallenge(
+   rv = mAuthChannel->GetLoadFlags(&loadFlags);
+   if (NS_FAILED(rv)) return rv;
+ 
+-  // Fill only for non-proxy auth, proxy credentials are not OA-isolated.
++  // Proxy credentials are isolated per browser context only.
+   nsAutoCString suffix;
++  if (proxyAuth) {
++    nsCOMPtr<nsIChannel> chan = do_QueryInterface(mAuthChannel);
++    GetProxyAuthOriginAttributesSuffix(chan, suffix);
++  }
+ 
+   if (!proxyAuth) {
+     nsCOMPtr<nsIChannel> chan = do_QueryInterface(mAuthChannel);
+@@ -1385,8 +1411,9 @@ NS_IMETHODIMP nsHttpChannelAuthProvider::OnAuthAvailable(
+   nsCOMPtr<nsIChannel> chan = do_QueryInterface(mAuthChannel);
+   nsAutoCString suffix;
+   if (!mProxyAuth) {
+-    // Fill only for non-proxy auth, proxy credentials are not OA-isolated.
+     GetOriginAttributesSuffix(chan, suffix);
++  } else {
++    GetProxyAuthOriginAttributesSuffix(chan, suffix);
+   }
+ 
+   nsHttpAuthCache* authCache = gHttpHandler->AuthCache(mIsPrivate);
+@@ -1588,6 +1615,9 @@ void nsHttpChannelAuthProvider::SetAuthorizationHeader(
+   if (header == nsHttp::Proxy_Authorization) {
+     continuationState = &mProxyAuthContinuationState;
+ 
++    nsCOMPtr<nsIChannel> chan = do_QueryInterface(mAuthChannel);
++    GetProxyAuthOriginAttributesSuffix(chan, suffix);
++
+     if (mProxyInfo) {
+       nsAutoCString type;
+       mProxyInfo->GetType(type);
