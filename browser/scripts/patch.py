@@ -16,9 +16,11 @@ import sys
 from dataclasses import dataclass
 
 from _mixin import (
+    PATCH_FLAGS,
     find_src_dir,
     get_moz_target,
     get_options,
+    host_build_target,
     list_patches,
     run,
     temp_cd,
@@ -32,12 +34,19 @@ Main patcher functions
 
 
 def reset_to_unpatched():
-    """Reset this source repository without discovering a parent repository."""
+    """Reset this source repository without discovering a parent repository.
+
+    The object directory survives so the next build compiles only changed
+    inputs. CAMOUFOX_CLOBBER=1 restores the old from-scratch reset.
+    """
     if not os.path.exists('.git'):
         return
 
     print("Resetting to unpatched state...")
-    run('git reset --hard unpatched && ./mach clobber && git clean -fdx')
+    if os.environ.get('CAMOUFOX_CLOBBER') == '1':
+        run('git reset --hard unpatched && ./mach clobber && git clean -fdx')
+    else:
+        run("git reset --hard unpatched && git clean -fdx -e '/obj-*/'")
 
 
 @dataclass
@@ -53,12 +62,23 @@ class Patcher:
         """
         version, release = extract_args()
         with temp_cd(find_src_dir('.', version, release)):
+            if options.mozconfig_only:
+                # A target change must not unapply patches, refresh additions,
+                # or discard the object directory.
+                if os.path.exists('mozconfig.backup'):
+                    os.remove('mozconfig.backup')
+                run('cp -v ../assets/base.mozconfig mozconfig')
+                print(f'Using target: {self.moz_target}')
+                self._update_mozconfig()
+                print('Complete!')
+                return
+
             # Reset only when the source tree has its own local repository.
             reset_to_unpatched()
 
             # Re-copy additions and settings after reset
             print("Re-copying additions and settings...")
-            run(f'bash ../scripts/copy-additions.sh {version} {release}')
+            run(f'python3 ../scripts/sync_additions.py . --baseline')
 
             # Create the base mozconfig file
             run('cp -v ../assets/base.mozconfig mozconfig')
@@ -66,24 +86,23 @@ class Patcher:
             print(f'Using target: {self.moz_target}')
             self._update_mozconfig()
 
-            if not options.mozconfig_only:
-                failed_patches = []
-                for patch_file in list_patches():
-                    rejects = self._apply_and_check(patch_file)
-                    if rejects:
-                        failed_patches.append((patch_file, rejects))
+            failed_patches = []
+            for patch_file in list_patches():
+                rejects = self._apply_and_check(patch_file)
+                if rejects:
+                    failed_patches.append((patch_file, rejects))
 
-                # Report failures
-                if failed_patches:
-                    print('\n' + '='*70)
-                    print(f'ERROR: {len(failed_patches)} patch(es) failed to apply cleanly:')
-                    print('='*70)
-                    for patch_file, rejects in failed_patches:
-                        print(f'\n{patch_file}:')
-                        for reject in rejects:
-                            print(f'  - {reject}')
-                    print('='*70)
-                    sys.exit(1)
+            # Report failures
+            if failed_patches:
+                print('\n' + '='*70)
+                print(f'ERROR: {len(failed_patches)} patch(es) failed to apply cleanly:')
+                print('='*70)
+                for patch_file, rejects in failed_patches:
+                    print(f'\n{patch_file}:')
+                    for reject in rejects:
+                        print(f'  - {reject}')
+                print('='*70)
+                sys.exit(1)
 
             print('Complete!')
 
@@ -103,10 +122,9 @@ class Patcher:
         # Apply patch interactively - don't capture stdout/stderr at all
         # This allows prompts to show immediately and user can respond
         # --forward flag: skip patches that appear to be already applied
-        # --binary flag: preserve line endings (helps with CRLF vs LF differences)
-        # -l flag: ignore whitespace differences
+        # PATCH_FLAGS includes --fuzz=0: fuzz and rejects must fail the stack.
         result = subprocess.run(
-            ['patch', '-p1', '--forward', '-l', '--binary', '-i', patch_file],
+            ['patch', *PATCH_FLAGS, '--no-backup-if-mismatch', '-i', patch_file],
             stdin=sys.stdin,
             stdout=sys.stdout,
             stderr=sys.stderr,
@@ -203,11 +221,16 @@ def extract_build_target():
     """Get moz_target if passed to BUILD_TARGET environment variable"""
 
     if os.environ.get('BUILD_TARGET'):
-        target, arch = os.environ['BUILD_TARGET'].split(',')
-        assert target in AVAILABLE_TARGETS, f"Unsupported target: {target}"
-        assert arch in AVAILABLE_ARCHS, f"Unsupported architecture: {arch}"
+        parts = os.environ['BUILD_TARGET'].split(',')
+        if len(parts) != 2:
+            raise ValueError("BUILD_TARGET must be <target>,<arch>")
+        target, arch = parts
+        if target not in AVAILABLE_TARGETS:
+            raise ValueError(f"Unsupported target: {target}")
+        if arch not in AVAILABLE_ARCHS:
+            raise ValueError(f"Unsupported architecture: {arch}")
     else:
-        target, arch = "macos", "arm64"
+        target, arch = host_build_target()
     return target, arch
 
 

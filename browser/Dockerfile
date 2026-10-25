@@ -13,8 +13,7 @@ RUN apt-get update && apt-get install -y \
     python3 python3-dev python3-pip \
     # Camoufox build system tools
     git p7zip-full aria2 curl rsync \
-    # assets/base.mozconfig only enables ccache `if command -v ccache`, so
-    # without this every container build is a cold build (#698)
+    # Keep a cache available when bootstrap does not install sccache.
     ccache \
     # Platform-specific libraries for Linux builds
     libsqlite3-dev \
@@ -29,6 +28,12 @@ ENV PATH="/root/.cargo/bin:${PATH}"
 RUN make setup-minimal && \
     make mozbootstrap && \
     mkdir -p /app/dist
+
+# Keep compiler caches on the mounted .mozbuild volume instead of the
+# container's disposable root filesystem.
+ENV CCACHE_DIR=/root/.mozbuild/ccache \
+    SCCACHE_DIR=/root/.mozbuild/sccache-cache \
+    CAMOUFOX_SCCACHE=1
 
 # Mount .mozbuild directory and dist folder
 VOLUME /root/.mozbuild

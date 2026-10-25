@@ -29,10 +29,18 @@ ac_add_options --with-unsigned-addon-scopes=app,system
 
 ac_add_options --enable-bootstrap
 
-# Use ccache for faster incremental rebuilds if available
-if command -v ccache >/dev/null 2>&1; then
+# sccache caches Rust as well as C/C++. It is opt-in so existing CI keeps its
+# warm ccache; Docker enables it when bootstrap has installed the binary.
+if [ "${CAMOUFOX_SCCACHE:-0}" = 1 ] && \
+   { command -v sccache >/dev/null 2>&1 || [ -x "$HOME/.mozbuild/sccache/sccache" ]; }; then
+  ac_add_options --with-ccache=sccache
+  sccache_path="$(command -v sccache || true)"
+  export RUSTC_WRAPPER="${RUSTC_WRAPPER:-${sccache_path:-$HOME/.mozbuild/sccache/sccache}}"
+elif command -v ccache >/dev/null 2>&1; then
   ac_add_options --with-ccache=ccache
 fi
+export CCACHE_MAXSIZE=${CCACHE_MAXSIZE:-20G}
+export SCCACHE_CACHE_SIZE=${SCCACHE_CACHE_SIZE:-20G}
 
 export MOZ_REQUIRE_SIGNING=
 

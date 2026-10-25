@@ -14,6 +14,14 @@ import time
 
 start_time = time.time()
 
+PATCH_FLAGS = (
+    '-p1',
+    '--forward',
+    '-l',
+    '--binary',
+    '--fuzz=0',
+)
+
 
 @contextlib.contextmanager
 def temp_cd(path):
@@ -62,6 +70,28 @@ def get_moz_target(target, arch):
     raise ValueError(f"Unsupported target: {target}")
 
 
+def host_build_target():
+    """Return this machine's supported Firefox build target."""
+    import platform
+
+    target = {'Linux': 'linux', 'Darwin': 'macos', 'Windows': 'windows'}.get(
+        platform.system()
+    )
+    if not target:
+        raise ValueError(f"Unsupported host platform: {platform.system()}")
+
+    machine = platform.machine().lower()
+    if machine in ('arm64', 'aarch64'):
+        arch = 'arm64'
+    elif machine in ('x86_64', 'amd64'):
+        arch = 'x86_64'
+    elif target == 'windows' and machine in ('x86', 'i386', 'i486', 'i586', 'i686'):
+        arch = 'i686'
+    else:
+        raise ValueError(f"Unsupported host architecture: {platform.machine()}")
+    return target, arch
+
+
 def list_files(root_dir, suffix):
     """List files in a directory"""
     for root, _, files in os.walk(root_dir):
@@ -103,7 +133,9 @@ def run(cmd, exit_on_fail=True, do_print=True):
 
 
 __all__ = [
+    'PATCH_FLAGS',
     'get_moz_target',
+    'host_build_target',
     'list_patches',
     'run',
     'script_exit',
