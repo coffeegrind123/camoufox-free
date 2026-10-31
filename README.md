@@ -101,6 +101,13 @@ For an identity whose OS is not the host's. Offered upstream in
   429/5xx/connection failures, and the host GPU probe has a 30-second deadline
   that reports the executable and display it was probing instead of hanging.
   ([6fee36f](https://github.com/coffeegrind123/camoufox-free/commit/6fee36f05286233ea8c854faca4e53123fd283b6), [d5e2850](https://github.com/coffeegrind123/camoufox-free/commit/d5e28506cf2bca5a7d1a70083fa29bd5f3c2e3f8))
+- **A late window-manager frame keeps the identity's window size.** An X11
+  window manager can set its frame (`_NET_FRAME_EXTENTS`) after the window
+  maps. Firefox adds it to `outerWidth/outerHeight` without a resize event, so
+  the startup hold that keeps the identity's size never ran, and the outer size
+  could exceed `screen.width`. The hold now also checks on a timer.
+  ([CamoufoxWindow.sys.mjs](browser/additions/browser/modules/CamoufoxWindow.sys.mjs),
+  guard [startup-size-frame-extents.py](browser/tests/playwright/patches/startup-size-frame-extents.py))
 
 ### Kept here after upstream declined
 
