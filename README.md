@@ -108,6 +108,13 @@ For an identity whose OS is not the host's. Offered upstream in
   could exceed `screen.width`. The hold now also checks on a timer.
   ([CamoufoxWindow.sys.mjs](browser/additions/browser/modules/CamoufoxWindow.sys.mjs),
   guard [startup-size-frame-extents.py](browser/tests/playwright/patches/startup-size-frame-extents.py))
+- **Screen coordinates follow the spoofed window position.**
+  `mozInnerScreenX/Y` and the `screenX/Y` of mouse and touch events came from
+  the real window while `window.screenX/Y` reported the identity's, so wherever
+  the window manager placed the window elsewhere (any X11 desktop), a page could
+  read the real position. They now move with the spoofed position; browser code
+  still gets the real one. ([patch](browser/patches/window-screen-origin.patch),
+  guard [window-screen-origin.py](browser/tests/playwright/patches/window-screen-origin.py))
 
 ### Kept here after upstream declined
 
