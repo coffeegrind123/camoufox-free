@@ -36,7 +36,7 @@ A scan is complete only when every API page has been read, every candidate
 repository/branch has a result or an explicit `UNRESOLVED`, and every result
 has a verdict.
 
-There are two inventories. Reviewing only one is incomplete.
+There are three inventories. Reviewing only some is incomplete.
 
 ### Forks of `daijro/camoufox`
 
@@ -110,6 +110,34 @@ git -C "$clone" fetch up \
 
 Use the `merged` field to decide whether a closed PR was merged.
 `merge_commit_sha` can be populated for closed, unmerged pull requests.
+
+### This fork's own pull requests that upstream merged
+
+Upstream often merges a pull request in its own form: it squashes, rewrites
+and follows up, while this fork keeps the version it wrote. Both trees then
+ship the change differently and nothing flags it; #886 was merged as upstream's
+own `browser/scripts/pgo.py` while this fork kept `ci/pgo.py`. Check every
+merged pull request this fork opened, in both directions:
+
+```bash
+python3 -m ci.upstream_pr_drift --author coffeegrind123
+```
+
+It prints, per pull request, the share of the lines upstream merged that are in
+this fork (`upstream->fork`) and the share of the pull request's own lines that
+are in upstream (`fork->upstream`), and the lines missing from each. Resolve
+every share below 100%:
+
+- **Take upstream's form** at the next sync when it carries the same behaviour,
+  or better, and drop ours.
+- **Keep ours** when the difference is deliberate, and say so in `README.md`
+  ("What this fork adds"), with upstream's form named.
+- **Port upstream's addition** when upstream merged our pull request with a
+  follow-up this fork lacks.
+
+A pull request closed unmerged is a declined one: it moves to "Kept here after
+upstream declined" in `README.md` with upstream's stated reason, verified
+before it is repeated as fact.
 
 ### Review and verdicts
 
