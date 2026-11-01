@@ -11,7 +11,8 @@ WebGPU hands the page the host's adapter, so the identity gets it only when it
 claims the host's GPU.
 """
 
-from concurrent.futures import ThreadPoolExecutor
+import queue
+import threading
 from functools import lru_cache
 from typing import Any, Dict, Mapping, Optional, Tuple
 
@@ -40,6 +41,10 @@ FEATURE_BLOCKED_DEVICE = 4
 _LAUNCHER_ENV = ('CAMOU_', 'FONTCONFIG_FILE')
 
 Gpu = Tuple[str, str]
+
+# A display that accepts TCP but never completes the X handshake leaves Firefox's
+# GL initialization inside getContext() forever, which used to block every launch.
+HOST_GPU_PROBE_TIMEOUT_S = 30.0
 
 _READ_GPU = """() => {
     const gl = document.createElement('canvas').getContext('webgl');
@@ -102,27 +107,60 @@ def _host_gpu(
     env: Tuple[Tuple[str, str], ...],
     prefs: Tuple[Tuple[str, Any], ...],
 ) -> Optional[Gpu]:
-    def read() -> Optional[Gpu]:
-        from playwright.sync_api import sync_playwright
-
-        with sync_playwright() as playwright:
-            browser = playwright.firefox.launch(
-                executable_path=executable_path,
-                headless=headless,
-                env=dict(env),
-                # The launch forces WebGL on, which can choose another device.
-                firefox_user_prefs={**dict(prefs), 'webgl.force-enabled': True},
-            )
-            try:
-                gpu = browser.new_page().evaluate(_READ_GPU)
-            finally:
-                browser.close()
-        return (gpu[0], gpu[1]) if gpu else None
-
     # The sync API refuses to start inside a running asyncio loop, which is
-    # where AsyncCamoufox calls launch_options from.
-    with ThreadPoolExecutor(max_workers=1) as pool:
-        return pool.submit(read).result()
+    # where AsyncCamoufox calls launch_options from. A daemon thread also lets
+    # the process exit after a timeout when the browser cannot be cancelled.
+    outcome: queue.Queue[Tuple[bool, Any]] = queue.Queue(maxsize=1)
+
+    def read() -> None:
+        try:
+            outcome.put((True, _read_host_gpu(executable_path, headless, env, prefs)))
+        except BaseException as error:
+            outcome.put((False, error))
+
+    threading.Thread(target=read, name='camoufox-host-gpu-probe', daemon=True).start()
+    try:
+        ok, value = outcome.get(timeout=HOST_GPU_PROBE_TIMEOUT_S)
+    except queue.Empty:
+        display = dict(env).get('DISPLAY')
+        context = f' (DISPLAY={display})' if display else ''
+        raise TimeoutError(
+            f'Host GPU probe timed out after {HOST_GPU_PROBE_TIMEOUT_S:g} s '
+            f'while launching {executable_path}{context}. The browser did not '
+            'answer the WebGL probe; check that the display accepts X connections.'
+        ) from None
+    if not ok:
+        raise value
+    return value
+
+
+def _read_host_gpu(
+    executable_path: str,
+    headless: bool,
+    env: Tuple[Tuple[str, str], ...],
+    prefs: Tuple[Tuple[str, Any], ...],
+) -> Optional[Gpu]:
+    """Launch the binary once and read its WebGL vendor and renderer."""
+    from playwright.sync_api import sync_playwright
+
+    with sync_playwright() as playwright:
+        browser = playwright.firefox.launch(
+            executable_path=executable_path,
+            headless=headless,
+            env=dict(env),
+            # The launch forces WebGL on, which can choose another device.
+            firefox_user_prefs={**dict(prefs), 'webgl.force-enabled': True},
+        )
+        try:
+            gpu = browser.new_page().evaluate(_READ_GPU)
+        except BaseException:
+            try:
+                browser.close()
+            except BaseException:
+                pass
+            raise
+        browser.close()
+    return (gpu[0], gpu[1]) if gpu else None
 
 
 def renders_on_hardware(gpu: Optional[Gpu]) -> bool:

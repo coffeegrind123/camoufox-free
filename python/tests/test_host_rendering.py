@@ -8,6 +8,7 @@ Run with:
 import os
 import re
 import sys
+import threading
 import warnings
 from contextlib import contextmanager
 from unittest import mock
@@ -17,7 +18,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 import orjson  # noqa: E402
 import pytest  # noqa: E402
 
-from camoufox import sync_api, utils  # noqa: E402
+from camoufox import host_rendering, sync_api, utils  # noqa: E402
 from camoufox._warnings import LeakWarning  # noqa: E402
 from camoufox.host_rendering import (  # noqa: E402
     BASELINE_OVERRIDES_PREF,
@@ -247,6 +248,65 @@ def test_the_probe_ignores_what_the_launcher_adds_to_the_environment():
         )
 
     assert probe.call_args_list[0] == probe.call_args_list[1]
+
+
+def run_probe_in_thread(seconds):
+    """host_gpu's outcome, or None if it is still running after `seconds`."""
+    outcome = []
+
+    def probe():
+        try:
+            outcome.append(host_gpu("/bin/camoufox", True, {"DISPLAY": ":99"}, {}))
+        except BaseException as error:
+            outcome.append(error)
+
+    thread = threading.Thread(target=probe, daemon=True)
+    thread.start()
+    thread.join(seconds)
+    return outcome[0] if outcome else None
+
+
+def test_the_host_gpu_probe_times_out_and_says_so(monkeypatch):
+    """A display that accepts connections but never answers the X handshake
+    leaves Firefox inside getContext() forever; the launch must not wait on it."""
+    release = threading.Event()
+
+    class HangingPlaywright:
+        def __enter__(self):
+            release.wait(10)
+            raise RuntimeError("released")
+
+        def __exit__(self, *exc):
+            return False
+
+    monkeypatch.setattr("playwright.sync_api.sync_playwright", HangingPlaywright)
+    monkeypatch.setattr(host_rendering, "HOST_GPU_PROBE_TIMEOUT_S", 0.05, raising=False)
+    host_rendering._host_gpu.cache_clear()
+    try:
+        outcome = run_probe_in_thread(2)
+        assert isinstance(outcome, TimeoutError), f"the probe did not time out: {outcome!r}"
+        assert "Host GPU probe timed out after 0.05 s" in str(outcome)
+        assert "DISPLAY=:99" in str(outcome)
+    finally:
+        release.set()
+        host_rendering._host_gpu.cache_clear()
+
+
+def test_the_host_gpu_probe_propagates_a_read_error(monkeypatch):
+    class FailingPlaywright:
+        def __enter__(self):
+            raise RuntimeError("browser died")
+
+        def __exit__(self, *exc):
+            return False
+
+    monkeypatch.setattr("playwright.sync_api.sync_playwright", FailingPlaywright)
+    host_rendering._host_gpu.cache_clear()
+    try:
+        outcome = run_probe_in_thread(2)
+        assert isinstance(outcome, RuntimeError) and "browser died" in str(outcome)
+    finally:
+        host_rendering._host_gpu.cache_clear()
 
 
 def browser_on_host(gpu):
