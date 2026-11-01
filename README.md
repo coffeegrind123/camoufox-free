@@ -108,6 +108,14 @@ For an identity whose OS is not the host's. Offered upstream in
   `window.innerWidth`/`innerHeight` no longer deadlocks viewport updates.
   Explicit `webgl_config` replaces a preset's GPU as one complete pair in both
   launchers. ([1fcfad6](https://github.com/coffeegrind123/camoufox-free/commit/1fcfad6245cf91797d80d3943903cbf46ec3b017), [6932314](https://github.com/coffeegrind123/camoufox-free/commit/6932314b3b76380af9ab4c714d069c02f9e7f2be))
+- **A context reports its own GPU's WebGL limits.** A `NewContext` that claimed
+  another GPU named that GPU in `UNMASKED_RENDERER_WEBGL`, but its
+  `getParameter` limits, `getSupportedExtensions()` and
+  `getShaderPrecisionFormat()` stayed the launch GPU's, a pairing no real device
+  reports. `setWebGLConfig` gives each context its GPU's tables, in pages,
+  iframes and workers, and both launchers send them. Ported from introvert's
+  [a44e6d1](https://github.com/introvert/camoufox/commit/a44e6d15fa0ce6df438615434d0b12ee5cdd4490).
+  (guard [context-webgl-tables.py](browser/tests/playwright/patches/context-webgl-tables.py))
 - **Corrupt font data fails closed.** A damaged `groups.json`, or one whose
   group directories are missing with no per-OS directory either, refuses the
   launch instead of widening the scan to every OS's fonts (the missing-groups

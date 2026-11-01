@@ -47,6 +47,7 @@ GROUPS: Dict[str, Tuple[str, ...]] = {
         "context-os-system-font",
         "context-voice-names",
         "context-voice-pool",
+        "context-webgl-tables",
         "display-scale-resolution",
         "do-not-track",
         "fingerprint-setter-seal",

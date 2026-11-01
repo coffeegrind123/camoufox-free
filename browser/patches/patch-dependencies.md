@@ -54,7 +54,7 @@ be listed there.
 | `timezone-spoofing.patch` | `timezone` |
 | `touchscreen-fingerprint-spoofing.patch` | `navigator.maxTouchPoints` |
 | `voice-spoofing.patch` | `voices`, `voices:blockIfNotDefined`, `voices:pool` |
-| `webgl-spoofing.patch` | `webGl:*`, `webGl2:*` |
+| `webgl-spoofing.patch` | `webGl:*`, `webGl2:*` (per context: `setWebGLConfig` replaces the tables with the context GPU's) |
 | `webgpu-limits-spoofing.patch` | `webGpu:limits` |
 | `webrtc-ip-spoofing.patch` | `webrtc:ipv4`, `webrtc:ipv6`, `navigator.platform` |
 | `window-screen-origin.patch` | `window.screenX`, `window.screenY` (moves `mozInnerScreenX/Y` and mouse and touch event `screenX/Y` with them) |

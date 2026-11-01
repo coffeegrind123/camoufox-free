@@ -228,6 +228,24 @@ export function toConfig(
 	return parsePyJson(orjsonDumps(config, false));
 }
 
+/**
+ * Every device fpgen recorded behind this GPU from Firefox on `targetOs`, as
+ * the launchers configure it.
+ */
+export function recordedDevices(
+	targetOs: string,
+	vendor: string,
+	renderer: string,
+): WebGLData[] {
+	const gpuPin = pin("gpu", orjsonDumps({ vendor, renderer }, false));
+	return trace("webgl", targetOs, [gpuPin]).flatMap((webgl) =>
+		trace("webgl2", targetOs, [gpuPin, pin("webgl", webgl.text)]).map(
+			(webgl2) =>
+				toConfig(parsePyJson(webgl.text), parsePyJson(webgl2.text), targetOs),
+		),
+	);
+}
+
 function webglConfig(
 	targetOs: string,
 	gpuText: string,

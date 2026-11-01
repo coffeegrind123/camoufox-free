@@ -1389,6 +1389,18 @@ def _build_init_script(values: Dict[str, Any]) -> str:
                 f'  if (typeof w.{fn_name} === "function") w.{fn_name}({js_val});'
             )
 
+    # The GPU's parameters, extensions and shader precisions, as one JSON
+    # string: the context answers from these instead of the launch GPU's. {}
+    # leaves the real context's values.
+    webgl_tables = values.get('webglConfig')
+    if webgl_tables is not None:
+        import orjson
+
+        tables_json = orjson.dumps(webgl_tables, option=orjson.OPT_SORT_KEYS).decode()
+        lines.append(
+            f'  if (typeof w.setWebGLConfig === "function") w.setWebGLConfig({_json.dumps(tables_json)});'
+        )
+
     # Screen dimensions (requires width + height together)
     sw = values.get('screenWidth')
     sh = values.get('screenHeight')
@@ -1523,6 +1535,18 @@ def generate_context_fingerprint(
             nav = {**nav, 'hardwareConcurrency': launch_cores}
         screen = preset.get('screen', {})
         webgl = preset.get('webgl', {})
+        # The preset names its GPU; the context also needs that GPU's recorded
+        # tables, or it reports the launch GPU's limits beside it. An explicit
+        # webgl_config replaces both below.
+        if not webgl_config and config.get('webGl:vendor') and config.get('webGl:renderer'):
+            from .webgl import webgl_for_gpu
+
+            webgl_fp = webgl_for_gpu(
+                OS_KEYS[platform_to_os(config.get('navigator.platform', ''))],
+                config['webGl:vendor'], config['webGl:renderer'],
+            )
+            webgl_fp.pop('webGl2Enabled')
+            config.update(webgl_fp)
     else:
         # Fall back to synthetic generation
         fp = generate_fingerprint(os=os)
@@ -1691,6 +1715,13 @@ def generate_context_fingerprint(
         'fontList': config.get('fonts'),
         'speechVoices': config.get('voices'),
         'webrtcIP': webrtc_ip or '',
+        # Every webGl:* / webGl2:* table; the GPU's names go through their own
+        # setters above.
+        'webglConfig': {
+            key: value
+            for key, value in config.items()
+            if key.startswith(('webGl:', 'webGl2:')) and key not in ('webGl:vendor', 'webGl:renderer')
+        },
     }
 
     init_script = _build_init_script(init_values)
