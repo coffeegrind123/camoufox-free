@@ -328,6 +328,7 @@ export async function NewContext(
 		webrtc_ip: webrtcIp,
 		webgl_config: webglConfig,
 		launch_window: (browser as any)._camoufoxLaunchWindow,
+		locale: contextOptions.locale,
 	});
 
 	// Merge the generated context options with user overrides (user wins). They

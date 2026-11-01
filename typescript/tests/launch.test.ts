@@ -1005,6 +1005,19 @@ describe("test_voices (launch half)", () => {
 		).toBe(false);
 	});
 
+	it("registers every voice of the manifests as voices:pool", async () => {
+		const pool = (await cfg())["voices:pool"];
+		expect(pool).toEqual(fingerprints.voicePool());
+		expect(pool.length).toBeGreaterThan(0);
+		expect(pool.some((v: any) => v.isDefault)).toBe(false);
+	});
+
+	it("lets the caller replace voices:pool", async () => {
+		expect(
+			(await cfg({ config: { "voices:pool": [] } }))["voices:pool"],
+		).toEqual([]);
+	});
+
 	it("fails closed when voice generation fails", async () => {
 		deps.generateRandomVoiceSubset = () => {
 			throw new OSError("voice-manifests.json unreadable");

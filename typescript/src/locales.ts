@@ -90,7 +90,7 @@ export class Geolocation {
 /**
  * Verifies that a locale is valid. Takes either language-region or language.
  */
-function verifyLocale(loc: string): void {
+export function verifyLocale(loc: string): void {
 	if (tags.check(loc)) {
 		return;
 	}

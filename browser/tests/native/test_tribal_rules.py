@@ -724,6 +724,15 @@ def test_spoofed_voices_complete_without_a_config_switch():
     )
 
 
+def test_a_page_speaks_only_with_voices_it_lists():
+    patch = (BROWSER / "patches" / "speech-voices-spoofing.patch").read_text(encoding="utf-8")
+    added = "\n".join(line for line in patch.splitlines() if line.startswith("+"))
+    assert "FindBestMatch(uri, lang, aOnly)" in added, explain("context-voices-from-pool")
+    assert "SpeakUtterance(\n+      *utterance, docLang, only.ptrOr(nullptr))" in patch, (
+        explain("context-voices-from-pool")
+    )
+
+
 def _live_properties() -> set:
     """Declared keys, less those marked removed (kept only for older libraries)."""
     return {

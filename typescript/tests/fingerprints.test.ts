@@ -33,6 +33,7 @@ import {
 	type Preset,
 	Screen,
 	setMediaDevicesDefaults,
+	voicePool,
 	WINDOWS_11_MARKER_FONTS,
 } from "../src/fingerprints.js";
 import { LOCAL_DATA } from "../src/paths.js";
@@ -967,6 +968,52 @@ describe.skipIf(!MODEL.ok)("fpgen generation (needs the model)", () => {
 		expect(fromP.context_options.timezoneId).toBe("Europe/Paris");
 		expect(fromP.config["navigator.platform"]).toBe("MacIntel");
 	});
+
+	it("a context's voices are drawn for its locale and registered", () => {
+		// A German Windows reports the German OneCore pack first, as a launch
+		// with locale "de-DE" does. A context's list only selects among the
+		// voices the browser registered: the launch's and voices:pool.
+		const pool = new Set(voicePool().map((v) => v.voiceUri));
+		const german = generateContextFingerprint({
+			os: "windows",
+			locale: "de-DE",
+		});
+		expect(german.config.voices[0].lang).toBe("de-DE");
+		for (const [os, locale] of [
+			["windows", "ja-JP"],
+			["macos", "fr-FR"],
+			["linux", "en-GB"],
+		]) {
+			const { config } = generateContextFingerprint({ os, locale });
+			for (const v of config.voices) expect(pool).toContain(v.voiceUri);
+		}
+	}, 30_000);
+
+	it.each([
+		"de-DE",
+		"de",
+		"de, en-US, en",
+	])("NewContext draws a German Windows's voices for locale %j", async (locale) => {
+		// Playwright's locale is a tag or a language list whose first entry is
+		// the locale; Playwright gets it as given.
+		const { NewContext } = await import("../src/sync_api.js");
+		let options: Record<string, any> = {};
+		let script = "";
+		const browser = {
+			version: () => "158.0",
+			newContext: async (opts: Record<string, any>) => {
+				options = opts;
+				return {
+					addInitScript: async (s: string) => {
+						script = s;
+					},
+				};
+			},
+		};
+		await NewContext(browser as any, { os: "windows", locale });
+		expect(options.locale).toBe(locale);
+		expect(script).toContain("Microsoft Hedda - German (Germany)");
+	}, 30_000);
 
 	it("a context with a Linux UA is Linux throughout", () => {
 		// fpgen's Linux pool now and then pairs the Linux UA with platform Win32
