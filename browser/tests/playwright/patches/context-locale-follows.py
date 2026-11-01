@@ -7,6 +7,12 @@ Accept-Language and User-Agent, and built-in strings must use the context's
 language. A second context with another locale checks that no context changed
 the launch locale or another context's isolated world.
 
+A context given a language list ("de, en-US, en") reported it in
+navigator.languages and Accept-Language, but every place that reads a locale
+took the whole list: Intl fell back to en-GB, and built-in strings stayed in the
+launch's language. Such a context must report and send the list, and take its
+first entry as the locale everywhere one is read.
+
     python browser/tests/playwright/patches/context-locale-follows.py
 """
 
@@ -25,6 +31,7 @@ LOCALE = "de-DE"
 TIMEZONE = "Asia/Tokyo"
 OTHER_LOCALE = "fr-FR"
 OTHER_TIMEZONE = "Europe/Paris"
+LISTS = ("de, en-US, en", "de-DE, de, en-US, en")
 
 READ = """() => ({
   languages: typeof navigator === 'undefined' ? null : [...navigator.languages],
@@ -153,6 +160,17 @@ def main() -> int:
                     locale=OTHER_LOCALE,
                     timezone_id=OTHER_TIMEZONE,
                 ).new_page().evaluate(f"({READ})()")
+                seen_single = dict(SEEN)
+                listed = {}
+                for tags in LISTS:
+                    SEEN.clear()
+                    list_page = browser.new_context(locale=tags, timezone_id=TIMEZONE).new_page()
+                    list_ui = {"about:blank": list_page.evaluate(UI)}
+                    list_page.goto(f"http://127.0.0.1:{srv.server_address[1]}/p.html")
+                    list_ui["page"] = list_page.evaluate(UI)
+                    list_out = list_page.evaluate(PROBE)
+                    list_out["isolated"] = list_page.evaluate(f"({READ})()")
+                    listed[tags] = (list_out, dict(SEEN), list_ui)
         finally:
             srv.shutdown()
             srv.server_close()
@@ -165,7 +183,7 @@ def main() -> int:
         if got["languages"] not in (None, [LOCALE, "de"]):
             failures.append(f"{scope}: navigator.languages {got['languages']}")
     expected_ua = out["window"]["userAgent"]
-    for path, requests in sorted(SEEN.items()):
+    for path, requests in sorted(seen_single.items()):
         print(f"  {path:15}: Accept-Language / User-Agent {requests}")
         for accept, user_agent in requests:
             if not (accept or "").startswith("de-DE,de;q="):
@@ -177,9 +195,9 @@ def main() -> int:
                 )
     required = {"/p.html", "/w.js", "/worklet.js", "/from-dedicated",
                 "/from-shared", "/from-service"}
-    if not required <= SEEN.keys():
+    if not required <= seen_single.keys():
         failures.append(
-            f"a request never arrived -- check is vacuous: {sorted(SEEN)}"
+            f"a request never arrived -- check is vacuous: {sorted(seen_single)}"
         )
     if (
         launch_default["locale"] != "en-US"
@@ -215,6 +233,28 @@ def main() -> int:
                 f"a {LOCALE} launch as {expected_ui}"
             )
 
+    for tags, (list_out, list_seen, list_ui) in listed.items():
+        languages = [tag.strip() for tag in tags.split(",")]
+        accept = ",".join([languages[0]] + [f"{tag};q=0.{9 - i}" for i, tag in enumerate(languages[1:])])
+        print(f"context {tags!r}:")
+        for scope, got in list_out.items():
+            print(f"  {scope:10}: {got}")
+            if got["locale"] != languages[0] or got["timeZone"] != TIMEZONE:
+                failures.append(f"{tags!r}: {scope}: Intl reports {got['locale']} / {got['timeZone']}")
+            if got["languages"] not in (None, languages):
+                failures.append(f"{tags!r}: {scope}: navigator.languages {got['languages']}")
+        for path, requests in sorted(list_seen.items()):
+            print(f"  {path:15}: Accept-Language {[a for a, _ in requests]}")
+            if any(a != accept for a, _ in requests):
+                failures.append(f"{tags!r}: wire: {path} sent Accept-Language {requests[0][0]!r}, not {accept!r}")
+        if not required <= list_seen.keys():
+            failures.append(f"{tags!r}: a request never arrived -- check is vacuous: {sorted(list_seen)}")
+        if ui:
+            for where, got in list_ui.items():
+                print(f"  {where:15}: {got}")
+                if got != expected_ui:
+                    failures.append(f"{tags!r}: ui: {where} words its strings as {got}, expected {expected_ui}")
+
     print()
     if failures:
         for failure in failures:
@@ -222,7 +262,7 @@ def main() -> int:
         return 1
     print(
         "PASS: every scope, request and built-in string follows the "
-        "context's locale and timezone."
+        "context's locale or language list, and its timezone."
     )
     return 0
 
