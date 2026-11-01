@@ -130,7 +130,7 @@ async def main() -> int:
             context = await browser.new_context()
             await context.add_init_script(
                 f"if (typeof setFontList === 'function') setFontList({json.dumps(','.join(fonts))});"
-                f"if (typeof setSpeechVoices === 'function') setSpeechVoices({json.dumps(','.join(voices))});"
+                f"if (typeof setSpeechVoices === 'function') setSpeechVoices({json.dumps(chr(10).join(voices))});"
             )
             seen = {}
             for host in HOSTS:

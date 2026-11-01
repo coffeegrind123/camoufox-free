@@ -1417,13 +1417,13 @@ def _build_init_script(values: Dict[str, Any]) -> str:
             f'  if (typeof w.setFontList === "function") w.setFontList({_json.dumps(joined)});'
         )
 
-    # Speech voices (comma-separated names). config['voices'] holds MaskConfig
-    # voice objects; extract the display name from each (tolerating a legacy
-    # list of plain name strings).
+    # Speech voices, one name per line: Windows names hold commas. config['voices']
+    # holds MaskConfig voice objects; extract the display name from each
+    # (tolerating a legacy list of plain name strings).
     voices = values.get('speechVoices')
     if voices and len(voices) > 0:
         names = [v['name'] if isinstance(v, dict) else v for v in voices]
-        joined = ','.join(names)
+        joined = '\n'.join(names)
         lines.append(
             f'  if (typeof w.setSpeechVoices === "function") w.setSpeechVoices({_json.dumps(joined)});'
         )

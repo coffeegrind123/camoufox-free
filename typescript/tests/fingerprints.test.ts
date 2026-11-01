@@ -786,6 +786,18 @@ describe("identity salt and seed (test_identity_salt.py)", () => {
 });
 
 describe("buildInitScript", () => {
+	it("passes a context's voices one per line, as names hold commas", () => {
+		const names = [
+			"Microsoft Hanhan - Chinese (Traditional, Taiwan)",
+			"Microsoft David - English (United States)",
+		];
+		const script = buildInitScript({
+			speechVoices: names.map((name) => ({ name }) as any),
+		});
+		const arg = /w\.setSpeechVoices\(("[^\n]*?")\);/.exec(script)?.[1];
+		expect(JSON.parse(arg as string).split("\n")).toEqual(names);
+	});
+
 	it("guards every setter and always clears the WebRTC IP", () => {
 		const script = buildInitScript({
 			navigatorPlatform: "Win32",
