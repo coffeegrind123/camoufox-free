@@ -95,7 +95,8 @@ For an identity whose OS is not the host's. Offered upstream in
 - **The spoofed user agent is read once.** Firefox's HTTP handler rewrote
   its shared user-agent string on every `UserAgent()` call, and that also runs
   on proxy CONNECT threads, racing the main thread. The configured value is now
-  read once into a string nothing writes again.
+  read once into a string nothing writes again. Offered upstream in
+  [#984](https://github.com/daijro/camoufox/pull/984).
   ([01c8209](https://github.com/coffeegrind123/camoufox-free/commit/01c82098c1910f2a66585941c42053bcb0d1de70))
 - **Per-context locale follows every scope.** A context's locale reaches
   `Intl`, `navigator.languages`, Accept-Language q-values, isolated worlds,
@@ -122,7 +123,8 @@ For an identity whose OS is not the host's. Offered upstream in
   skipped its platform fix, and fpgen's Linux draws that carry another OS's
   `navigator.platform` reached the page as `Win32` behind a Linux user agent.
   The fix now stands down only when the caller sets `navigator.platform` or
-  `navigator.oscpu`, in both launchers.
+  `navigator.oscpu`, in both launchers. Offered upstream in
+  [#983](https://github.com/daijro/camoufox/pull/983).
   ([f7b091c](https://github.com/coffeegrind123/camoufox-free/commit/f7b091c1d1533ceae016a1ef6b85c861f8c0582c))
 - **A context reports its own GPU's WebGL limits.** A `NewContext` that claimed
   another GPU named that GPU in `UNMASKED_RENDERER_WEBGL`, but its
@@ -151,7 +153,9 @@ For an identity whose OS is not the host's. Offered upstream in
   ([ae1f515](https://github.com/coffeegrind123/camoufox-free/commit/ae1f51504418287b2f8dbedc4650073f72e48207))
 - **Launcher failures are bounded and explicit.** Transient downloads retry
   429/5xx/connection failures, and the host GPU probe has a 30-second deadline
-  that reports the executable and display it was probing instead of hanging.
+  that reports the executable and display it was probing instead of hanging;
+  the probe deadline is offered upstream in
+  [#985](https://github.com/daijro/camoufox/pull/985).
   ([6fee36f](https://github.com/coffeegrind123/camoufox-free/commit/6fee36f05286233ea8c854faca4e53123fd283b6), [d5e2850](https://github.com/coffeegrind123/camoufox-free/commit/d5e28506cf2bca5a7d1a70083fa29bd5f3c2e3f8))
 - **A late window-manager frame keeps the identity's window size.** An X11
   window manager can set its frame (`_NET_FRAME_EXTENTS`) after the window
