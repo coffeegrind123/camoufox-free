@@ -20,7 +20,7 @@ import {
 	hostCoreCount,
 } from "./cpu_affinity.js";
 import { validateIP, validIPv4 } from "./ip.js";
-import { normalizeLocale } from "./locales.js";
+import { Locale, normalizeLocale, verifyLocale } from "./locales.js";
 import { LAUNCHER_CONSTANTS, LOCAL_DATA, loadDataFile } from "./paths.js";
 import {
 	comparePyStr,
@@ -757,14 +757,39 @@ export function generateRandomVoiceSubset(
 		}
 	}
 
-	const selected = [...out, ...legacy].map(splitVoiceEntry);
-	return selected.map(([name, lang, vtype]) => ({
+	return voiceObjects(osKey, [...out, ...legacy]);
+}
+
+// No voice carries default=true: stock Firefox marks none on any OS.
+function voiceObjects(osKey: string, entries: string[]): VoiceObject[] {
+	return entries.map(splitVoiceEntry).map(([name, lang, vtype]) => ({
 		name,
 		lang,
 		voiceUri: voiceUri(osKey, name, lang),
 		isDefault: false,
 		isLocalService: vtype === "local",
 	}));
+}
+
+/**
+ * Every voice the manifests hold for any OS, for `voices:pool`. The browser
+ * registers them beside the launch's own voices. A context sees the ones its
+ * list names, which its draw for its own OS and locale took and the launch's
+ * draw need not have; a page outside such a context sees only the launch's.
+ */
+export function voicePool(): VoiceObject[] {
+	const pool: VoiceObject[] = [];
+	for (const [osKey, manifest] of Object.entries(loadVoiceManifests())) {
+		const entries: string[] = [...(manifest.base ?? [])];
+		for (const pack of Object.values(manifest.langPacks ?? {}) as any[]) {
+			entries.push(...(pack.oneCore ?? []), ...(pack.desktop ?? []));
+		}
+		for (const addition of manifest.additions ?? []) {
+			entries.push(...(addition.voices ?? []));
+		}
+		pool.push(...voiceObjects(osKey, [...new Set(entries)]));
+	}
+	return pool;
 }
 
 /**
@@ -1473,6 +1498,7 @@ export interface InitValues {
 	fontList?: string[];
 	speechVoices?: Array<string | VoiceObject>;
 	webrtcIP?: string;
+	webglConfig?: Config;
 }
 
 /**
@@ -1499,6 +1525,16 @@ export function buildInitScript(values: InitValues): string {
 				`  if (typeof w.${fnName} === "function") w.${fnName}(${pyJsonDumps(val)});`,
 			);
 		}
+	}
+
+	// The GPU's parameters, extensions and shader precisions, as one JSON
+	// string: the context answers from these instead of the launch GPU's. {}
+	// leaves the real context's values.
+	const webglTables = values.webglConfig;
+	if (!isNone(webglTables)) {
+		lines.push(
+			`  if (typeof w.setWebGLConfig === "function") w.setWebGLConfig(${pyJsonDumps(orjsonDumps(webglTables))});`,
+		);
 	}
 
 	// Screen dimensions (requires width + height together)
@@ -1546,14 +1582,14 @@ export function buildInitScript(values: InitValues): string {
 		);
 	}
 
-	// Speech voices (comma-separated names)
+	// Speech voices, one name per line: Windows names hold commas
 	const voices = values.speechVoices;
 	if (voices?.length) {
 		const names = voices.map((v) =>
 			v !== null && typeof v === "object" ? v.name : v,
 		);
 		lines.push(
-			`  if (typeof w.setSpeechVoices === "function") w.setSpeechVoices(${pyJsonDumps(names.join(","))});`,
+			`  if (typeof w.setSpeechVoices === "function") w.setSpeechVoices(${pyJsonDumps(names.join("\n"))});`,
 		);
 	}
 
@@ -1627,7 +1663,9 @@ function isLaunchWindow(value: unknown): value is LaunchWindow {
  * recorded one instead.
  *
  * @param timezone IANA timezone; takes priority over the preset's.
- * @param locale BCP-47 locale; also sets context_options.locale.
+ * @param locale Playwright's locale: a BCP-47 tag or a language list whose first
+ *   entry is the locale. That entry draws the voices and sets
+ *   context_options.locale.
  * @param config_overrides CAMOU_CONFIG keys applied after the config is built
  *   and before the init script is rendered.
  * @param webgl_config The [vendor, renderer] a drawn identity claims. It
@@ -1688,6 +1726,27 @@ export function generateContextFingerprint({
 		screen = p.screen ?? {};
 		webgl = p.webgl ?? {};
 		resolvedPreset = p;
+		// The preset names its GPU; the context also needs that GPU's recorded
+		// tables, or it reports the launch GPU's limits beside it. An explicit
+		// webgl_config replaces both below.
+		if (
+			!webgl_config &&
+			pyTruthy(config["webGl:vendor"]) &&
+			pyTruthy(config["webGl:renderer"])
+		) {
+			const platform = pyStr(get(config, "navigator.platform", ""));
+			const webglFp = webglForGpu(
+				platform === "Win32"
+					? "win"
+					: platform.includes("Linux") || platform.includes("linux")
+						? "lin"
+						: "mac",
+				config["webGl:vendor"],
+				config["webGl:renderer"],
+			);
+			delete webglFp.webGl2Enabled;
+			Object.assign(config, webglFp);
+		}
 	} else {
 		const fp = generateFingerprint({ os: os ?? undefined });
 		config = fromFpgen(fp, ff_version);
@@ -1802,11 +1861,38 @@ export function generateContextFingerprint({
 
 	if (timezone) config.timezone = timezone;
 	if (locale) {
-		const parsed = normalizeLocale(locale);
+		// Playwright's form: a tag, or a language list whose first entry is the
+		// locale (zzz-context-locale.patch).
+		const primary = locale.split(",")[0].trim();
+		let parsed: Locale;
+		if (primary.includes("-")) {
+			parsed = normalizeLocale(primary);
+		} else {
+			verifyLocale(primary);
+			parsed = new Locale(primary);
+		}
 		config["locale:language"] = parsed.language;
-		config["locale:region"] = parsed.region;
+		if (parsed.region) config["locale:region"] = parsed.region;
 		config["navigator.language"] = parsed.asString;
 		if (parsed.script) config["locale:script"] = parsed.script;
+		// The Windows voice list is the display language's pack, so the voices
+		// are drawn again for the locale, as launchOptions() draws them after
+		// resolving its own.
+		try {
+			config.voices = generateRandomVoiceSubset(
+				targetOsFromPlatform(pyStr(get(config, "navigator.platform", ""))),
+				parsed.asString,
+				identitySeed(config, identitySalt()),
+			);
+		} catch (e) {
+			if (!isPyError(e, "OSError", "ValueError", "KeyError")) throw e;
+			FallbackWarning.warn(
+				"Drawing the speech voices",
+				"the locale-blind draw",
+				e,
+				config["navigator.userAgent"],
+			);
+		}
 	}
 
 	if (config_overrides) {
@@ -1861,6 +1947,16 @@ export function generateContextFingerprint({
 		fontList: config.fonts,
 		speechVoices: config.voices,
 		webrtcIP: webrtc_ip || "",
+		// Every webGl:* / webGl2:* table; the GPU's names go through their own
+		// setters above.
+		webglConfig: Object.fromEntries(
+			Object.entries(config).filter(
+				([key]) =>
+					(key.startsWith("webGl:") || key.startsWith("webGl2:")) &&
+					key !== "webGl:vendor" &&
+					key !== "webGl:renderer",
+			),
+		),
 	};
 	const initScript = buildInitScript(initValues);
 

@@ -1,13 +1,14 @@
 diff --git a/dom/base/SpeechVoicesManager.cpp b/dom/base/SpeechVoicesManager.cpp
 new file mode 100644
-index 0000000000..d4d522e89e
+index 0000000000..2356b7ca17
 --- /dev/null
 +++ b/dom/base/SpeechVoicesManager.cpp
-@@ -0,0 +1,85 @@
+@@ -0,0 +1,110 @@
 +/* Camoufox: Per-context speech voices manager */
 +#include "SpeechVoicesManager.h"
 +
 +#include "mozilla/Mutex.h"
++#include "MaskConfig.hpp"
 +
 +namespace mozilla {
 +namespace dom {
@@ -16,7 +17,7 @@ index 0000000000..d4d522e89e
 +// a context's documents land in any content process, and only the first one
 +// calls the setter. This is each process's parsed copy.
 +static mozilla::Mutex sVoicesMutex("SpeechVoicesManager");
-+static nsTHashMap<nsUint32HashKey, nsTHashSet<nsString>> sVoicesMap;
++static nsTHashMap<nsUint32HashKey, nsTArray<nsString>> sVoicesMap;
 +
 +static nsString VoiceListKey(uint32_t aId) {
 +  nsAutoString key;
@@ -24,26 +25,27 @@ index 0000000000..d4d522e89e
 +  return key;
 +}
 +
-+static nsTHashSet<nsString> ParseVoices(const nsAString& aVoiceList) {
-+  nsTHashSet<nsString> voiceSet;
-+  // Parse comma-separated voice names
++static nsTArray<nsString> ParseVoices(const nsAString& aVoiceList) {
++  nsTArray<nsString> voices;
++  // One name per line: Windows voice names hold commas ("Microsoft Hanhan -
++  // Chinese (Traditional, Taiwan)").
 +  nsAutoString remaining(aVoiceList);
 +  while (!remaining.IsEmpty()) {
-+    int32_t comma = remaining.FindChar(',');
++    int32_t newline = remaining.FindChar('\n');
 +    nsAutoString name;
-+    if (comma >= 0) {
-+      name = Substring(remaining, 0, comma);
-+      remaining = Substring(remaining, comma + 1);
++    if (newline >= 0) {
++      name = Substring(remaining, 0, newline);
++      remaining = Substring(remaining, newline + 1);
 +    } else {
 +      name = remaining;
 +      remaining.Truncate();
 +    }
 +    name.Trim(" \t");
-+    if (!name.IsEmpty()) {
-+      voiceSet.Insert(name);
++    if (!name.IsEmpty() && !voices.Contains(name)) {
++      voices.AppendElement(name);
 +    }
 +  }
-+  return voiceSet;
++  return voices;
 +}
 +
 +void SpeechVoicesManager::SetVoices(uint32_t aUserContextId,
@@ -67,15 +69,38 @@ index 0000000000..d4d522e89e
 +  return true;
 +}
 +
-+bool SpeechVoicesManager::HasVoices(uint32_t aUserContextId) {
-+  return EnsureVoices(aUserContextId);
++// The URIs of the launch's own voices while the registry also holds the
++// voices of "voices:pool" (voice-spoofing.patch), which only a context that
++// lists them sees. Nothing without a pool.
++static const std::optional<nsTHashSet<nsString>>& LaunchVoices() {
++  static const std::optional<nsTHashSet<nsString>> sLaunch =
++      []() -> std::optional<nsTHashSet<nsString>> {
++    auto voices = MaskConfig::MVoices();
++    if (!voices || !MaskConfig::MVoices("voices:pool")) return std::nullopt;
++    nsTHashSet<nsString> uris;
++    for (const auto& voice : *voices) {
++      uris.Insert(NS_ConvertUTF8toUTF16(std::get<2>(voice)));
++    }
++    return uris;
++  }();
++  return sLaunch;
 +}
 +
-+bool SpeechVoicesManager::IsVoiceAllowed(uint32_t aUserContextId,
-+                                          const nsAString& aVoiceName) {
-+  if (!EnsureVoices(aUserContextId)) return true;
++bool SpeechVoicesManager::ScopesVoices(uint32_t aUserContextId) {
++  return LaunchVoices() || EnsureVoices(aUserContextId);
++}
++
++int32_t SpeechVoicesManager::VoiceIndex(uint32_t aUserContextId,
++                                        const nsAString& aVoiceName,
++                                        const nsAString& aVoiceUri) {
++  if (!EnsureVoices(aUserContextId)) {
++    const auto& launch = LaunchVoices();
++    return !launch || launch->Contains(aVoiceUri) ? INT32_MAX : -1;
++  }
 +  MutexAutoLock lock(sVoicesMutex);
-+  return sVoicesMap.Lookup(aUserContextId).Data().Contains(nsString(aVoiceName));
++  const size_t index =
++      sVoicesMap.Lookup(aUserContextId).Data().IndexOf(aVoiceName);
++  return index == nsTArray<nsString>::NoIndex ? -1 : int32_t(index);
 +}
 +
 +void SpeechVoicesManager::DisableFunction(uint32_t aId) {
@@ -91,10 +116,10 @@ index 0000000000..d4d522e89e
 +}  // namespace mozilla
 diff --git a/dom/base/SpeechVoicesManager.h b/dom/base/SpeechVoicesManager.h
 new file mode 100644
-index 0000000000..90e1ca117c
+index 0000000000..4e0ac4fa39
 --- /dev/null
 +++ b/dom/base/SpeechVoicesManager.h
-@@ -0,0 +1,27 @@
+@@ -0,0 +1,35 @@
 +/* Camoufox: Per-context speech voices manager */
 +#ifndef mozilla_dom_SpeechVoicesManager_h
 +#define mozilla_dom_SpeechVoicesManager_h
@@ -102,6 +127,7 @@ index 0000000000..90e1ca117c
 +#include "nsString.h"
 +#include "nsTHashMap.h"
 +#include "nsHashKeys.h"
++#include "nsTArray.h"
 +#include "nsTHashSet.h"
 +#include "RoverfoxStorageManager.h"
 +
@@ -111,9 +137,16 @@ index 0000000000..90e1ca117c
 +class SpeechVoicesManager {
 + public:
 +  static void SetVoices(uint32_t aUserContextId, const nsAString& aVoiceList);
-+  static bool HasVoices(uint32_t aUserContextId);
-+  static bool IsVoiceAllowed(uint32_t aUserContextId,
-+                              const nsAString& aVoiceName);
++  // Whether pages of the context see only some of the registered voices: it
++  // has its own list, or the launch registered a pool only listing contexts
++  // see.
++  static bool ScopesVoices(uint32_t aUserContextId);
++  // The voice's place among those the context's pages see: its index in the
++  // context's list, INT32_MAX for a launch voice in a context without one,
++  // and -1 for a voice they do not see.
++  static int32_t VoiceIndex(uint32_t aUserContextId,
++                            const nsAString& aVoiceName,
++                            const nsAString& aVoiceUri);
 +  static void DisableFunction(uint32_t aId);
 +  static bool IsFunctionEnabledForWebIDL(JSContext* aCx, JSObject* aObj);
 +};
@@ -123,10 +156,10 @@ index 0000000000..90e1ca117c
 +
 +#endif  // mozilla_dom_SpeechVoicesManager_h
 diff --git a/dom/base/moz.build b/dom/base/moz.build
-index 926cadf3dc..c1b1fbf7e6 100644
+index 704f103e9c..d5a7f1e0df 100644
 --- a/dom/base/moz.build
 +++ b/dom/base/moz.build
-@@ -577,6 +577,14 @@ EXPORTS.mozilla.dom += [
+@@ -572,6 +572,14 @@ EXPORTS.mozilla.dom += [
      "FontListManager.h",
  ]
  
@@ -142,7 +175,7 @@ index 926cadf3dc..c1b1fbf7e6 100644
  # CharacterDataBuffer.cpp
  if CONFIG["INTEL_ARCHITECTURE"]:
 diff --git a/dom/base/nsGlobalWindowInner.cpp b/dom/base/nsGlobalWindowInner.cpp
-index 25f413db16..56d4c9500f 100644
+index ead9b34ff9..33d540a0a8 100644
 --- a/dom/base/nsGlobalWindowInner.cpp
 +++ b/dom/base/nsGlobalWindowInner.cpp
 @@ -19,6 +19,7 @@
@@ -153,7 +186,7 @@ index 25f413db16..56d4c9500f 100644
  #include "MainThreadUtils.h"
  #include "Navigator.h"
  #include "PaintWorkletImpl.h"
-@@ -7864,6 +7865,14 @@ void nsGlobalWindowInner::SetScreenColorDepth(uint32_t depth,
+@@ -7857,6 +7858,14 @@ void nsGlobalWindowInner::SetScreenColorDepth(uint32_t depth,
    RoverfoxStorageManager::RemoveSetter("setScreenColorDepth");
  }
  
@@ -169,10 +202,10 @@ index 25f413db16..56d4c9500f 100644
      bool aGranted) {
    // Invalidate cached StorageAllowed field so that calls to GetLocalStorage
 diff --git a/dom/base/nsGlobalWindowInner.h b/dom/base/nsGlobalWindowInner.h
-index ff8c14d011..d6826ed802 100644
+index b82745159b..99a2454ae2 100644
 --- a/dom/base/nsGlobalWindowInner.h
 +++ b/dom/base/nsGlobalWindowInner.h
-@@ -709,6 +709,9 @@ class nsGlobalWindowInner final : public mozilla::dom::EventTarget,
+@@ -710,6 +710,9 @@ class nsGlobalWindowInner final : public mozilla::dom::EventTarget,
                             mozilla::ErrorResult& aRv);
    void SetScreenColorDepth(uint32_t depth, mozilla::ErrorResult& aRv);
  
@@ -183,7 +216,7 @@ index ff8c14d011..d6826ed802 100644
    void Alert(nsIPrincipal& aSubjectPrincipal, mozilla::ErrorResult& aError);
    void Alert(const nsAString& aMessage, nsIPrincipal& aSubjectPrincipal,
 diff --git a/dom/media/webspeech/synth/SpeechSynthesis.cpp b/dom/media/webspeech/synth/SpeechSynthesis.cpp
-index e6ce729415..0e142e7971 100644
+index e6ce729415..f965ae9829 100644
 --- a/dom/media/webspeech/synth/SpeechSynthesis.cpp
 +++ b/dom/media/webspeech/synth/SpeechSynthesis.cpp
 @@ -12,6 +12,7 @@
@@ -194,49 +227,298 @@ index e6ce729415..0e142e7971 100644
  #include "nsIDocShell.h"
  #include "nsISupportsPrimitives.h"
  #include "nsPIDOMWindowInlines.h"
-@@ -236,6 +237,9 @@ void SpeechSynthesis::OnEnd(const nsSpeechTask* aTask) {
+@@ -101,7 +102,52 @@ bool SpeechSynthesis::HasEmptyQueue() const {
+   return mSpeechQueue.Length() == 0;
+ }
+ 
++// The URIs of the registered voices the window's pages see, in the order
++// getVoices() reports them: the registry's, or the context's own
++// (SpeechVoicesManager).
++static void VisibleVoiceUris(nsPIDOMWindowInner* aWindow,
++                             nsTArray<nsString>& aUris) {
++  nsSynthVoiceRegistry* registry = nsSynthVoiceRegistry::GetInstance();
++  uint32_t voiceCount = 0;
++  if (NS_WARN_IF(NS_FAILED(registry->GetVoiceCount(&voiceCount)))) {
++    return;
++  }
++
++  const uint32_t userContextId = RoverfoxStorageManager::UserContextId(aWindow);
++  nsTArray<std::pair<int32_t, nsString>> voices;
++  for (uint32_t i = 0; i < voiceCount; i++) {
++    nsAutoString uri;
++    if (NS_FAILED(registry->GetVoice(i, uri))) {
++      NS_WARNING("Failed to retrieve voice from registry");
++      continue;
++    }
++
++    nsAutoString name;
++    registry->GetVoiceName(uri, name);
++    const int32_t index =
++        SpeechVoicesManager::VoiceIndex(userContextId, name, uri);
++    if (index >= 0) {
++      voices.AppendElement(std::make_pair(index, nsString(uri)));
++    }
++  }
++
++  voices.StableSort([](const auto& aLeft, const auto& aRight) {
++    return aLeft.first < aRight.first ? -1 : aLeft.first > aRight.first;
++  });
++  for (const auto& voice : voices) {
++    aUris.AppendElement(voice.second);
++  }
++}
++
+ bool SpeechSynthesis::HasVoices() const {
++  // A context that sees only some voices has voices when it sees one.
++  if (SpeechVoicesManager::ScopesVoices(
++          RoverfoxStorageManager::UserContextId(GetOwnerWindow()))) {
++    nsTArray<nsString> uris;
++    VisibleVoiceUris(GetOwnerWindow(), uris);
++    return !uris.IsEmpty();
++  }
++
+   uint32_t voiceCount = mVoiceCache.Count();
+   if (voiceCount == 0) {
+     nsresult rv =
+@@ -167,8 +213,20 @@ void SpeechSynthesis::AdvanceQueue() {
+     }
+   }
+ 
+-  mCurrentTask =
+-      nsSynthVoiceRegistry::GetInstance()->SpeakUtterance(*utterance, docLang);
++  // A context that sees only some voices speaks only with those.
++  Maybe<nsTHashSet<nsString>> only;
++  if (SpeechVoicesManager::ScopesVoices(
++          RoverfoxStorageManager::UserContextId(window))) {
++    nsTArray<nsString> uris;
++    VisibleVoiceUris(window, uris);
++    only.emplace();
++    for (const nsString& uri : uris) {
++      only->Insert(uri);
++    }
++  }
++
++  mCurrentTask = nsSynthVoiceRegistry::GetInstance()->SpeakUtterance(
++      *utterance, docLang, only.ptrOr(nullptr));
+ 
+   if (mCurrentTask) {
+     mCurrentTask->SetSpeechSynthesis(this);
+@@ -236,7 +294,6 @@ void SpeechSynthesis::OnEnd(const nsSpeechTask* aTask) {
  void SpeechSynthesis::GetVoices(
      nsTArray<RefPtr<SpeechSynthesisVoice> >& aResult) {
    aResult.Clear();
-+  // Per-context speech voice filtering
-+  const uint32_t speechVoiceCtxId =
-+      RoverfoxStorageManager::UserContextId(GetOwnerWindow());
-   uint32_t voiceCount = 0;
+-  uint32_t voiceCount = 0;
    nsCOMPtr<nsPIDOMWindowInner> window = GetOwnerWindow();
    nsCOMPtr<nsIDocShell> docShell = window ? window->GetDocShell() : nullptr;
-@@ -261,6 +265,16 @@ void SpeechSynthesis::GetVoices(
-       continue;
-     }
  
-+    // Per-context voice filtering: skip voices not in allowed list
-+    if (mozilla::dom::SpeechVoicesManager::HasVoices(speechVoiceCtxId)) {
-+      nsAutoString voiceName;
-+      nsSynthVoiceRegistry::GetInstance()->GetVoiceName(uri, voiceName);
-+      if (!mozilla::dom::SpeechVoicesManager::IsVoiceAllowed(
-+              speechVoiceCtxId, voiceName)) {
-+        continue;
-+      }
-+    }
-+
+@@ -245,22 +302,12 @@ void SpeechSynthesis::GetVoices(
+     return;
+   }
+ 
+-  nsresult rv = nsSynthVoiceRegistry::GetInstance()->GetVoiceCount(&voiceCount);
+-  if (NS_WARN_IF(NS_FAILED(rv))) {
+-    return;
+-  }
++  nsTArray<nsString> uris;
++  VisibleVoiceUris(window, uris);
+ 
+   nsISupports* voiceParent = NS_ISUPPORTS_CAST(nsIObserver*, this);
+ 
+-  for (uint32_t i = 0; i < voiceCount; i++) {
+-    nsAutoString uri;
+-    rv = nsSynthVoiceRegistry::GetInstance()->GetVoice(i, uri);
+-
+-    if (NS_FAILED(rv)) {
+-      NS_WARNING("Failed to retrieve voice from registry");
+-      continue;
+-    }
+-
++  for (const nsString& uri : uris) {
      SpeechSynthesisVoice* voice = mVoiceCache.GetWeak(uri);
  
      if (!voice) {
 diff --git a/dom/media/webspeech/synth/moz.build b/dom/media/webspeech/synth/moz.build
-index e1bf345159..ca6ffacb21 100644
+index 3f29c33c79..bcec423f08 100644
 --- a/dom/media/webspeech/synth/moz.build
 +++ b/dom/media/webspeech/synth/moz.build
-@@ -59,5 +59,6 @@ include("/ipc/chromium/chromium-config.mozbuild")
+@@ -58,5 +58,6 @@ include("/ipc/chromium/chromium-config.mozbuild")
  
  FINAL_LIBRARY = "xul"
  LOCAL_INCLUDES += [
 +    "/dom/base",
      "ipc",
  ]
+diff --git a/dom/media/webspeech/synth/nsSynthVoiceRegistry.cpp b/dom/media/webspeech/synth/nsSynthVoiceRegistry.cpp
+index e046255242..41ef9f96c9 100644
+--- a/dom/media/webspeech/synth/nsSynthVoiceRegistry.cpp
++++ b/dom/media/webspeech/synth/nsSynthVoiceRegistry.cpp
+@@ -530,8 +530,13 @@ nsresult nsSynthVoiceRegistry::AddVoiceImpl(
+   return NS_OK;
+ }
+ 
+-bool nsSynthVoiceRegistry::FindVoiceByLang(const nsAString& aLang,
+-                                           VoiceData** aRetval) {
++// A URI no voice has, which SpeakUtterance sends for a page none of whose
++// voices matched.
++static constexpr auto kNoVoiceUri = u"\n"_ns;
++
++bool nsSynthVoiceRegistry::FindVoiceByLang(
++    const nsAString& aLang, VoiceData** aRetval,
++    const nsTHashSet<nsString>* aOnly) {
+   nsAString::const_iterator dashPos, start, end;
+   aLang.BeginReading(start);
+   aLang.EndReading(end);
+@@ -542,6 +547,10 @@ bool nsSynthVoiceRegistry::FindVoiceByLang(const nsAString& aLang,
+     for (int32_t i = mDefaultVoices.Length(); i > 0;) {
+       VoiceData* voice = mDefaultVoices[--i];
+ 
++      if (aOnly && !aOnly->Contains(voice->mUri)) {
++        continue;
++      }
++
+       if (StringBeginsWith(voice->mLang, langPrefix)) {
+         *aRetval = voice;
+         return true;
+@@ -551,6 +560,10 @@ bool nsSynthVoiceRegistry::FindVoiceByLang(const nsAString& aLang,
+     for (int32_t i = mVoices.Length(); i > 0;) {
+       VoiceData* voice = mVoices[--i];
+ 
++      if (aOnly && !aOnly->Contains(voice->mUri)) {
++        continue;
++      }
++
+       if (StringBeginsWith(voice->mLang, langPrefix)) {
+         *aRetval = voice;
+         return true;
+@@ -568,23 +581,24 @@ bool nsSynthVoiceRegistry::FindVoiceByLang(const nsAString& aLang,
+   return false;
+ }
+ 
+-VoiceData* nsSynthVoiceRegistry::FindBestMatch(const nsAString& aUri,
+-                                               const nsAString& aLang) {
+-  if (mVoices.IsEmpty()) {
++VoiceData* nsSynthVoiceRegistry::FindBestMatch(
++    const nsAString& aUri, const nsAString& aLang,
++    const nsTHashSet<nsString>* aOnly) {
++  if (mVoices.IsEmpty() || aUri.Equals(kNoVoiceUri)) {
+     return nullptr;
+   }
+ 
+   bool found = false;
+   VoiceData* retval = mUriVoiceMap.GetWeak(aUri, &found);
+ 
+-  if (found) {
++  if (found && (!aOnly || aOnly->Contains(aUri))) {
+     LOG(LogLevel::Debug, ("nsSynthVoiceRegistry::FindBestMatch - Matched URI"));
+     return retval;
+   }
+ 
+   // Try finding a match for given voice.
+   if (!aLang.IsVoid() && !aLang.IsEmpty()) {
+-    if (FindVoiceByLang(aLang, &retval)) {
++    if (FindVoiceByLang(aLang, &retval, aOnly)) {
+       LOG(LogLevel::Debug,
+           ("nsSynthVoiceRegistry::FindBestMatch - Matched language ({} ~= {})",
+            NS_ConvertUTF16toUTF8(aLang).get(),
+@@ -598,7 +612,7 @@ VoiceData* nsSynthVoiceRegistry::FindBestMatch(const nsAString& aUri,
+   nsAutoCString uiLang;
+   LocaleService::GetInstance()->GetAppLocaleAsBCP47(uiLang);
+ 
+-  if (FindVoiceByLang(NS_ConvertASCIItoUTF16(uiLang), &retval)) {
++  if (FindVoiceByLang(NS_ConvertASCIItoUTF16(uiLang), &retval, aOnly)) {
+     LOG(LogLevel::Debug,
+         ("nsSynthVoiceRegistry::FindBestMatch - Matched UI language ({} ~= {})",
+          uiLang.get(), NS_ConvertUTF16toUTF8(retval->mLang).get()));
+@@ -607,7 +621,7 @@ VoiceData* nsSynthVoiceRegistry::FindBestMatch(const nsAString& aUri,
+   }
+ 
+   // Try en-US, the language of locale "C"
+-  if (FindVoiceByLang(u"en-US"_ns, &retval)) {
++  if (FindVoiceByLang(u"en-US"_ns, &retval, aOnly)) {
+     LOG(LogLevel::Debug, ("nsSynthVoiceRegistry::FindBestMatch - Matched C "
+                           "locale language (en-US ~= {})",
+                           NS_ConvertUTF16toUTF8(retval->mLang).get()));
+@@ -616,15 +630,19 @@ VoiceData* nsSynthVoiceRegistry::FindBestMatch(const nsAString& aUri,
+   }
+ 
+   // The top default voice is better than nothing...
+-  if (!mDefaultVoices.IsEmpty()) {
+-    return mDefaultVoices.LastElement();
++  for (int32_t i = mDefaultVoices.Length(); i > 0;) {
++    VoiceData* voice = mDefaultVoices[--i];
++    if (!aOnly || aOnly->Contains(voice->mUri)) {
++      return voice;
++    }
+   }
+ 
+   return nullptr;
+ }
+ 
+ already_AddRefed<nsSpeechTask> nsSynthVoiceRegistry::SpeakUtterance(
+-    SpeechSynthesisUtterance& aUtterance, const nsAString& aDocLang) {
++    SpeechSynthesisUtterance& aUtterance, const nsAString& aDocLang,
++    const nsTHashSet<nsString>* aOnly) {
+   nsString lang =
+       nsString(aUtterance.mLang.IsEmpty() ? aDocLang : aUtterance.mLang);
+   nsAutoString uri;
+@@ -633,6 +651,14 @@ already_AddRefed<nsSpeechTask> nsSynthVoiceRegistry::SpeakUtterance(
+     aUtterance.mVoice->GetVoiceURI(uri);
+   }
+ 
++  // A page whose context sees only some voices is matched here, among those,
++  // with this process's UI language: its context's (zzz-context-locale.patch).
++  // The parent then speaks the voice by its URI, or errors as with no voices.
++  if (aOnly) {
++    VoiceData* voice = FindBestMatch(uri, lang, aOnly);
++    uri = voice ? voice->mUri : nsString(kNoVoiceUri);
++  }
++
+   // Get current audio volume to apply speech call
+   float volume = aUtterance.Volume();
+   RefPtr<AudioChannelService> service = AudioChannelService::GetOrCreate();
+diff --git a/dom/media/webspeech/synth/nsSynthVoiceRegistry.h b/dom/media/webspeech/synth/nsSynthVoiceRegistry.h
+index 6605d69e96..89c0ceea00 100644
+--- a/dom/media/webspeech/synth/nsSynthVoiceRegistry.h
++++ b/dom/media/webspeech/synth/nsSynthVoiceRegistry.h
+@@ -8,6 +8,7 @@
+ #include "nsISynthVoiceRegistry.h"
+ #include "nsRefPtrHashtable.h"
+ #include "nsTArray.h"
++#include "nsTHashSet.h"
+ 
+ class nsISpeechService;
+ 
+@@ -28,8 +29,10 @@ class nsSynthVoiceRegistry final : public nsISynthVoiceRegistry {
+ 
+   nsSynthVoiceRegistry();
+ 
++  // With aOnly, the utterance speaks with one of those voices or none.
+   already_AddRefed<nsSpeechTask> SpeakUtterance(
+-      SpeechSynthesisUtterance& aUtterance, const nsAString& aDocLang);
++      SpeechSynthesisUtterance& aUtterance, const nsAString& aDocLang,
++      const nsTHashSet<nsString>* aOnly = nullptr);
+ 
+   void Speak(const nsAString& aText, const nsAString& aLang,
+              const nsAString& aUri, const float& aVolume, const float& aRate,
+@@ -68,9 +71,11 @@ class nsSynthVoiceRegistry final : public nsISynthVoiceRegistry {
+  private:
+   virtual ~nsSynthVoiceRegistry();
+ 
+-  VoiceData* FindBestMatch(const nsAString& aUri, const nsAString& lang);
++  VoiceData* FindBestMatch(const nsAString& aUri, const nsAString& lang,
++                           const nsTHashSet<nsString>* aOnly = nullptr);
+ 
+-  bool FindVoiceByLang(const nsAString& aLang, VoiceData** aRetval);
++  bool FindVoiceByLang(const nsAString& aLang, VoiceData** aRetval,
++                       const nsTHashSet<nsString>* aOnly = nullptr);
+ 
+   nsresult AddVoiceImpl(nsISpeechService* aService, const nsAString& aUri,
+                         const nsAString& aName, const nsAString& aLang,
 diff --git a/dom/webidl/Window.webidl b/dom/webidl/Window.webidl
-index c4cb127e83..e4db344794 100644
+index 243a69f40b..2c19f5899b 100644
 --- a/dom/webidl/Window.webidl
 +++ b/dom/webidl/Window.webidl
-@@ -949,6 +949,12 @@ partial interface Window {
+@@ -947,6 +947,12 @@ partial interface Window {
    undefined setFontList(DOMString fontList);
  };
  

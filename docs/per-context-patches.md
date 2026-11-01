@@ -27,8 +27,9 @@ for the calling window's context, and is gone before any page script runs
 | `setWebRTCIPv6(ip)` | `webrtc-ip-spoofing.patch` | The same, for IPv6 |
 | `setWebGLVendor(vendor)` | `webgl-spoofing.patch` | `UNMASKED_VENDOR_WEBGL` |
 | `setWebGLRenderer(renderer)` | `webgl-spoofing.patch` | `UNMASKED_RENDERER_WEBGL` |
+| `setWebGLConfig(json)` | `webgl-spoofing.patch` | The GPU's limits, extensions and shader precisions: a JSON object of the `webGl:*` and `webGl2:*` config keys, which replaces the launch's tables for the context (`{}`: the real context's values) |
 | `setFontList(fonts)` | `font-list-spoofing.patch` | Which fonts exist (comma-separated, case-insensitive) |
-| `setSpeechVoices(voices)` | `speech-voices-spoofing.patch` | `speechSynthesis.getVoices()` (comma-separated names) |
+| `setSpeechVoices(voices)` | `speech-voices-spoofing.patch` | `speechSynthesis.getVoices()` (one name per line: Windows names hold commas) |
 
 Supporting patches, with no setter of their own:
 
@@ -103,8 +104,8 @@ update it sends each content process is queued ahead of any later document
 load there, so a document never needs it. Asking the parent cost the first
 read of each unset key 16-54 ms, which a page can time.
 
-Getters a page can call in a loop (navigator, screen, timezone, WebGL vendor
-and renderer) read through `GetUint`, `GetBool` and `GetString`
+Getters a page can call in a loop (navigator, screen, timezone, WebGL vendor,
+renderer and tables) read through `GetUint`, `GetBool` and `GetString`
 taking a prefix literal and the id (`"nav_hwc_", id`). Each thread memoizes
 those answers, keyed by prefix and id, until any write in the process bumps a
 generation counter, so a repeat read builds no key and takes no lock and costs
@@ -179,10 +180,10 @@ Nothing stores a fallback copy under context 0.
 | `navigator-spoofing.patch` | `Navigator::GetPlatform`, `GetOscpu`, `HardwareConcurrency`, `GetUserAgent`, `GetAppVersion`; the `WorkerNavigator` versions of platform, cores, UA and appVersion | Falls back to `navigator.*` in `CAMOU_CONFIG`. |
 | `zzz-context-locale.patch` | `BrowsingContext::DidSet(LanguageOverride)`, worker request channels, `RemoteWorkerChild`, content-process app locales and chrome, `JS::RealmBehaviors::setLocaleOverride` | Stores a context locale for service workers and worker requests, makes the context's process default locale follow it, expands its language list, and selects its chrome and built-in strings. A context given a language list ("de, en-US, en") takes its first entry as the locale wherever one is read, realm overrides included, and negotiates the built-in strings from the whole list. The launch locale remains the fallback. |
 | `webrtc-ip-spoofing.patch` | `SanitizeSDPForIPLeak`, `CandidateReady`, candidate `.address`/`.relatedAddress`, `getStats()`, `UpdateDefaultCandidate`, `NrSocketBase::CreateSocket` | Forces `default_address_only` while spoofing; loopback, link-local and private addresses are left alone. UDP candidate ports come from the ephemeral range of the identity's OS (`MaskConfig::SpoofedEphemeralPorts()`), so a Windows identity on Linux never shows a Linux port. |
-| `webgl-spoofing.patch` | `ClientWebGLContext::GetParameter` | Per context: vendor and renderer. Global only (`CAMOU_CONFIG`): parameters, extensions, shader precision. Works from `OffscreenCanvas` in workers. |
+| `webgl-spoofing.patch` | `ClientWebGLContext::GetParameter`, `GetShaderPrecisionFormat`, `IsSupported`, `GetSupportedExtensions` | Per context: vendor, renderer, and that GPU's parameters, extensions and shader precisions, else `CAMOU_CONFIG`'s. A WebGL context parses its browsing context's tables once (shared per process) and indexes them as the launch config is indexed. Whether WebGL2 exists stays the launch's `webgl.enable-webgl2` pref. Works from `OffscreenCanvas` in workers. |
 | `font-list-spoofing.patch` | `gfxPlatformFontList::FindAndAddFamiliesLocked` | A thread-local context id, set by an RAII guard in `FontFaceSet::Check/Load` and `gfxFontGroup::EnsureFontList`, avoids changing ~50 signatures. The list is in the shared store, so it holds in every content process. An `OffscreenCanvas` in a worker takes the worker's context (`anti-font-fingerprinting.patch`); other worker lookups are not filtered. |
 | `fontconfig-memo-per-context.patch` | `gfxFcPlatformFontList::FindAndAddFamiliesLocked`, `FindGenericFamilies` | Linux only. fontconfig's family-name memos sit in front of the font-list gate, so they are keyed by context and dropped whenever a list is installed in the process; otherwise the first context to resolve a family answered for every context sharing the process. |
-| `speech-voices-spoofing.patch` | `SpeechSynthesis::GetVoices` | Filters the real list by name; a listed voice that is not installed is left out. |
+| `speech-voices-spoofing.patch` | `SpeechSynthesis::GetVoices`, `HasVoices`, `AdvanceQueue`; `nsSynthVoiceRegistry::SpeakUtterance`, `FindBestMatch` | Shows the registered voices the context lists, in its order. The launch registers its own voices and, as `voices:pool`, every voice of the manifests (`voice-spoofing.patch`); a page of a context without a list sees only the launch's. An utterance is matched in the page's process among the voices its page sees, with that process's UI language (the context's), and the parent speaks that voice by URI or errors as with no voices, so no page speaks with a voice it cannot list. |
 
 Global-only patches (no setter) read `CAMOU_CONFIG` at startup:
 
@@ -221,9 +222,9 @@ The User-Agent's version is rewritten to the running browser's.
 |---|---|
 | UA, platform, cores, oscpu | fpgen or the preset; UA version set to the browser's |
 | Screen, color depth | fpgen or the preset |
-| WebGL | One GPU fpgen recorded for Firefox on that OS, weighted by its share and checked against the machine (`coherence.gpu_fits_machine()`); `webgl_for_gpu()` adds its parameters, extensions and shader precisions |
+| WebGL | `webgl_config`, the preset's GPU, or one fpgen recorded for Firefox on that OS, weighted by its share and checked against the machine (`coherence.gpu_fits_machine()`); `webgl_for_gpu()` adds its parameters, extensions and shader precisions, which reach the context through `setWebGLConfig` |
 | Fonts | `_generate_random_font_subset()`: one OS-version base plus measured additions ([FONTS.md](FONTS.md)); never from presets |
-| Voices | `_generate_random_voice_subset()`, from `voice-manifests.json`, seeded by the identity; never from presets |
+| Voices | `_generate_random_voice_subset()`, from `voice-manifests.json`, seeded by the identity and drawn for the context's locale; never from presets. The launch passes every voice of the manifests as `voices:pool`, so any draw is registered |
 | Timezone | The preset, or `timezone` in `CAMOU_CONFIG` (from geoip); with a proxy, `NewContext` looks it up from the exit IP |
 | WebRTC IP | `NewContext`'s `webrtc_ip` or the proxy's exit IP, to the IPv4 or IPv6 setter; an invalid address raises `InvalidIP` |
 | Geolocation | The `geolocation` argument, via Playwright |

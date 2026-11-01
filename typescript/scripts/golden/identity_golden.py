@@ -717,6 +717,10 @@ def record_init_script():
          'speechVoices': [], 'timezone': ''},
         {'navigatorUserAgent': 'emoji 😀   \x7f tab\t', 'hardwareConcurrency': None},
         {'webrtcIP': '2001:db8::7'},
+        {'webglConfig': {'webGl:parameters': {'3379': 16384, '10': 'é', '2': True, '33902': [1, 7.5]},
+                         'webGl:supportedExtensions': ['OES_a', 'EXT_b'],
+                         'webGl2:shaderPrecisionFormats': {'35633,36338': {'rangeMin': 127, 'precision': 23}}}},
+        {'webglConfig': {}},
     ]
     out = [{'values': v, 'script': fp._build_init_script(v)} for v in cases]
     write('init-script.json', {'cases': out}, compress=False)

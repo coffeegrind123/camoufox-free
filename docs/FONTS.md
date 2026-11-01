@@ -71,7 +71,12 @@ fonts actually available. What differs is how they are gated:
   `utils._generate_fontconfig` reads it at launch and hands fontconfig one
   `<dir>` per group the claimed OS reads. The parent is never named, because
   fontconfig scans `<dir>` **recursively** — naming it would put every other
-  OS's faces on the search path.
+  OS's faces on the search path. The browser holds the same line:
+  `gfxFcPlatformFontList::ActivateBundledFonts` adds only the files directly in
+  `fonts/` (Firefox's own), never the directory
+  (`linux-bundled-fonts-toplevel.patch`). Firefox added the directory, which made
+  a Linux identity's `Helvetica` draw Apple's face from `fonts/M/`
+  (`bundled-font-groups.py`).
 - **macOS and Windows packages** flatten the groups into one directory: CoreText
   and DirectWrite activate a single directory and cannot read subfolders. There
   is no directory gate on those hosts; the allowlist in

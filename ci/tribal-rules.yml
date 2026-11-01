@@ -257,6 +257,23 @@ rules:
       except_paths: ["python/pyproject.toml"]
       allowed_forms: ["-e ../../../python", "-e ./python", "-e python"]
 
+  - id: fc-activates-only-firefox-own-bundled-fonts
+    title: On Linux the browser activates only the files directly in fonts/; the groups come from the launcher's conf
+    check: automated
+    evidence:
+      - "lang315/camoufox#329: on a Linux host a Linux launch drew `fonts/M/27__Helvetica.ttc` for Helvetica, `fonts/M/69__Times.ttc` for Times and `fonts/M/0__arial.ttf` for Arial (CAMOU-FL face log), while `fc-match -s` against the generated FONTCONFIG_FILE listed only L and LW files"
+      - "bundled-font-groups.py on v158.0-beta.33-cg.9: a Linux identity's Helvetica differed from Nimbus Sans on 17 of 324 characters, Times from Nimbus Roman on 12, Courier from Nimbus Mono PS on 4"
+      - "gfxFcPlatformFontList.cpp ActivateBundledFonts() at FIREFOX_158_0_RELEASE called FcConfigAppFontAddDir on <GRE>/fonts, which fontconfig scans recursively"
+    rationale: >-
+      Which font groups an OS reads is decided in one place,
+      utils._generate_fontconfig, which hands fontconfig one <dir> per group
+      and never the fonts/ parent. Firefox's ActivateBundledFonts added the
+      parent as an application font directory, which put every group of every
+      OS on the search path regardless of that conf; the allowlist filters by
+      family name, not by origin, so any admitted name drew whatever group
+      carried it. linux-bundled-fonts-toplevel.patch adds only the files
+      directly in fonts/ (Firefox's own bundled faces).
+
   - id: ubo-lists-pinned-to-bundled
     title: uBlock Origin selects only the filter lists bundled with its release
     check: manual   # ci/tests/test_fetch_ubo.py
@@ -300,6 +317,20 @@ rules:
       on a plain utterance or ends the instant it starts. So the browser
       speaks it silently for as long as the text takes at ~150 words per
       minute. The two config keys that chose between the two tells are gone.
+
+  - id: context-voices-from-pool
+    title: A page lists and speaks with only the voices its context lists
+    check: automated
+    evidence:
+      - "introvert 4de36ca: a de-DE context in an en-US Windows launch listed no voices"
+      - "context-voice-pool.py: Firefox's FindBestMatch takes any registered voice by language, UI language, en-US, then default"
+    rationale: >-
+      Every voice a context may draw is registered (`voices:pool`), so the
+      registry holds voices most pages must not reach. A page's voices are the
+      launch's, or its context's list in its order, and an utterance is matched
+      among those alone in the page's process, with the context's UI language.
+      The parent speaks the chosen voice by URI, or errors as a machine with no
+      voices does.
 
   - id: no-glyph-spacing-noise
     title: Text is shaped exactly as stock Firefox shapes it; there is no spacing seed

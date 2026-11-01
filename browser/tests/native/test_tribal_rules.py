@@ -724,6 +724,15 @@ def test_spoofed_voices_complete_without_a_config_switch():
     )
 
 
+def test_a_page_speaks_only_with_voices_it_lists():
+    patch = (BROWSER / "patches" / "speech-voices-spoofing.patch").read_text(encoding="utf-8")
+    added = "\n".join(line for line in patch.splitlines() if line.startswith("+"))
+    assert "FindBestMatch(uri, lang, aOnly)" in added, explain("context-voices-from-pool")
+    assert "SpeakUtterance(\n+      *utterance, docLang, only.ptrOr(nullptr))" in patch, (
+        explain("context-voices-from-pool")
+    )
+
+
 def _live_properties() -> set:
     """Declared keys, less those marked removed (kept only for older libraries)."""
     return {
@@ -1017,3 +1026,14 @@ def test_juggler_is_not_a_chrome_package():
         if f.is_file() and "chrome://juggler" in f.read_text(encoding="utf-8", errors="replace")
     ]
     assert not referencing, f"{referencing}\n" + explain("juggler-is-not-a-chrome-package")
+
+
+def test_fc_activates_only_firefox_own_bundled_fonts():
+    """Rule: fc-activates-only-firefox-own-bundled-fonts."""
+    patch = (BROWSER / "patches" / "linux-bundled-fonts-toplevel.patch").read_text(encoding="utf-8")
+    added = [line for line in patch.splitlines() if line.startswith("+") and not line.startswith("+++")]
+    removed = [line for line in patch.splitlines() if line.startswith("-") and not line.startswith("---")]
+    why = explain("fc-activates-only-firefox-own-bundled-fonts")
+    assert any("FcConfigAppFontAddFile(" in line for line in added), why
+    assert not any("FcConfigAppFontAddDir(" in line for line in added), why
+    assert any("FcConfigAppFontAddDir(" in line for line in removed), why

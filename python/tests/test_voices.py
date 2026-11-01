@@ -191,3 +191,86 @@ def test_validate_voices_rejects_unusable_shapes(value):
 )
 def test_validate_voices_accepts_usable_shapes(value):
     validate_voices(value)
+
+
+def test_a_context_voice_list_keeps_names_that_hold_commas():
+    """setSpeechVoices gets one name per line: Windows names hold commas."""
+    import json
+    import re
+
+    from camoufox.fingerprints import _build_init_script
+
+    names = ["Microsoft Hanhan - Chinese (Traditional, Taiwan)", "Microsoft David - English (United States)"]
+    script = _build_init_script({"speechVoices": [{"name": n} for n in names]})
+    arg = re.search(r"w\.setSpeechVoices\((\".*?\")\);", script).group(1)
+    assert json.loads(arg).split("\n") == names
+
+
+# ── A context's voices (speech-voices-spoofing.patch) ────────────────────────
+#
+# A context's list only selects among the voices the browser registered. The
+# launch registers its own voices and, as `voices:pool`, every voice the
+# manifests hold for any OS a context may claim; a context draws its voices for
+# its own locale, as a launch does.
+
+
+def test_launch_registers_every_voice_a_context_can_draw():
+    from camoufox.fingerprints import generate_context_fingerprint
+
+    pool = {v["voiceUri"] for v in _launch_config(os="windows")["voices:pool"]}
+    for os in ("windows", "macos", "linux"):
+        for locale in ("de-DE", "fr-FR", "ja-JP", "en-GB"):
+            context = generate_context_fingerprint(os=os, locale=locale)
+            assert {v["voiceUri"] for v in context["config"]["voices"]} <= pool
+
+
+def test_voice_pool_entries_are_full_objects():
+    pool = _launch_config(os="macos")["voices:pool"]
+    assert pool
+    for v in pool:
+        assert _REQUIRED_FIELDS <= set(v.keys())
+        assert v["isDefault"] is False
+
+
+def test_caller_can_replace_the_voice_pool():
+    assert _launch_config(os="macos", config={"voices:pool": []})["voices:pool"] == []
+
+
+def test_context_voices_follow_its_locale():
+    # A German Windows reports the German OneCore pack first, as a launch
+    # with locale="de-DE" does.
+    from camoufox.fingerprints import generate_context_fingerprint
+
+    for _ in range(5):
+        voices = generate_context_fingerprint(os="windows", locale="de-DE")["config"]["voices"]
+        assert voices[0]["lang"] == "de-DE"
+
+
+def _new_context_script(api, **kwargs):
+    import asyncio
+    from unittest import mock
+
+    from camoufox import async_api, sync_api
+
+    context = mock.MagicMock()
+    browser = mock.MagicMock()
+    browser.version = "158.0"
+    if api == "sync":
+        browser.new_context.return_value = context
+        sync_api.NewContext(browser, **kwargs)
+    else:
+        context.add_init_script = mock.AsyncMock()
+        browser.new_context = mock.AsyncMock(return_value=context)
+        asyncio.run(async_api.AsyncNewContext(browser, **kwargs))
+    return browser.new_context.call_args.kwargs, context.add_init_script.call_args.args[0]
+
+
+@pytest.mark.parametrize("api", ["sync", "async"])
+@pytest.mark.parametrize("locale", ["de-DE", "de", "de, en-US, en"])
+def test_new_context_draws_voices_for_its_locale(api, locale):
+    # Playwright's locale is a tag or a language list whose first entry is the
+    # locale; either way the context lists a German Windows's voices, and
+    # Playwright gets the locale as given.
+    options, script = _new_context_script(api, os="windows", locale=locale)
+    assert options["locale"] == locale
+    assert "Microsoft Hedda - German (Germany)" in script
