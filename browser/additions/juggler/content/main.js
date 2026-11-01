@@ -57,7 +57,10 @@ export function initialize(browsingContext, docShell) {
           browsingContext.top.languageOverride = locale || "";
         }
       } catch (e) { /* fall through */ }
-      docShell.languageOverride = locale;
+      // ICU takes a locale: of a language list ("de, en-US, en"), the first
+      // entry. The browsing context above keeps the whole list for
+      // navigator.languages and Accept-Language.
+      docShell.languageOverride = locale && locale.split(',')[0].trim();
     },
 
     javaScriptDisabled: (javaScriptDisabled) => {

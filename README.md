@@ -130,6 +130,16 @@ For an identity whose OS is not the host's. Offered upstream in
   workers. Contexts now report the launch's value. Ported from introvert's
   [17e739f](https://github.com/introvert/camoufox/commit/17e739f9b2cf15d56742f2d196da636df13d1db6).
   ([test](python/tests/test_context_geometry.py))
+- **A context's language list keeps its first entry as the locale.** Given
+  Playwright's `locale="de, en-US, en"`, a context reported the list in
+  `navigator.languages` and Accept-Language, but every place that reads a
+  locale took the whole list: Intl fell back to en-GB in pages and workers, and
+  realm overrides read `de` for `de-DE, de, …`. The first entry is now the
+  locale wherever one is read, and built-in strings are negotiated from the
+  whole list. Ported from introvert's
+  [4e1dde8](https://github.com/introvert/camoufox/commit/4e1dde86f5cfd8eb24afedef189ac976fed8df75).
+  ([patch](browser/patches/zzz-context-locale.patch), guard
+  [context-locale-follows.py](browser/tests/playwright/patches/context-locale-follows.py))
 
 ### Kept here after upstream declined
 
