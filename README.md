@@ -94,8 +94,11 @@ For an identity whose OS is not the host's. Offered upstream in
   `window.innerWidth`/`innerHeight` no longer deadlocks viewport updates.
   Explicit `webgl_config` replaces a preset's GPU as one complete pair in both
   launchers. ([1fcfad6](https://github.com/coffeegrind123/camoufox-free/commit/1fcfad6245cf91797d80d3943903cbf46ec3b017), [6932314](https://github.com/coffeegrind123/camoufox-free/commit/6932314b3b76380af9ab4c714d069c02f9e7f2be))
-- **Corrupt font data fails closed.** A damaged `groups.json` refuses the launch
-  instead of widening the scan to every OS's fonts. Windows font-unit rates and
+- **Corrupt font data fails closed.** A damaged `groups.json`, or one whose
+  group directories are missing with no per-OS directory either, refuses the
+  launch instead of widening the scan to every OS's fonts (the missing-groups
+  case ported from lang315's
+  [2479033](https://github.com/lang315/camoufox/commit/24790332a7a442f988f28c3ca2331e2629273997)). Windows font-unit rates and
   essential-font aliases are regenerated from the pinned fpgen model.
 - **Launcher failures are bounded and explicit.** Transient downloads retry
   429/5xx/connection failures, and the host GPU probe has a 30-second deadline

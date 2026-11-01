@@ -23,7 +23,8 @@ def bundle(tmp_path, monkeypatch):
     (bin_dir / "fontconfig" / "linux" / "fonts.conf").write_text(
         '<?xml version="1.0"?><fontconfig><dir prefix="cwd">fonts</dir></fontconfig>'
     )
-    (bin_dir / "fonts").mkdir()
+    (bin_dir / "fonts" / "L").mkdir(parents=True)
+    (bin_dir / "fonts" / "groups.json").write_text('{"readBy": {"lin": ["L"]}}')
 
     def explode(*_args, **_kwargs):
         raise AssertionError("resolved against the managed install despite executable_path")
@@ -40,8 +41,10 @@ def test_fontconfig_comes_from_the_supplied_bundle(bundle, monkeypatch):
 
     generated = Path(env["FONTCONFIG_FILE"])
     assert generated.is_file()
-    # The bundled conf's cwd-relative <dir> is rewritten to this bundle's fonts.
-    assert str(bundle / "fonts") in generated.read_text()
+    # The bundled conf's cwd-relative <dir> is rewritten to this bundle's group
+    # directory, and the fonts/ parent is never named.
+    assert f"<dir>{bundle / 'fonts' / 'L'}</dir>" in generated.read_text()
+    assert f"<dir>{bundle / 'fonts'}</dir>" not in generated.read_text()
 
 
 def test_managed_install_is_used_when_no_path_is_given(tmp_path, monkeypatch):

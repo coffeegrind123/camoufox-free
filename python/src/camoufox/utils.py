@@ -241,7 +241,13 @@ def _generate_fontconfig(
         if os_dir and os.path.isdir(os.path.join(fonts_dir, os_dir)):
             scan_dirs = [os.path.join(fonts_dir, os_dir)]
         else:
-            scan_dirs = [fonts_dir]
+            # fontconfig scans a <dir> recursively: naming the parent would put
+            # every OS's faces on the search path.
+            raise FileNotFoundError(
+                f"No font directory for os {os_dir!r} in {fonts_dir}: groups.json is absent or none of "
+                f"its readBy directories exist, and there is no {os_dir}/ directory. "
+                f"The Camoufox bundle is incomplete."
+            )
 
     fonts_conf_src = os.path.join(fontconfig_path, "fonts.conf")
 

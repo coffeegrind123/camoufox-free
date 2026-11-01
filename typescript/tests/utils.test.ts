@@ -142,7 +142,7 @@ describe("the runtime fontconfig's font directories", () => {
 		}
 	});
 
-	const bundle = (groups: string | null) => {
+	const bundle = (groups: string | null, dirs = ["L", "LW", "M", "W", "windows"]) => {
 		const root = fs.mkdtempSync(path.join(os.tmpdir(), "camoufox-groups-"));
 		roots.push(root);
 		vi.spyOn(utilsDeps, "osName").mockReturnValue("lin");
@@ -154,7 +154,8 @@ describe("the runtime fontconfig's font directories", () => {
 			path.join(root, "fontconfig", "windows", "fonts.conf"),
 			'<fontconfig><dir prefix="cwd">fonts</dir></fontconfig>',
 		);
-		for (const group of ["L", "LW", "M", "W", "windows"]) {
+		fs.mkdirSync(path.join(root, "fonts"), { recursive: true });
+		for (const group of dirs) {
 			fs.mkdirSync(path.join(root, "fonts", group), { recursive: true });
 		}
 		if (groups !== null) {
@@ -184,6 +185,17 @@ describe("the runtime fontconfig's font directories", () => {
 
 	it("a missing groups.json keeps the legacy per-OS layout", () => {
 		expect(scanned(bundle(null))).toEqual(["windows"]);
+	});
+
+	it("no groups.json and no per-OS directory fails instead of naming the parent", () => {
+		expect(() => getEnvVars({}, "win", bundle(null, ["L", "M"]))).toThrow();
+	});
+
+	it("a groups.json whose directories are missing fails instead of naming the parent", () => {
+		const readBy = { win: ["MW", "LMW"] };
+		expect(() =>
+			getEnvVars({}, "win", bundle(JSON.stringify({ readBy }), ["L", "M"])),
+		).toThrow();
 	});
 });
 
