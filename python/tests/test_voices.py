@@ -191,3 +191,16 @@ def test_validate_voices_rejects_unusable_shapes(value):
 )
 def test_validate_voices_accepts_usable_shapes(value):
     validate_voices(value)
+
+
+def test_a_context_voice_list_keeps_names_that_hold_commas():
+    """setSpeechVoices gets one name per line: Windows names hold commas."""
+    import json
+    import re
+
+    from camoufox.fingerprints import _build_init_script
+
+    names = ["Microsoft Hanhan - Chinese (Traditional, Taiwan)", "Microsoft David - English (United States)"]
+    script = _build_init_script({"speechVoices": [{"name": n} for n in names]})
+    arg = re.search(r"w\.setSpeechVoices\((\".*?\")\);", script).group(1)
+    assert json.loads(arg).split("\n") == names

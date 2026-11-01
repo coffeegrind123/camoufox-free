@@ -267,7 +267,7 @@ FINGERPRINT_PAGE = """<!doctype html><html><body><script>
     await within(new Promise(r => speechSynthesis.addEventListener("voiceschanged", r, {once: true})), 3000);
     voices = speechSynthesis.getVoices();
   }
-  fp.voices = voices.map(v => v.name).join(",");
+  fp.voices = voices.map(v => v.name).join("\n");
   const devices = await within(n.mediaDevices.enumerateDevices(), 3000);
   fp.mediaDevices = devices ? ["audioinput", "videoinput", "audiooutput"]
       .map(k => devices.filter(d => d.kind === k).length).join(",") : "timeout";

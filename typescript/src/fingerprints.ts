@@ -1534,14 +1534,14 @@ export function buildInitScript(values: InitValues): string {
 		);
 	}
 
-	// Speech voices (comma-separated names)
+	// Speech voices, one name per line: Windows names hold commas
 	const voices = values.speechVoices;
 	if (voices?.length) {
 		const names = voices.map((v) =>
 			v !== null && typeof v === "object" ? v.name : v,
 		);
 		lines.push(
-			`  if (typeof w.setSpeechVoices === "function") w.setSpeechVoices(${pyJsonDumps(names.join(","))});`,
+			`  if (typeof w.setSpeechVoices === "function") w.setSpeechVoices(${pyJsonDumps(names.join("\n"))});`,
 		);
 	}
 

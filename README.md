@@ -54,6 +54,13 @@ For an identity whose OS is not the host's. Offered upstream in
   and reassembled from a generation header, so every content-process page and
   worker sees the context's own lists. A context font list replaces the launch
   list instead of intersecting it. ([efcb4c6](https://github.com/coffeegrind123/camoufox-free/commit/efcb4c6c192dc20228995625616661a943f00ce3))
+- **A context keeps voice names that hold a comma.** A context's voice list
+  was passed comma-separated, and Windows names hold commas ("Microsoft Hanhan -
+  Chinese (Traditional, Taiwan)"), so one such name emptied the context's whole
+  voice list. It is one name per line now. Ported from introvert's
+  [17e739f](https://github.com/introvert/camoufox/commit/17e739f9b2cf15d56742f2d196da636df13d1db6).
+  ([patch](browser/patches/speech-voices-spoofing.patch), guard
+  [context-voice-names.py](browser/tests/playwright/patches/context-voice-names.py))
 - **Context identity and proxy settings stay isolated.** Proxy credentials are
   isolated per container/private context, and a NewContext behind a proxy
   derives its WebRTC IP, timezone, locale and geolocation from that proxy's
