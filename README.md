@@ -105,16 +105,19 @@ For an identity whose OS is not the host's. Offered upstream in
   window manager can set its frame (`_NET_FRAME_EXTENTS`) after the window
   maps. Firefox adds it to `outerWidth/outerHeight` without a resize event, so
   the startup hold that keeps the identity's size never ran, and the outer size
-  could exceed `screen.width`. The hold now also checks on a timer.
-  ([CamoufoxWindow.sys.mjs](browser/additions/browser/modules/CamoufoxWindow.sys.mjs),
-  guard [startup-size-frame-extents.py](browser/tests/playwright/patches/startup-size-frame-extents.py))
+  could exceed `screen.width`. The hold now also checks on a timer. Offered
+  upstream in [#973](https://github.com/daijro/camoufox/pull/973).
+  ([e2f61ee](https://github.com/coffeegrind123/camoufox-free/commit/e2f61eeeab04c977d839930237a8a4c94f529ee8), guard
+  [startup-size-frame-extents.py](browser/tests/playwright/patches/startup-size-frame-extents.py))
 - **Screen coordinates follow the spoofed window position.**
   `mozInnerScreenX/Y` and the `screenX/Y` of mouse and touch events came from
   the real window while `window.screenX/Y` reported the identity's, so wherever
   the window manager placed the window elsewhere (any X11 desktop), a page could
   read the real position. They now move with the spoofed position; browser code
-  still gets the real one. ([patch](browser/patches/window-screen-origin.patch),
-  guard [window-screen-origin.py](browser/tests/playwright/patches/window-screen-origin.py))
+  still gets the real one. Offered upstream in
+  [#975](https://github.com/daijro/camoufox/pull/975).
+  ([031108e](https://github.com/coffeegrind123/camoufox-free/commit/031108e0ed85469d834a9847bb5edcc17a4fcd84), guard
+  [window-screen-origin.py](browser/tests/playwright/patches/window-screen-origin.py))
 
 ### Kept here after upstream declined
 
