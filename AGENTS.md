@@ -116,8 +116,8 @@ Use the `merged` field to decide whether a closed PR was merged.
 Upstream often merges a pull request in its own form: it squashes, rewrites
 and follows up, while this fork keeps the version it wrote. Both trees then
 ship the change differently and nothing flags it; #886 was merged as upstream's
-own `browser/scripts/pgo.py` while this fork kept `ci/pgo.py`. Check every
-merged pull request this fork opened, in both directions:
+own `browser/scripts/pgo.py` while this fork kept `ci/pgo.py` until the 158.0.1
+sync. Check every merged pull request this fork opened, in both directions:
 
 ```bash
 python3 -m ci.upstream_pr_drift --author coffeegrind123
@@ -341,11 +341,19 @@ make package-linux arch=x86_64 # or package-macos / package-windows
 python3 multibuild.py --target linux windows macos --arch x86_64 arm64
 ```
 
-Install `ccache`. A cold build takes about 40 minutes, and an incremental one
-about 5. After editing Juggler, prefs or copied resources, run `make build-js`;
-after editing C++, run `make build-cpp`. `make sync` copies changed additions
-without reapplying patches. `make dir` preserves `obj-*` unless
-`CAMOUFOX_CLOBBER=1` is set.
+Every build, a local one included, is optimized as stock is
+([`builds-are-optimized-like-stock`](ci/tribal-rules.yml)): with the PGO
+profile Mozilla trained for the same Firefox, cross-language LTO (full on
+x86_64 Linux and Windows, thin elsewhere) and Rust SIMD, from
+`browser/assets/base.mozconfig`. `make dir` installs the Rust release Mozilla
+builds the tree with and fetches the profile pinned in
+`browser/scripts/data/pgo-profiles.json`; after bumping `upstream.sh`, run
+`python3 scripts/pgo.py pin`. Install `ccache`. It caches compiles but not the
+LTO link, so an incremental build still relinks libxul across C++ and Rust.
+After editing Juggler, prefs or copied resources, run `make build-js`; after
+editing C++, run `make build-cpp`. `make sync` copies changed additions without
+reapplying patches. `make dir` preserves `obj-*` unless `CAMOUFOX_CLOBBER=1` is
+set.
 
 ## Changing a patch
 

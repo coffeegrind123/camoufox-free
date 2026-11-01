@@ -9,8 +9,6 @@ on:
       # it does not appear among the browser downloads. Those tags must not
       # trigger a browser build (see browser/scripts/fetch-fonts.py).
       - "!font-bundle-*"
-      # PGO training profiles are releases too (ci/pgo.py publish).
-      - "!pgo-*"
 
 permissions: {}
 
@@ -108,6 +106,8 @@ jobs:
           sudo apt-get clean > /dev/null
 
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
 
       - name: The tag names the browser upstream.sh builds
         # Release tags are v<version>-<release>-cg.<n> (v156.0.1-beta.32-cg.8).
@@ -126,17 +126,6 @@ jobs:
         with:
           python-version: ${{ env.PYTHON_VERSION }}
 
-      - name: Set up LLVM
-        run: |
-          wget https://apt.llvm.org/llvm.sh
-          chmod +x llvm.sh
-          sudo ./llvm.sh 18
-          sudo apt-get install -y lld-18 clang-18
-          if [ "${{ matrix.arch }}" != "x86_64" ]; then
-            sudo apt-get install -y libc6-i386 lib32gcc-s1 lib32stdc++6 gcc-multilib g++-multilib
-          fi
-          sudo update-alternatives --install /usr/bin/ld.lld ld.lld /usr/bin/ld.lld-18 100
-
       - name: Check disk space
         run: df -h
 
@@ -149,6 +138,9 @@ jobs:
           # through fc-list/fc-match, so the bundle is checked with the same tool
           # the browser uses rather than assumed correct.
           sudo apt-get install -y msitools p7zip-full aria2 ccache fontconfig
+          if [ "${{ matrix.arch }}" != "x86_64" ]; then
+            sudo apt-get install -y libc6-i386 lib32gcc-s1 lib32stdc++6 gcc-multilib g++-multilib
+          fi
 
       - name: Fetch the font bundle
         # The bundle is a release asset, not repo content (~2.16 GB extracted,
@@ -172,24 +164,16 @@ jobs:
           python3 -m pip install -e ../python
           python3 scripts/verify-fonts.py
 
-      - name: Pin the Rust release the optimized build links with
-        # Before bootstrap, so every rustc the build runs is this one.
-        run: python3 -m ci.pgo toolchain
-
       - name: Prepare the source tree
         # setup-minimal (which fetches the tarball) -> dir -> mozbootstrap, with
         # the two network-bound steps retried on transient failures, exactly as
         # the tests.yml build job does. multibuild.py then finds _READY and
-        # builds without re-patching.
+        # builds without re-patching. `make dir` also installs the Rust
+        # release Mozilla builds this Firefox with and fetches the PGO profile
+        # Mozilla trained for it (browser/scripts/pgo.py), and refuses to go on
+        # when scripts/data/pgo-profiles.json pins another Firefox, so a
+        # release is always built with stock's profile and LTO mode.
         run: python3 -m ci.run_prepare
-
-      - name: Optimize as stock does (LTO + PGO)
-        # A release without the pinned profile for this Firefox version is
-        # refused: it would ship the C++-vs-JIT timing ratio ci/pgo.py
-        # describes. Run the "PGO profile" workflow and pin its output.
-        run: |
-          python3 -m ci.pgo check
-          python3 -m ci.pgo fetch --require
 
       - name: Create swap space
         run: |

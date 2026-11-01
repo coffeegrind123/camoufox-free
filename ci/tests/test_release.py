@@ -389,4 +389,6 @@ def test_this_fork_releases_by_tag_and_publishes_to_no_registry():
     assert build["jobs"]["build"]["needs"] == ["verify", "ubo"]
     text = (workflows / "build.yml").read_text(encoding="utf-8")
     assert "python3 -m ci.release check-release" in text
-    assert "python3 -m ci.pgo fetch --require" in text
+    # `make dir` (ci.run_prepare) fetches stock's PGO profile for the pinned
+    # Firefox and refuses a pin for another one (browser/scripts/pgo.py).
+    assert "python3 -m ci.run_prepare" in text

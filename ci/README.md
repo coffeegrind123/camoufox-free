@@ -223,6 +223,7 @@ Each tier gates the next, so a lint failure never reaches the build:
 | **Compiled-input cache** | The build cache is keyed on a hash of the compiled inputs only (`ci/browser_inputs.py`). On a hit the browser is restored and this branch's Juggler JavaScript and other resources, the files Juggler's `moz.build` lists in `FINAL_TARGET_FILES`, are laid over it. Everything else, including any new file type, counts as native and forces a build. |
 | **No partial restore** | That cache has no `restore-keys`: a partial match would hand the tests a browser built from different sources. A self-test checks the key covers every browser-affecting path. |
 | **Warm ccache** | Pushes to `main` and a twice-weekly schedule keep the ccache from being evicted; pull requests restore it. |
+| **PGO and LTO** | Every build uses Mozilla's PGO profile for the same Firefox and links libxul with cross-language LTO, as a release does ([`builds-are-optimized-like-stock`](tribal-rules.yml)). ccache caches the compiles, not that link, so a warm build still pays for it. |
 | **Network retries only** | `ci.run_prepare` (`setup-minimal`, `dir`, `mozbootstrap`) retries only failures that read as transient network errors. A failed hunk or compile error fails at once. |
 
 Pushing to a branch cancels its running build (`cancel-in-progress`). A tag
@@ -237,10 +238,10 @@ publishes nothing to PyPI or npm. Pushing a tag
 `v<version>-<release>-cg.<n>` (`v156.0.1-beta.32-cg.8`), where `<version>` and
 `<release>` are `browser/upstream.sh`'s, builds the Linux x86_64 browser with
 LTO and PGO and publishes its zip as a GitHub prerelease. The build refuses a
-tag that names another browser, and refuses to build without a PGO profile
-pinned for this Firefox in `browser/assets/optimized-build.json` (the "PGO
-profile" workflow makes one; see `ci/pgo.py`). Tags `font-bundle-*` and
-`pgo-*` start no build.
+tag that names another browser, and `make dir` refuses to build without the
+PGO profile Mozilla trained for this Firefox, pinned in
+`browser/scripts/data/pgo-profiles.json` (see `browser/scripts/pgo.py`). Tags
+`font-bundle-*` start no build.
 
 These releases carry no `manifest.json` and their tags are not upstream's
 `v<version>-<release>`, so `ci.release paired` finds none: a pull request that

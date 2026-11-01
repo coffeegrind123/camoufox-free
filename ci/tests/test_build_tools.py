@@ -177,12 +177,14 @@ def test_set_target_keeps_the_patch_tree_and_objdir(tmp_path):
         f"sys.path.insert(0, {str(SCRIPTS)!r}); "
         "sys.argv = ['patch.py', '1.0', 'test', '--mozconfig-only']; "
         "import patch; "
-        "patch.Patcher('x86_64-pc-linux-gnu', 'linux').camoufox_patches()"
+        "patch.Patcher('x86_64-pc-linux-gnu', 'linux', '1.95.0', '/pgo').camoufox_patches()"
     )
     subprocess.run([sys.executable, "-c", script], cwd=browser, check=True)
     assert (tree / "patch-sentinel").read_text() == "applied\n"
     assert (tree / "obj-linux/keep").read_text() == "object\n"
-    assert (tree / "mozconfig").read_text().startswith("new base\n")
+    mozconfig = (tree / "mozconfig").read_text()
+    assert "\nnew base\n" in mozconfig and "old base" not in mozconfig
+    assert mozconfig.startswith("CAMOUFOX_TARGET=x86_64-pc-linux-gnu\nCAMOUFOX_PGO_PROFILE=/pgo\n")
 
 
 def test_regen_refuses_a_file_touched_by_a_later_patch(tmp_path, monkeypatch):
