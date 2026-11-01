@@ -85,7 +85,32 @@ def test_attach_launch_window_reads_the_launch_config_and_defaults_outer():
         "outer": (1280, 1040),
         "inner": (1000, 600),
         "screen": (1920, 1080),
+        "cores": None,
     }
+
+
+def test_attach_launch_window_records_the_launch_cores():
+    class Browser:
+        pass
+
+    config = {"navigator.hardwareConcurrency": 12}
+    browser = attach_launch_window(
+        Browser(),
+        {"env": {"CAMOU_CONFIG_1": orjson.dumps(config).decode()}},
+    )
+    assert browser._camoufox_launch_window["cores"] == 12
+
+
+@pytest.mark.parametrize("os_name", ["windows", "macos", "linux"])
+def test_a_context_reports_the_launch_cores(os_name):
+    """A page can count cores with workers, so a context reports the launch's
+    (fix_hardware_concurrency) on both the preset and the synthetic path."""
+    launch = {**LAUNCH_WINDOW, "cores": 6}
+    for preset in (None, load_presets()["presets"][os_name][0]):
+        fingerprint = generate_context_fingerprint(
+            os=os_name if preset is None else None, preset=preset, launch_window=launch)
+        assert fingerprint["config"]["navigator.hardwareConcurrency"] == 6
+        assert "w.setNavigatorHardwareConcurrency(6)" in fingerprint["init_script"]
 
 
 def test_attach_launch_window_ignores_malformed_config():

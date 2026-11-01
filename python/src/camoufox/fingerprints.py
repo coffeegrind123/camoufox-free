@@ -1462,9 +1462,12 @@ def generate_context_fingerprint(
         webgl_config: The (vendor, renderer) a drawn identity claims. It outranks
             a preset's GPU; otherwise the GPU is drawn.
         launch_window: The browser's launch window, as attach_launch_window records it
-            ({'outer': (w, h), 'inner': (w|None, h|None), 'screen': (w|None, h|None)}).
-            The window is process-wide, so the context's viewport is its inner size,
-            or its preset viewport clamped inside the outer window.
+            ({'outer': (w, h), 'inner': (w|None, h|None), 'screen': (w|None, h|None),
+            'cores': n|None}). The window is process-wide, so the context's viewport
+            is its inner size, or its preset viewport clamped inside the outer
+            window. So are the cores: a page can count them with workers whatever
+            the context claims (fix_hardware_concurrency), so a context reports
+            the launch's.
     """
     # Only a well-formed record counts; a mock, a half-built dict or non-numeric
     # dimensions describe no real launch window.
@@ -1485,6 +1488,9 @@ def generate_context_fingerprint(
         and all(_dimension(value, optional=True) for value in launch_window['screen'])
     ):
         launch_window = None
+    launch_cores = launch_window.get('cores') if launch_window else None
+    if not _dimension(launch_cores):
+        launch_cores = None
 
     def _target_os(current: Dict[str, Any]) -> str:
         return OS_KEYS.get(os or '') or OS_KEYS[platform_to_os(current.get('navigator.platform', ''))]
@@ -1493,6 +1499,9 @@ def generate_context_fingerprint(
         # Use real fingerprint preset
         config = from_preset(preset, ff_version)
         nav = preset.get('navigator', {})
+        if launch_cores:
+            config['navigator.hardwareConcurrency'] = launch_cores
+            nav = {**nav, 'hardwareConcurrency': launch_cores}
         screen = preset.get('screen', {})
         webgl = preset.get('webgl', {})
     else:
@@ -1505,6 +1514,9 @@ def generate_context_fingerprint(
         # is read from the platform, drew Windows fonts and voices as well.
         if 'Linux' in str(config.get('navigator.userAgent', '')):
             fix_navigator_arch(config, 'lin')
+        # Before the seeded draws: the seed hashes the core count.
+        if launch_cores:
+            config['navigator.hardwareConcurrency'] = launch_cores
 
         # A fresh identity: every seeded draw below gets its own salt.
         _salt = identity_salt()

@@ -129,6 +129,12 @@ For an identity whose OS is not the host's. Offered upstream in
   frame sends the newest point due, as stock delivers a real mouse.
   ([MouseDispatch.js](browser/additions/juggler/input/MouseDispatch.js), guard
   [humanize-mouse-trajectory.py](browser/tests/playwright/patches/humanize-mouse-trajectory.py))
+- **A context reports the launch's core count.** NewContext drew a fresh
+  `navigator.hardwareConcurrency` for each context, while the launch reports
+  the host's cores (`fix_hardware_concurrency`), which a page can measure with
+  workers. Contexts now report the launch's value. Ported from introvert's
+  [17e739f](https://github.com/introvert/camoufox/commit/17e739f9b2cf15d56742f2d196da636df13d1db6).
+  ([test](python/tests/test_context_geometry.py))
 
 ### Kept here after upstream declined
 
