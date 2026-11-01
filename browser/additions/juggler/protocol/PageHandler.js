@@ -581,9 +581,12 @@ export class PageHandler {
           // The endpoints are excluded: the cursor is already on the first, and
           // the last is the destination dispatched explicitly below.
           let from = this._lastTrackedPos;
-          if (!this._cursorEntered)
+          let within = null;
+          if (!this._cursorEntered) {
             from = entryPoint(dispatch.boundingBox, x);
-          const {steps, trailingDelayMs} = await humanizedSteps(from.x, from.y, x, y);
+            within = dispatch.boundingBox;
+          }
+          const {steps, trailingDelayMs} = await humanizedSteps(from.x, from.y, x, y, {within});
           await dispatch.sendTrajectoryAcked(watcher, 'mousemove', steps, trailingDelayMs);
           // Always finish exactly on the requested destination.
           promises.push(dispatch.sendAcked(watcher, 'mousemove', x, y));

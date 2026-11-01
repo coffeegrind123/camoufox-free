@@ -36,6 +36,21 @@ const kMousecrackUrl = 'resource://gre/modules/juggler/input/mousecrack/mousecra
 // jump onto it. Measured: 2 of 300 moves; a fresh draw almost always arrives.
 const kMousecrackAttempts = 3;
 
+// A page's first move comes down from the toolbar onto the page. A draw that
+// climbs back out of the page first is redrawn this many times: no hand heading
+// for a point below climbs 270px back into the toolbar on the way (measured:
+// 15 of 40 mousecrack entry draws left the page, by up to 274px).
+const kEntryAttempts = 3;
+
+/** Does every point of the path stay inside `within` ({width, height})? */
+function staysWithin(points, within) {
+  return points.every(([x, y]) => {
+    const px = Math.round(x);
+    const py = Math.round(y);
+    return px >= 0 && py >= 0 && px < within.width && py < within.height;
+  });
+}
+
 /**
  * Samples per second.
  *
@@ -161,12 +176,14 @@ function cursoryPath(fromX, fromY, toX, toY) {
  * uneven timing does not have; thinning keeps each gap a sum of real steps.
  * A path stretched by a minTime floor is not filled in, so it ticks slower.
  */
-async function mousecrackPath(fromX, fromY, toX, toY) {
+async function mousecrackPath(fromX, fromY, toX, toY, within) {
   const mousecrack = loadMousecrack();
+  const accepted = path => path.converged && (!within || staysWithin(path.points, within));
+  const attempts = within ? Math.max(kMousecrackAttempts, kEntryAttempts) : kMousecrackAttempts;
   let path = null;
-  for (let attempt = 0; attempt < kMousecrackAttempts && !path?.converged; attempt++)
+  for (let attempt = 0; attempt < attempts && !(path && accepted(path)); attempt++)
     path = await mousecrack.generateTrajectory([fromX, fromY], [toX, toY]);
-  if (!path.converged)
+  if (!accepted(path))
     return null;
 
   const {points, timings} = path;
@@ -189,6 +206,18 @@ async function mousecrackPath(fromX, fromY, toX, toY) {
 }
 
 /**
+ * Cursory's path; with `within`, the first of kEntryAttempts draws that stays
+ * inside it, or the last draw if none does (MouseDispatch then takes the
+ * pointer off the page and back, as a real one would).
+ */
+function cursoryPathWithin(fromX, fromY, toX, toY, within) {
+  let path = cursoryPath(fromX, fromY, toX, toY);
+  for (let attempt = 1; within && attempt < kEntryAttempts && !staysWithin(path.points, within); attempt++)
+    path = cursoryPath(fromX, fromY, toX, toY);
+  return path;
+}
+
+/**
  * The intermediate points of a humanized move from (fromX, fromY) to (toX, toY).
  *
  * All coordinates are browser-relative, exactly as MouseDispatch wants them.
@@ -200,9 +229,12 @@ async function mousecrackPath(fromX, fromY, toX, toY) {
  * the requested coordinate whatever happens to the curve, and it is the one
  * point that must not be dropped for being off-screen or off-grid.
  *
+ * `within` ({width, height}), given for a page's first move, asks for a path
+ * that stays inside the viewport (kEntryAttempts).
+ *
  * Async because mousecrack computes its path in slices on this thread.
  */
-export async function humanizedSteps(fromX, fromY, toX, toY) {
+export async function humanizedSteps(fromX, fromY, toX, toY, {within = null} = {}) {
   // parkOffContent() forgets the cursor position (it sets NaN) because the
   // pointer really did move somewhere untracked. With no start point there is
   // no path to draw, so this move goes straight to its destination.
@@ -212,8 +244,8 @@ export async function humanizedSteps(fromX, fromY, toX, toY) {
   // A mousecrack draw that never arrives would end in a jump onto the target,
   // which no hand makes; Cursory draws that move instead.
   const {points, timings, totalMs} =
-      (engine() === 'mousecrack' && await mousecrackPath(fromX, fromY, toX, toY)) ||
-      cursoryPath(fromX, fromY, toX, toY);
+      (engine() === 'mousecrack' && await mousecrackPath(fromX, fromY, toX, toY, within)) ||
+      cursoryPathWithin(fromX, fromY, toX, toY, within);
 
   // A real mouse reports whole pixels, and the widget rounds to a device pixel
   // before hit-testing anyway, so round here and drop points that land on the
