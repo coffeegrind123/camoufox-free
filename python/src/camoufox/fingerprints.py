@@ -618,11 +618,14 @@ def _generate_random_voice_subset(
                 chosen.add(g)
                 take_pack(packs[g])
 
-    selected = [_split_voice_entry(e) for e in out + legacy]
-    if not selected:
-        return []
+    return _voice_objects(os_key, out + legacy)
 
-    voices: List[Dict[str, Any]] = [
+
+def _voice_objects(os_key: str, entries: List[str]) -> List[Dict[str, Any]]:
+    # No voice carries default=true: stock Firefox 152 marks none on Windows
+    # (SAPI), macOS or Linux (measured 2026-09-14 on all three), so a spoofed
+    # default would be the odd one out.
+    return [
         {
             'name': name,
             'lang': lang,
@@ -630,13 +633,27 @@ def _generate_random_voice_subset(
             'isDefault': False,
             'isLocalService': vtype == 'local',
         }
-        for (name, lang, vtype) in selected
+        for (name, lang, vtype) in map(_split_voice_entry, entries)
     ]
 
-    # No voice carries default=true: stock Firefox 152 marks none on Windows
-    # (SAPI), macOS or Linux (measured 2026-09-14 on all three), so a spoofed
-    # default would be the odd one out.
-    return voices
+
+def voice_pool() -> List[Dict[str, Any]]:
+    """Every voice the manifests hold for any OS, for `voices:pool`.
+
+    The browser registers them beside the launch's own voices. A context sees
+    the ones its list names, which its draw for its own OS and locale took and
+    the launch's draw need not have; a page outside such a context sees only
+    the launch's.
+    """
+    pool: List[Dict[str, Any]] = []
+    for os_key, manifest in _load_voice_manifests().items():
+        entries = list(manifest.get('base') or [])
+        for pack in (manifest.get('langPacks') or {}).values():
+            entries += (pack.get('oneCore') or []) + (pack.get('desktop') or [])
+        for addition in manifest.get('additions') or []:
+            entries += addition.get('voices') or []
+        pool += _voice_objects(os_key, list(dict.fromkeys(entries)))
+    return pool
 
 
 def _normalize_preset_voices(
@@ -1335,10 +1352,11 @@ def _draw_fonts(target_os: str, seed: int, instead: str, identity: Optional[str]
         return None
 
 
-def _draw_voices(target_os: str, seed: int, instead: str, identity: Optional[str]) -> Optional[List[Dict[str, Any]]]:
+def _draw_voices(target_os: str, seed: int, instead: str, identity: Optional[str],
+                 locale: Optional[str] = None) -> Optional[List[Dict[str, Any]]]:
     """The identity's voice draw, or None after a FallbackWarning naming `instead`."""
     try:
-        return _generate_random_voice_subset(target_os, seed=seed)
+        return _generate_random_voice_subset(target_os, locale, seed=seed)
     except (OSError, ValueError, KeyError) as e:
         FallbackWarning.warn('Drawing the speech voices', instead, e, identity)
         return None
@@ -1454,8 +1472,9 @@ def generate_context_fingerprint(
         timezone: IANA timezone string (e.g. 'Europe/London'). When provided,
             injected into config before init_script generation. Takes priority
             over any timezone from the preset.
-        locale: BCP-47 locale string (e.g. 'en-GB'). When provided, parsed via
-            normalize_locale() and injected into config. Also sets
+        locale: Playwright's locale: a BCP-47 tag (e.g. 'en-GB') or a language
+            list whose first entry is the locale. When provided, that entry is
+            injected into config, the voices are drawn for it, and it sets
             context_options['locale'] for Playwright.
         config_overrides: Dict of CAMOU_CONFIG keys to override after config
             is built but before init_script is rendered (e.g. {'timezone': 'UTC'}).
@@ -1601,13 +1620,32 @@ def generate_context_fingerprint(
     if timezone:
         config['timezone'] = timezone
     if locale:
-        from .locales import normalize_locale
-        parsed = normalize_locale(locale)
+        from .locales import Locale, normalize_locale, verify_locale
+        # Playwright's form: a tag, or a language list whose first entry is
+        # the locale (zzz-context-locale.patch).
+        primary = locale.split(',')[0].strip()
+        if '-' in primary:
+            parsed = normalize_locale(primary)
+        else:
+            verify_locale(primary)
+            parsed = Locale(language=primary)
         config['locale:language'] = parsed.language
-        config['locale:region'] = parsed.region
+        if parsed.region:
+            config['locale:region'] = parsed.region
         config['navigator.language'] = parsed.as_string
         if parsed.script:
             config['locale:script'] = parsed.script
+        # The Windows voice list is the display language's pack, so the voices
+        # are drawn again for the locale, as launch_options() draws them after
+        # resolving its own.
+        voices = _draw_voices(
+            platform_to_os(config.get('navigator.platform', '')),
+            identity_seed(config, identity_salt()), "the locale-blind draw",
+            config.get('navigator.userAgent'),
+            parsed.as_string,
+        )
+        if voices is not None:
+            config['voices'] = voices
 
     # Apply caller overrides before rendering init_script
     if config_overrides:

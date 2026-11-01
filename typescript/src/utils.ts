@@ -41,6 +41,7 @@ import {
 	Screen,
 	setMediaDevicesDefaults,
 	targetOsFromPlatform,
+	voicePool,
 	WINDOWS_11_MARKER_FONTS,
 } from "./fingerprints.js";
 import { geoipAllowed, getGeolocation } from "./geolocation.js";
@@ -2114,6 +2115,10 @@ export async function launchOptions({
 	// Pin the block explicitly instead of relying on a non-empty list to imply
 	// it. setInto leaves an explicit caller value alone.
 	setInto(config, "voices:blockIfNotDefined", true);
+	// A context draws its voices for its own OS and locale. The browser
+	// registers every voice such a draw can take, and shows each context only
+	// the ones it lists.
+	setInto(config, "voices:pool", voicePool());
 
 	// Pass the humanize option
 	if (humanize_engine !== undefined && humanize_engine !== null) {

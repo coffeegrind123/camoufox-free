@@ -93,6 +93,17 @@ For an identity whose OS is not the host's. Offered upstream in
   dedicated/shared/service workers, AudioWorklets, requests without a browsing
   context, and built-in strings. Changing one context does not overwrite the
   launch locale or another context. ([1bd1dc3](https://github.com/coffeegrind123/camoufox-free/commit/1bd1dc3c2d263bff41abcbb07d50f965129d3e5c), [a173ea1](https://github.com/coffeegrind123/camoufox-free/commit/a173ea1673b0f9af17ab645b337f687c1ea79c4f))
+- **A context lists and speaks with its own voices.** A context's voices only
+  filtered the voices the launch registered, so a de-DE context in an en-US
+  Windows launch listed no German voice, where a German Windows lists its
+  language pack's. Contexts now draw their voices for their locale, the
+  launchers pass every voice of the manifests as `voices:pool`, and the
+  browser shows each context the voices it lists, in its order. Pages of a
+  context without a list still see only the launch's voices, and an utterance
+  is matched only among the voices its page can list. Ported from introvert's
+  [4de36ca](https://github.com/introvert/camoufox/commit/4de36ca1b3e1b544368a31a3617f896a9b7951d9)
+  and [17e739f](https://github.com/introvert/camoufox/commit/17e739f9b2cf15d56742f2d196da636df13d1db6).
+  (guard [context-voice-pool.py](browser/tests/playwright/patches/context-voice-pool.py))
 - **Pinned viewport and GPU behaviour are deterministic.** A config that pins
   `window.innerWidth`/`innerHeight` no longer deadlocks viewport updates.
   Explicit `webgl_config` replaces a preset's GPU as one complete pair in both

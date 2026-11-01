@@ -250,6 +250,7 @@ def NewContext(
         webrtc_ip=webrtc_ip,
         webgl_config=webgl_config,
         launch_window=getattr(browser, '_camoufox_launch_window', None),
+        locale=context_kwargs.get('locale'),
     )
 
     context = browser.new_context(**new_context_options(fp, context_kwargs, proxy, geolocation))
