@@ -25,7 +25,11 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from helpers import hidden_display, launch_kwargs  # noqa: E402
 
-SPOOFED = {"window.screenX": 300, "window.screenY": 200}
+# Setting any window.* key leaves the window's geometry to the caller (the
+# launcher no longer fits the drawn window to the display), so the size is set
+# too, inside the guard's 1400x900 display.
+SPOOFED = {"window.screenX": 300, "window.screenY": 200,
+           "window.outerWidth": 1000, "window.outerHeight": 650}
 
 PAGE = """<body style="margin:0"><div style="width:400px;height:300px"></div><script>
 const geometry = () => ({screenX, screenY, mozInnerScreenX, mozInnerScreenY,
