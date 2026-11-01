@@ -58,3 +58,16 @@ def test_a_missing_groups_json_keeps_the_legacy_per_os_layout(bundle):
     assert scanned(utils._generate_fontconfig(str(conf), binary, "windows")) == [
         "windows"
     ]
+
+
+def test_no_groups_json_and_no_per_os_directory_fails_instead_of_naming_the_parent(bundle):
+    conf, binary, fonts = bundle
+    with pytest.raises(FileNotFoundError):
+        utils._generate_fontconfig(str(conf), binary, "windows")
+
+
+def test_a_groups_json_whose_directories_are_missing_fails_instead_of_naming_the_parent(bundle):
+    conf, binary, fonts = bundle
+    (fonts / "groups.json").write_text(json.dumps({"readBy": {"win": ["MW", "LMW"]}}))
+    with pytest.raises(FileNotFoundError):
+        utils._generate_fontconfig(str(conf), binary, "windows")
