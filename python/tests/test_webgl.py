@@ -1,6 +1,7 @@
 """WebGL identities drawn from fpgen's recorded Firefox devices (camoufox.webgl)."""
 
 import json
+import re
 from pathlib import Path
 
 import pytest
@@ -308,3 +309,53 @@ def test_webgl1_line_width_range_is_webgl2s():
             config = sample_webgl_for_screen(target_os, 1920, 1080, s)
             if config["webGl2Enabled"]:
                 assert config["webGl:parameters"]["33902"] == config["webGl2:parameters"]["33902"], (target_os, s)
+
+
+_CONTEXT_TABLE_KEYS = ("webGl:parameters", "webGl:supportedExtensions", "webGl:shaderPrecisionFormats")
+
+
+def _context_webgl_config(fingerprint):
+    """The tables a context's init script hands window.setWebGLConfig()."""
+    literal = re.search(r'w\.setWebGLConfig\(("(?:[^"\\]|\\.)*")\);', fingerprint["init_script"])
+    assert literal, "the init script does not call setWebGLConfig"
+    return json.loads(json.loads(literal.group(1)))
+
+
+def _without_names(device):
+    return {k: v for k, v in device.items() if k not in ("webGl:vendor", "webGl:renderer", "webGl2Enabled")}
+
+
+@pytest.mark.parametrize("target_os", ["windows", "macos", "linux"])
+def test_a_drawn_context_carries_its_own_gpus_tables(target_os):
+    """Only a context's vendor and renderer used to reach the browser, so it
+    reported the launch GPU's limits, extensions and precisions beside them."""
+    context = fp.generate_context_fingerprint(os=target_os)
+    tables = _context_webgl_config(context)
+    for key in _CONTEXT_TABLE_KEYS:
+        assert tables[key] == context["config"][key], key
+    assert "webGl:vendor" not in tables and "webGl:renderer" not in tables
+
+
+def test_a_preset_context_carries_its_gpus_recorded_tables():
+    preset = fp.get_random_preset("windows")
+    tables = _context_webgl_config(fp.generate_context_fingerprint(preset=preset))
+    vendor, renderer = preset["webgl"]["unmaskedVendor"], preset["webgl"]["unmaskedRenderer"]
+    recorded = [_without_names(device) for device in webgl.recorded_devices("win", vendor, renderer)]
+    assert tables in recorded
+
+
+def test_every_presets_gpu_has_recorded_tables():
+    """A preset context looks its GPU's tables up with webgl_for_gpu(), which
+    raises for a GPU fpgen never saw on the preset's OS."""
+    for os_name, presets in fp.load_presets(None)["presets"].items():
+        for preset in presets:
+            pair = (preset["webgl"]["unmaskedVendor"], preset["webgl"]["unmaskedRenderer"])
+            target = fp.OS_KEYS[fp.platform_to_os(preset["navigator"]["platform"])]
+            assert pair in webgl.firefox_gpus(target), (os_name, pair)
+
+
+def test_a_pinned_gpu_context_carries_that_gpus_tables():
+    preset = fp.get_random_preset("windows")
+    pair = sorted(webgl.firefox_gpus("win"))[0]
+    tables = _context_webgl_config(fp.generate_context_fingerprint(preset=preset, webgl_config=pair))
+    assert tables in [_without_names(device) for device in webgl.recorded_devices("win", *pair)]

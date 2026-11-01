@@ -1461,6 +1461,7 @@ export interface InitValues {
 	fontList?: string[];
 	speechVoices?: Array<string | VoiceObject>;
 	webrtcIP?: string;
+	webglConfig?: Config;
 }
 
 /**
@@ -1487,6 +1488,16 @@ export function buildInitScript(values: InitValues): string {
 				`  if (typeof w.${fnName} === "function") w.${fnName}(${pyJsonDumps(val)});`,
 			);
 		}
+	}
+
+	// The GPU's parameters, extensions and shader precisions, as one JSON
+	// string: the context answers from these instead of the launch GPU's. {}
+	// leaves the real context's values.
+	const webglTables = values.webglConfig;
+	if (!isNone(webglTables)) {
+		lines.push(
+			`  if (typeof w.setWebGLConfig === "function") w.setWebGLConfig(${pyJsonDumps(orjsonDumps(webglTables))});`,
+		);
 	}
 
 	// Screen dimensions (requires width + height together)
@@ -1676,6 +1687,27 @@ export function generateContextFingerprint({
 		screen = p.screen ?? {};
 		webgl = p.webgl ?? {};
 		resolvedPreset = p;
+		// The preset names its GPU; the context also needs that GPU's recorded
+		// tables, or it reports the launch GPU's limits beside it. An explicit
+		// webgl_config replaces both below.
+		if (
+			!webgl_config &&
+			pyTruthy(config["webGl:vendor"]) &&
+			pyTruthy(config["webGl:renderer"])
+		) {
+			const platform = pyStr(get(config, "navigator.platform", ""));
+			const webglFp = webglForGpu(
+				platform === "Win32"
+					? "win"
+					: platform.includes("Linux") || platform.includes("linux")
+						? "lin"
+						: "mac",
+				config["webGl:vendor"],
+				config["webGl:renderer"],
+			);
+			delete webglFp.webGl2Enabled;
+			Object.assign(config, webglFp);
+		}
 	} else {
 		const fp = generateFingerprint({ os: os ?? undefined });
 		config = fromFpgen(fp, ff_version);
@@ -1849,6 +1881,16 @@ export function generateContextFingerprint({
 		fontList: config.fonts,
 		speechVoices: config.voices,
 		webrtcIP: webrtc_ip || "",
+		// Every webGl:* / webGl2:* table; the GPU's names go through their own
+		// setters above.
+		webglConfig: Object.fromEntries(
+			Object.entries(config).filter(
+				([key]) =>
+					(key.startsWith("webGl:") || key.startsWith("webGl2:")) &&
+					key !== "webGl:vendor" &&
+					key !== "webGl:renderer",
+			),
+		),
 	};
 	const initScript = buildInitScript(initValues);
 

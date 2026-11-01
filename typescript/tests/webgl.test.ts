@@ -11,6 +11,7 @@ import { describe, expect, it } from "vitest";
 import { gpuFitsOs } from "../src/coherence.js";
 import {
 	generateContextFingerprint,
+	getRandomPreset,
 	gpuScreenIsPlausible,
 	isSoftwareRenderer,
 	loadPresets,
@@ -19,7 +20,13 @@ import {
 	rendererBucket,
 } from "../src/fingerprints.js";
 import { orjsonDumps } from "../src/pycompat.js";
-import { sampleWebglForScreen, toConfig, webglForGpu } from "../src/webgl.js";
+import {
+	firefoxGpus,
+	recordedDevices,
+	sampleWebglForScreen,
+	toConfig,
+	webglForGpu,
+} from "../src/webgl.js";
 import { MODEL } from "./fpgen-setup.js";
 import { prerequisite } from "./prereq.js";
 
@@ -550,3 +557,70 @@ describe("WebGL <-> screen coherence (test_webgl_screen_consistency.py)", () => 
 		}
 	});
 });
+
+/** The tables a context's init script hands window.setWebGLConfig(). */
+function contextWebglConfig(script: string): Record<string, any> {
+	const literal = /w\.setWebGLConfig\(("(?:[^"\\]|\\.)*")\);/.exec(script);
+	expect(
+		literal,
+		"the init script does not call setWebGLConfig",
+	).not.toBeNull();
+	return JSON.parse(JSON.parse((literal as RegExpExecArray)[1]));
+}
+
+function withoutNames(device: Record<string, any>): Record<string, any> {
+	const {
+		"webGl:vendor": _vendor,
+		"webGl:renderer": _renderer,
+		webGl2Enabled: _webgl2,
+		...tables
+	} = device;
+	return tables;
+}
+
+describe.skipIf(!MODEL.ok)(
+	"a context's own WebGL tables (test_webgl.py)",
+	() => {
+		// Only a context's vendor and renderer used to reach the browser, so it
+		// reported the launch GPU's limits, extensions and precisions beside them.
+		it("a drawn context carries its GPU's tables", () => {
+			for (const os of ["windows", "macos", "linux"]) {
+				const { config, init_script } = generateContextFingerprint({ os });
+				const tables = contextWebglConfig(init_script);
+				for (const key of [
+					"webGl:parameters",
+					"webGl:supportedExtensions",
+					"webGl:shaderPrecisionFormats",
+				]) {
+					expect(tables[key], `${os} ${key}`).toEqual(config[key]);
+				}
+				expect(tables).not.toHaveProperty(["webGl:vendor"]);
+				expect(tables).not.toHaveProperty(["webGl:renderer"]);
+			}
+		});
+
+		it("a preset context carries its GPU's recorded tables", () => {
+			const preset = getRandomPreset("windows") as Record<string, any>;
+			const tables = contextWebglConfig(
+				generateContextFingerprint({ preset }).init_script,
+			);
+			const recorded = recordedDevices(
+				"win",
+				preset.webgl.unmaskedVendor,
+				preset.webgl.unmaskedRenderer,
+			).map(withoutNames);
+			expect(recorded).toContainEqual(tables);
+		});
+
+		it("a pinned GPU's context carries that GPU's tables", () => {
+			const preset = getRandomPreset("windows") as Record<string, any>;
+			const pair = firefoxGpus("win").sort()[0];
+			const tables = contextWebglConfig(
+				generateContextFingerprint({ preset, webgl_config: pair }).init_script,
+			);
+			expect(recordedDevices("win", ...pair).map(withoutNames)).toContainEqual(
+				tables,
+			);
+		});
+	},
+);

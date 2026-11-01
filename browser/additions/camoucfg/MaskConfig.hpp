@@ -485,8 +485,43 @@ inline const nlohmann::json* FindNested(std::string_view domain,
   return table ? table->Find(key) : nullptr;
 }
 
-// The webGl[2]:parameters entry for a WebGL enum, or null.
-inline const nlohmann::json* FindGLParam(uint32_t pname, bool isWebGL2) {
+// A browsing context's own WebGL tables (window.setWebGLConfig): the
+// webGl:* / webGl2:* keys of the GPU that context claims. They replace the
+// launch config's tables for its WebGL contexts, so a context of another GPU
+// does not report the launch GPU's limits, extensions and precisions beside
+// its own renderer. Indexed like the launch config, so a context's
+// getParameter costs what the launch's does. The indexes point into `data`:
+// build it in place (std::make_shared) and never copy or move it.
+struct WebGLTables {
+  explicit WebGLTables(nlohmann::json aData) : data(std::move(aData)) {
+    if (!data.is_object()) return;
+    const char* params[2] = {"webGl:parameters", "webGl2:parameters"};
+    const char* precisions[2] = {"webGl:shaderPrecisionFormats",
+                                 "webGl2:shaderPrecisionFormats"};
+    for (int webgl2 = 0; webgl2 < 2; ++webgl2) {
+      auto table = data.find(params[webgl2]);
+      if (table != data.end() && table->is_object()) {
+        paramIndex[webgl2] = EnumIndex(*table);
+      }
+      table = data.find(precisions[webgl2]);
+      if (table != data.end() && table->is_object()) {
+        precisionIndex[webgl2] = IndexObject(*table);
+      }
+    }
+  }
+  WebGLTables(const WebGLTables&) = delete;
+  WebGLTables& operator=(const WebGLTables&) = delete;
+
+  nlohmann::json data;
+  EnumIndex paramIndex[2];      // [isWebGL2]
+  KeyIndex precisionIndex[2];   // [isWebGL2]
+};
+
+// The webGl[2]:parameters entry for a WebGL enum, or null. `tables`: the
+// context's own, else (null) the launch config's.
+inline const nlohmann::json* FindGLParam(uint32_t pname, bool isWebGL2,
+                                         const WebGLTables* tables = nullptr) {
+  if (tables) return tables->paramIndex[isWebGL2].Find(pname);
   const auto& index = GetIndex();
   return (isWebGL2 ? index.gl2Params : index.glParams).Find(pname);
 }
@@ -499,8 +534,8 @@ inline std::optional<nlohmann::json> GetNested(std::string_view domain,
 
 inline std::optional<
     std::variant<int64_t, bool, double, std::string, std::nullptr_t>>
-GLParam(uint32_t pname, bool isWebGL2) {
-  const auto* value = FindGLParam(pname, isWebGL2);
+GLParam(uint32_t pname, bool isWebGL2, const WebGLTables* tables = nullptr) {
+  const auto* value = FindGLParam(pname, isWebGL2, tables);
   if (!value) return std::nullopt;
   const auto& data = *value;
   if (data.is_null()) return std::nullptr_t();
@@ -512,21 +547,24 @@ GLParam(uint32_t pname, bool isWebGL2) {
 }
 
 template <typename T>
-inline T MParamGL(uint32_t pname, T defaultValue, bool isWebGL2) {
-  if (const auto* value = FindGLParam(pname, isWebGL2)) {
+inline T MParamGL(uint32_t pname, T defaultValue, bool isWebGL2,
+                  const WebGLTables* tables = nullptr) {
+  if (const auto* value = FindGLParam(pname, isWebGL2, tables)) {
     return value->get<T>();
   }
   return defaultValue;
 }
 
 inline std::optional<std::array<int32_t, 3UL>> MShaderData(
-    uint32_t shaderType, uint32_t precisionType, bool isWebGL2) {
+    uint32_t shaderType, uint32_t precisionType, bool isWebGL2,
+    const WebGLTables* tables = nullptr) {
   std::string valueName =
       std::to_string(shaderType) + "," + std::to_string(precisionType);
   if (const auto* value =
-          FindNested(isWebGL2 ? "webGl2:shaderPrecisionFormats"
-                              : "webGl:shaderPrecisionFormats",
-                     valueName)) {
+          tables ? tables->precisionIndex[isWebGL2].Find(valueName)
+                 : FindNested(isWebGL2 ? "webGl2:shaderPrecisionFormats"
+                                       : "webGl:shaderPrecisionFormats",
+                              valueName)) {
     // Convert {rangeMin: int, rangeMax: int, precision: int} to array
     const auto& data = *value;
     // Assert rangeMin, rangeMax, and precision are present
@@ -539,6 +577,34 @@ inline std::optional<std::array<int32_t, 3UL>> MShaderData(
                                    data["precision"].get<int32_t>()};
   }
   return std::nullopt;
+}
+
+// webGl[2]:shaderPrecisionFormats:blockIfNotDefined, from the context's own
+// tables or the launch config's.
+inline bool ShaderPrecisionBlockedIfNotDefined(
+    bool isWebGL2, const WebGLTables* tables = nullptr) {
+  const char* key = isWebGL2 ? "webGl2:shaderPrecisionFormats:blockIfNotDefined"
+                             : "webGl:shaderPrecisionFormats:blockIfNotDefined";
+  if (!tables) return GetBool(key);
+  const auto value = tables->data.find(key);
+  return value != tables->data.end() && value->is_boolean() &&
+         value->get<bool>();
+}
+
+// webGl[2]:supportedExtensions, from the context's own tables or the launch
+// config's. Empty: the real context's extensions.
+inline std::vector<std::string> SupportedExtensions(
+    bool isWebGL2, const WebGLTables* tables = nullptr) {
+  const char* key =
+      isWebGL2 ? "webGl2:supportedExtensions" : "webGl:supportedExtensions";
+  if (!tables) return GetStringList(key);
+  std::vector<std::string> result;
+  const auto value = tables->data.find(key);
+  if (value == tables->data.end() || !value->is_array()) return result;
+  for (const auto& item : *value) {
+    if (item.is_string()) result.push_back(item.get<std::string>());
+  }
+  return result;
 }
 
 inline std::optional<
