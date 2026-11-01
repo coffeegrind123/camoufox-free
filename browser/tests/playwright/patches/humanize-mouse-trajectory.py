@@ -25,7 +25,8 @@ with the frame. Stock dispatches each move at the refresh tick itself: 90-91%
 of its moves landed within 2.5 ms of a requestAnimationFrame callback, against
 30-38% of synthesized ones, which landed anywhere in the frame. So a humanized
 move must deliver its points at refresh ticks, as the page's own rAF measures
-them, with a median gap of one frame.
+them. How many frames lie between two points is the hand's own timing: a move
+with pauses has a median gap of two frames or more, as a real one does.
 
 Run against a specific build:
     CAMOUFOX_EXECUTABLE_PATH=/path/to/camoufox-bin python browser/tests/playwright/patches/humanize-mouse-trajectory.py
@@ -76,8 +77,6 @@ RECORDER = """
 # stock's 90%, far above the 30-38% of moves played on the generator's clock.
 TICK_MS = 2.5
 AT_TICK = 0.75
-# Most gaps of a move are exactly one frame; a pause in the hand is whole frames.
-MEDIAN_FRAMES = (0.85, 1.25)
 CLICK_MIN_MOVES = 3
 
 # The default humanize ceiling is 1.5s, and playback may end up to a frame past
@@ -183,13 +182,12 @@ async def _check_engine(engine) -> bool:
         print(f"  FAIL: expected {MIN_DURATION_MS}-{MAX_DURATION_MS}ms, got {duration}ms")
     at_tick = sum(1 for m in humanized if _tick_distance(m[2], frames) <= TICK_MS)
     share = at_tick / len(humanized) if humanized else 0
-    median = statistics.median(gaps) if gaps else 0
-    if share >= AT_TICK and MEDIAN_FRAMES[0] * frame_ms <= median <= MEDIAN_FRAMES[1] * frame_ms:
-        print(f"  PASS: delivered at refresh ticks ({share:.0%}), median gap {median}ms")
+    if share >= AT_TICK:
+        print(f"  PASS: delivered at refresh ticks ({share:.0%} of moves, {frame_ms:.1f}ms frame)")
     else:
         passed = False
         print(f"  FAIL: {share:.0%} of mousemoves within {TICK_MS}ms of a refresh tick "
-              f"(need {AT_TICK:.0%}), median gap {median}ms against a {frame_ms:.1f}ms frame")
+              f"(need {AT_TICK:.0%}, {frame_ms:.1f}ms frame)")
 
     # The entry point is within a quarter viewport of the destination's x, so
     # the first event lands right of 0.4w; one out of the corner lands near 0.
