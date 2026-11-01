@@ -37,7 +37,10 @@ HOSTS = ["127.0.0.1", "127.0.0.2"]
 LIMITS = [3379, 3386, 3408, 33901, 33902, 34024, 34076, 34921, 34930, 35660, 35661, 36347, 36348, 36349]
 VERTEX_HIGH_FLOAT = "35633,36338"
 
-PROBE = f"""async () => {{
+# Run in the page's main world (mw:): page.evaluate's isolated world reads a
+# typed array (MAX_VIEWPORT_DIMS, the *_RANGE limits) through an Xray, which
+# refuses to copy it.
+PROBE = f"""mw:(async () => {{
   const read = (gl) => {{
     if (!gl) return null;
     const info = gl.getExtension('WEBGL_debug_renderer_info');
@@ -64,7 +67,7 @@ PROBE = f"""async () => {{
     worker.onmessage = e => r(e.data); worker.onerror = e => r(String(e.message));
   }});
   return JSON.stringify(out);
-}}"""
+}})()"""
 
 
 class Quiet(SimpleHTTPRequestHandler):
@@ -135,7 +138,7 @@ async def run(binary, launch_gpu, device, port):
     display = VirtualDisplay()
     opts = launch_options(os="linux", webgl_config=launch_gpu, headless=False,
                           virtual_display=display.get(), executable_path=str(binary),
-                          i_know_what_im_doing=True)
+                          main_world_eval=True, i_know_what_im_doing=True)
     # The tables the launch drew for its GPU, as the browser reads them.
     launch = orjson.loads(_camou_config_blob(opts))
     failures = []
