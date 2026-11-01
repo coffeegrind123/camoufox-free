@@ -290,6 +290,7 @@ async def AsyncNewContext(
             webrtc_ip=webrtc_ip,
             webgl_config=webgl_config,
             launch_window=getattr(browser, '_camoufox_launch_window', None),
+            locale=context_kwargs.get('locale'),
         ),
     )
 

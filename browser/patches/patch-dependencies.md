@@ -49,10 +49,11 @@ be listed there.
 | `no-css-animations.patch` | `instantAnimations` |
 | `privacy-signals-spoofing.patch` | `navigator.doNotTrack` |
 | `screen-spoofing.patch` | `screen.*` |
+| `speech-voices-spoofing.patch` | `voices`, `voices:pool` (whether a page sees only some voices) |
 | `system-ui-font-spoofing.patch` | `navigator.platform` |
 | `timezone-spoofing.patch` | `timezone` |
 | `touchscreen-fingerprint-spoofing.patch` | `navigator.maxTouchPoints` |
-| `voice-spoofing.patch` | `voices`, `voices:blockIfNotDefined` |
+| `voice-spoofing.patch` | `voices`, `voices:blockIfNotDefined`, `voices:pool` |
 | `webgl-spoofing.patch` | `webGl:*`, `webGl2:*` (per context: `setWebGLConfig` replaces the tables with the context GPU's) |
 | `webgpu-limits-spoofing.patch` | `webGpu:limits` |
 | `webrtc-ip-spoofing.patch` | `webrtc:ipv4`, `webrtc:ipv6`, `navigator.platform` |
@@ -79,6 +80,7 @@ already set up, and do not add the include or `LOCAL_INCLUDES` themselves:
 | `touchscreen-fingerprint-spoofing.patch` | `navigator-spoofing.patch` for `MaskConfig.hpp` in `dom/base/Navigator.cpp` |
 | `font-list-spoofing.patch` | `anti-font-fingerprinting.patch` for `gfxFontGroup::mUserContextId` |
 | `linux-bundled-fonts-toplevel.patch` | nothing beyond Firefox; it replaces the `FcConfigAppFontAddDir` call in `ActivateBundledFonts()`, which no earlier patch changes |
+| `voice-spoofing.patch` | `speech-voices-spoofing.patch` for `nsTHashSet.h` in `dom/media/webspeech/synth/nsSynthVoiceRegistry.h` |
 | `timezone-spoofing.patch`, `webrtc-ip-spoofing.patch` | `audio-fingerprint-manager.patch` for `RoverfoxStorageManager.h` in `dom/base/nsGlobalWindowInner.cpp` |
 | `font-system-fonts-css2.patch`, `system-ui-font-spoofing.patch`, `webrtc-ip-spoofing.patch`, `zz-stock-cost-parity.patch` | `navigator-spoofing.patch` for `NavigatorManager::GetSpoofedOS()` |
 | `windows-keyboard.patch` | `touchscreen-fingerprint-spoofing.patch` for `/camoucfg` in `dom/events/moz.build` |
