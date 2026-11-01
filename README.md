@@ -4,7 +4,7 @@ A fork of [Camoufox](https://github.com/daijro/camoufox), the Firefox build
 that spoofs device fingerprints in C++. For what Camoufox is, its features and
 how to build it, read [upstream's README](https://github.com/daijro/camoufox#readme).
 
-This fork follows upstream `main` and pins Firefox `158.0` / Camoufox `beta.33`
+This fork follows upstream `main` and pins Firefox `158.0.1` / Camoufox `beta.34`
 in [`browser/upstream.sh`](browser/upstream.sh). The newest published build is
 [`v158.0-beta.33-cg.9`](https://github.com/coffeegrind123/camoufox-free/releases/tag/v158.0-beta.33-cg.9),
 built from [f597fa6](https://github.com/coffeegrind123/camoufox-free/commit/f597fa67fe29030b38c10dab193679adf84c073d);
@@ -198,11 +198,6 @@ For an identity whose OS is not the host's. Offered upstream in
   `main` does not create a release. The release workflow fails before building
   unless the tag names the pinned browser and its commit is on `main` with a
   successful `All tests passed` check.
-- **Cross-language LTO and PGO** with a pinned profile, as stock Firefox builds
-  ([`ci/pgo.py`](ci/pgo.py)). A release is refused until a profile is pinned.
-  Upstream merged its own form of [#886](https://github.com/daijro/camoufox/pull/886)
-  (`browser/scripts/pgo.py`); this fork builds with its own pipeline until the
-  next upstream sync. ([3381943](https://github.com/coffeegrind123/camoufox-free/commit/3381943c57abebf06301bebee4e8f4a230781c44))
 - **`canvas_noise` defaults to `False`:** the canvas is never covered.
   `canvas_noise=None` gives upstream's automatic cover. ([38ef536](https://github.com/coffeegrind123/camoufox-free/commit/38ef536579a3b1284929dfaf544dfb6e124a217e))
 - **Stock-parity probe lab**
@@ -256,9 +251,12 @@ make package-linux arch=x86_64
 After editing Juggler, prefs, or copied resources, use `make build-js`. After
 editing C++, use `make build-cpp`. `make sync` only copies changed additions
 and settings. `make dir` preserves `obj-*` by default; use
-`CAMOUFOX_CLOBBER=1 make dir` for a clean rebuild. The optional Docker build
-can use sccache and persistent compiler-cache volumes without changing release
-flags. Patch authoring and regeneration are covered in
+`CAMOUFOX_CLOBBER=1 make dir` for a clean rebuild. Every build links with
+cross-language LTO and the PGO profile Mozilla trained for the same Firefox,
+which `make dir` fetches ([`browser/scripts/pgo.py`](browser/scripts/pgo.py));
+ccache does not cache the LTO link, so an incremental build still relinks
+libxul. The optional Docker build can use sccache and persistent
+compiler-cache volumes without changing release flags. Patch authoring and regeneration are covered in
 [`docs/patch-upgrading-guide.md`](docs/patch-upgrading-guide.md).
 
 ## Installing
