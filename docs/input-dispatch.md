@@ -91,8 +91,8 @@ acks stay prompt), and played on the generator's own clock they reached pages
 them near a tick. `sendTrajectoryAcked()` therefore waits for the window's
 refresh before each point and sends the newest one already due, so a page sees
 one move per frame at its own refresh rate, whatever that is.
-`humanize-mouse-trajectory.py` checks the share of moves at a tick and the
-median gap against the page's own rAF.
+`humanize-mouse-trajectory.py` checks the share of moves at a tick, against the
+page's own rAF.
 
 **The static check.** `browser/scripts/check-input-dispatch.py`, wired into the
 `static` job of `.github/workflows/tests.yml`. Two exemptions, both
