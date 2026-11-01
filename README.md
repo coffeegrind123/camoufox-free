@@ -27,7 +27,9 @@ For an identity whose OS is not the host's. Offered upstream in
 
 - **Per-script font fallback** follows the claimed OS's tables and `font.*`
   defaults, so Thai, emoji, Mongolian and other scripts draw with the faces
-  stock Firefox uses there. ([7c8e6a9](https://github.com/coffeegrind123/camoufox-free/commit/7c8e6a9d8b3312846c26fe8e31984c10a1d3d6c6))
+  stock Firefox uses there. Where stock's Windows table names a face Windows 10
+  and 11 no longer ship (Lao UI, Euphemia), the face Windows' own system
+  fallback draws follows it (Leelawadee UI, Gadugi). ([7c8e6a9](https://github.com/coffeegrind123/camoufox-free/commit/7c8e6a9d8b3312846c26fe8e31984c10a1d3d6c6))
 - **Native headless WebGL** uses Mesa EGL with `DISPLAY` and
   `WAYLAND_DISPLAY` unset. WebGL returns real rendering output, and WebGL2 does
   so when the recorded GPU supports it, while both report the identity's pinned
