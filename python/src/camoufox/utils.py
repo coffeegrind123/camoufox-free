@@ -825,7 +825,8 @@ def attach_launch_window(target: Any, from_options: Optional[Dict[str, Any]]) ->
     The launch window is process-wide (CamoufoxWindow.sys.mjs resizes the real
     window once), so every context shares it; a context can only claim a viewport
     inside it and a screen that holds it. 1280x1040 is the startup default when
-    the config sets no outer size.
+    the config sets no outer size. The launch's cores are recorded too: one
+    process has one core count, which a page can measure.
     """
     try:
         config = orjson.loads(_camou_config_blob(from_options or {}) or '{}')
@@ -847,6 +848,7 @@ def attach_launch_window(target: Any, from_options: Optional[Dict[str, Any]]) ->
                 config.get('screen.width'),
                 config.get('screen.height'),
             ),
+            'cores': config.get('navigator.hardwareConcurrency'),
         }
     except AttributeError:
         pass
