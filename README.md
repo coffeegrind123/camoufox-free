@@ -118,6 +118,14 @@ For an identity whose OS is not the host's. Offered upstream in
   [#975](https://github.com/daijro/camoufox/pull/975).
   ([031108e](https://github.com/coffeegrind123/camoufox-free/commit/031108e0ed85469d834a9847bb5edcc17a4fcd84), guard
   [window-screen-origin.py](browser/tests/playwright/patches/window-screen-origin.py))
+- **Humanized moves reach the page one per refresh frame.** Firefox
+  coalesces a real mouse's motion into at most one `mousemove` per refresh
+  tick, but Juggler's synthesized moves played on the trajectory's own clock:
+  pages saw gaps of 5-13ms from Cursory and a steady ~22ms beat from mousecrack,
+  most of them mid-frame. Each point now waits for the window's refresh and a
+  frame sends the newest point due, as stock delivers a real mouse.
+  ([MouseDispatch.js](browser/additions/juggler/input/MouseDispatch.js), guard
+  [humanize-mouse-trajectory.py](browser/tests/playwright/patches/humanize-mouse-trajectory.py))
 
 ### Kept here after upstream declined
 
