@@ -68,12 +68,6 @@ For an identity whose OS is not the host's. Offered upstream in
   `socks5h` resolves names at the proxy. A setup error fails the request closed
   instead of falling back to the host's direct connection. Ported from
   liasica's [2f0be40](https://github.com/liasica/camoufox/commit/2f0be400e53b88bb9b00b3faf2356503ae9dbfab).
-- **Fontconfig memo keyed by context.** One context's font allow-list no longer
-  answers for other contexts in the same content process. Offered upstream in
-  [#942](https://github.com/daijro/camoufox/pull/942). ([6950149](https://github.com/coffeegrind123/camoufox-free/commit/6950149e920820710122e176ab66bd14d66db4c4))
-- **Storage puts sync from the main thread**, so a put from a worker cannot
-  crash a content process. Upstream dropped it because nothing triggers it
-  today. ([b481348](https://github.com/coffeegrind123/camoufox-free/commit/b481348b58bf4a6b6bcd4f59a7f348fe32720212))
 - **EME on for Windows identities.** With EME off, Firefox's "EME has been
   preffed off" error is one only Linux Firefox gives. ([1a43e61](https://github.com/coffeegrind123/camoufox-free/commit/1a43e61878b66ffa66334ee30c38a846842a0f19))
 - **uBlock Origin doesn't hold requests** while it compiles its lists on a
@@ -123,7 +117,8 @@ For an identity whose OS is not the host's. Offered upstream in
   tick, but Juggler's synthesized moves played on the trajectory's own clock:
   pages saw gaps of 5-13ms from Cursory and a steady ~22ms beat from mousecrack,
   most of them mid-frame. Each point now waits for the window's refresh and a
-  frame sends the newest point due, as stock delivers a real mouse.
+  frame sends the newest point due, as stock delivers a real mouse. Offered
+  upstream in [#978](https://github.com/daijro/camoufox/pull/978).
   ([MouseDispatch.js](browser/additions/juggler/input/MouseDispatch.js), guard
   [humanize-mouse-trajectory.py](browser/tests/playwright/patches/humanize-mouse-trajectory.py))
 
@@ -132,15 +127,38 @@ For an identity whose OS is not the host's. Offered upstream in
 - **`gpu_passthrough=True`.** A Linux container on Windows can render on the
   host's real GPU through WSL's D3D12 driver while claiming Windows Firefox on
   that GPU. The canvas stays uncovered, and WebGPU reports Windows' adapter
-  limits. ([aaf96d7](https://github.com/coffeegrind123/camoufox-free/commit/aaf96d7a94641757d88fff876dcd8b17d13b689a), [f7c27c8](https://github.com/coffeegrind123/camoufox-free/commit/f7c27c8681e55480b6f3f434b7a2e0e3a535598d))
+  limits. Declined in [#890](https://github.com/daijro/camoufox/pull/890):
+  upstream's stated reason is that Mesa GL over D3D12 with FreeType draws
+  differently from Windows' ANGLE and DirectWrite, and it asks for pixel
+  comparisons against real Windows machines on the same GPU. ([aaf96d7](https://github.com/coffeegrind123/camoufox-free/commit/aaf96d7a94641757d88fff876dcd8b17d13b689a), [f7c27c8](https://github.com/coffeegrind123/camoufox-free/commit/f7c27c8681e55480b6f3f434b7a2e0e3a535598d))
 - **`humanize_engine="mousecrack"`.** A second cursor engine, using
   [mousecrack](https://github.com/puffinsoft/mousecrack)'s trained network.
-  Cursory stays the default. ([529a730](https://github.com/coffeegrind123/camoufox-free/commit/529a730125862d65dd6085e05c398ae9bd2aabb4))
+  Cursory stays the default. Declined in
+  [#900](https://github.com/daijro/camoufox/pull/900): upstream would rather
+  have one humanize engine, and by that PR's numbers Cursory was the more human
+  of the two. ([529a730](https://github.com/coffeegrind123/camoufox-free/commit/529a730125862d65dd6085e05c398ae9bd2aabb4))
 - **First humanized move** starts just inside the page's top edge, not at
-  (0, 0). ([33f01dc](https://github.com/coffeegrind123/camoufox-free/commit/33f01dc5cacc9cc58aa1cf0e41a132a7e001ae9c))
+  (0, 0). Left out of [#900](https://github.com/daijro/camoufox/pull/900):
+  upstream's stated reason is that it changes Cursory's default for everyone
+  and its entry point comes from chosen constants rather than recorded data.
+  ([33f01dc](https://github.com/coffeegrind123/camoufox-free/commit/33f01dc5cacc9cc58aa1cf0e41a132a7e001ae9c))
 - **Geolocation accuracy.** IP-derived positions are rounded to the database's
   precision and carry a city-scale accuracy in whole metres, instead of
-  14 decimals and 6e-10 m. ([bb7bc29](https://github.com/coffeegrind123/camoufox-free/commit/bb7bc29fd5cf77167cbeffe7fbfbd1d9d0b63b10), [9954eac](https://github.com/coffeegrind123/camoufox-free/commit/9954eac531391b0ae56917dccab150dfe81fc568))
+  14 decimals and 6e-10 m. Declined in
+  [#904](https://github.com/daijro/camoufox/pull/904): upstream's stated reason
+  is that the shipped database has no `accuracy_radius` records, so the 1-10 km
+  fallback is not drawn from real data. ([bb7bc29](https://github.com/coffeegrind123/camoufox-free/commit/bb7bc29fd5cf77167cbeffe7fbfbd1d9d0b63b10), [9954eac](https://github.com/coffeegrind123/camoufox-free/commit/9954eac531391b0ae56917dccab150dfe81fc568))
+- **Fontconfig memo keyed by context.** One context's font allow-list no longer
+  answers for other contexts in the same content process. Declined in
+  [#942](https://github.com/daijro/camoufox/pull/942) because Firefox 158 gives
+  each context its own content-process pool, so the leak cannot occur there;
+  measured here as well (three contexts, three processes on 158). Kept as a
+  defence should a later Firefox share the pools again. ([6950149](https://github.com/coffeegrind123/camoufox-free/commit/6950149e920820710122e176ab66bd14d66db4c4))
+- **Storage puts sync from the main thread.** Left out of
+  [#802](https://github.com/daijro/camoufox/pull/802), whose read side upstream
+  merged: upstream's stated reason is that a worker starting before its
+  process's main thread has used the storage would broadcast the launch-wide
+  timezone fallback to every process. ([b481348](https://github.com/coffeegrind123/camoufox-free/commit/b481348b58bf4a6b6bcd4f59a7f348fe32720212))
 
 ### Build, releases and defaults
 
@@ -161,7 +179,9 @@ For an identity whose OS is not the host's. Offered upstream in
   successful `All tests passed` check.
 - **Cross-language LTO and PGO** with a pinned profile, as stock Firefox builds
   ([`ci/pgo.py`](ci/pgo.py)). A release is refused until a profile is pinned.
-  Offered upstream in [#886](https://github.com/daijro/camoufox/pull/886). ([3381943](https://github.com/coffeegrind123/camoufox-free/commit/3381943c57abebf06301bebee4e8f4a230781c44))
+  Upstream merged its own form of [#886](https://github.com/daijro/camoufox/pull/886)
+  (`browser/scripts/pgo.py`); this fork builds with its own pipeline until the
+  next upstream sync. ([3381943](https://github.com/coffeegrind123/camoufox-free/commit/3381943c57abebf06301bebee4e8f4a230781c44))
 - **`canvas_noise` defaults to `False`:** the canvas is never covered.
   `canvas_noise=None` gives upstream's automatic cover. ([38ef536](https://github.com/coffeegrind123/camoufox-free/commit/38ef536579a3b1284929dfaf544dfb6e124a217e))
 - **Stock-parity probe lab**
@@ -191,7 +211,9 @@ For an identity whose OS is not the host's. Offered upstream in
 - [CI pipeline](ci/README.md) documents every merge-gating suite, shard and
   artifact.
 - [Fork and closed-PR scanning](AGENTS.md#fork-and-upstream-review) defines how
-  external Camoufox work is inventoried, measured and accepted or rejected.
+  external Camoufox work is inventoried, measured and accepted or rejected, and
+  how this fork's own merged upstream pull requests are checked for drift
+  (`python3 -m ci.upstream_pr_drift`).
 - [Patch upgrading](docs/patch-upgrading-guide.md) covers Firefox and Playwright
   syncs, patch regeneration and the required replay checks.
 - [PropertyTracer audit](docs/property-tracer-audit.md) rechecks the native
