@@ -36,6 +36,7 @@ For an identity whose OS is not the host's. Offered upstream in
   GPU. Linux needs Mesa's EGL and DRI packages (`libegl1`, `libegl-mesa0` and
   `libgl1-mesa-dri` on Debian/Ubuntu); Xvfb is not required. See
   [Native headless WebGL](docs/headless-webgl.md).
+  ([21298fb](https://github.com/coffeegrind123/camoufox-free/commit/21298fb0517f708d374694cf06788ccf16bc036e))
 - **DirectWrite line metrics** for a Windows identity (`fonts:metrics`), so
   line boxes match Windows instead of FreeType. ([c8cd204](https://github.com/coffeegrind123/camoufox-free/commit/c8cd20423c9640bbb381fc33a293c33ccbbddadf), [6023d01](https://github.com/coffeegrind123/camoufox-free/commit/6023d01bd194ad38e1fae7a3660c0c02d5c200fa))
 - **Subpixel glyph positions** for a Windows or macOS identity, so text and
@@ -77,8 +78,11 @@ For an identity whose OS is not the host's. Offered upstream in
   `socks5h` resolves names at the proxy. A setup error fails the request closed
   instead of falling back to the host's direct connection. Ported from
   liasica's [2f0be40](https://github.com/liasica/camoufox/commit/2f0be400e53b88bb9b00b3faf2356503ae9dbfab).
+  ([29b467f](https://github.com/coffeegrind123/camoufox-free/commit/29b467fd6fa2e7f82b85a3a2b43eb9eea183c4ce))
 - **EME on for Windows identities.** With EME off, Firefox's "EME has been
-  preffed off" error is one only Linux Firefox gives. ([1a43e61](https://github.com/coffeegrind123/camoufox-free/commit/1a43e61878b66ffa66334ee30c38a846842a0f19))
+  preffed off" error is one only Linux Firefox gives. Upstream's
+  [#894](https://github.com/daijro/camoufox/pull/894) leaves EME off, on the
+  grounds that a Linux build cannot deliver Windows' PlayReady key system. ([1a43e61](https://github.com/coffeegrind123/camoufox-free/commit/1a43e61878b66ffa66334ee30c38a846842a0f19))
 - **uBlock Origin doesn't hold requests** while it compiles its lists on a
   fresh profile (1–45 s). Requests in the first seconds go unfiltered.
   Upstream keeps the hold. ([41a9903](https://github.com/coffeegrind123/camoufox-free/commit/41a9903048c011b9fc9aa38aa9786d72d922a94d))
@@ -88,6 +92,12 @@ For an identity whose OS is not the host's. Offered upstream in
   WebSocket close arguments follow Firefox 158, and a failed promise-reaction
   attach rejects immediately instead of leaving Juggler hanging.
   ([a645377](https://github.com/coffeegrind123/camoufox-free/commit/a645377641887a9443c5e6be0d0f7e1e209eed39), [bf238e4](https://github.com/coffeegrind123/camoufox-free/commit/bf238e4a9f41f026674a0e6361f4ec496f5f542a), [3cebf99](https://github.com/coffeegrind123/camoufox-free/commit/3cebf99c8f486c211a5502099c9ecfdc91164813))
+- **The spoofed user agent is read once.** Firefox's HTTP handler rewrote
+  its shared user-agent string on every `UserAgent()` call, and that also runs
+  on proxy CONNECT threads, racing the main thread. The configured value is now
+  read once into a string nothing writes again. Offered upstream in
+  [#984](https://github.com/daijro/camoufox/pull/984).
+  ([01c8209](https://github.com/coffeegrind123/camoufox-free/commit/01c82098c1910f2a66585941c42053bcb0d1de70))
 - **Per-context locale follows every scope.** A context's locale reaches
   `Intl`, `navigator.languages`, Accept-Language q-values, isolated worlds,
   dedicated/shared/service workers, AudioWorklets, requests without a browsing
@@ -108,12 +118,22 @@ For an identity whose OS is not the host's. Offered upstream in
   `window.innerWidth`/`innerHeight` no longer deadlocks viewport updates.
   Explicit `webgl_config` replaces a preset's GPU as one complete pair in both
   launchers. ([1fcfad6](https://github.com/coffeegrind123/camoufox-free/commit/1fcfad6245cf91797d80d3943903cbf46ec3b017), [6932314](https://github.com/coffeegrind123/camoufox-free/commit/6932314b3b76380af9ab4c714d069c02f9e7f2be))
+- **A caller's user agent fixes the drawn platform.** Setting only
+  `navigator.userAgent` counted as setting the whole navigator, so the launcher
+  skipped its platform fix, and fpgen's Linux draws that carry another OS's
+  `navigator.platform` reached the page as `Win32` behind a Linux user agent.
+  The fix now stands down only when the caller sets `navigator.platform` or
+  `navigator.oscpu`, in both launchers. Offered upstream in
+  [#983](https://github.com/daijro/camoufox/pull/983).
+  ([f7b091c](https://github.com/coffeegrind123/camoufox-free/commit/f7b091c1d1533ceae016a1ef6b85c861f8c0582c))
 - **A context reports its own GPU's WebGL limits.** A `NewContext` that claimed
   another GPU named that GPU in `UNMASKED_RENDERER_WEBGL`, but its
   `getParameter` limits, `getSupportedExtensions()` and
   `getShaderPrecisionFormat()` stayed the launch GPU's, a pairing no real device
   reports. `setWebGLConfig` gives each context its GPU's tables, in pages,
-  iframes and workers, and both launchers send them. Ported from introvert's
+  iframes and workers, and both launchers send them; upstream's
+  [#888](https://github.com/daijro/camoufox/pull/888) lookup reads only the
+  launch's tables. Ported from introvert's
   [a44e6d1](https://github.com/introvert/camoufox/commit/a44e6d15fa0ce6df438615434d0b12ee5cdd4490).
   (guard [context-webgl-tables.py](browser/tests/playwright/patches/context-webgl-tables.py))
 - **Corrupt font data fails closed.** A damaged `groups.json`, or one whose
@@ -122,9 +142,20 @@ For an identity whose OS is not the host's. Offered upstream in
   case ported from lang315's
   [2479033](https://github.com/lang315/camoufox/commit/24790332a7a442f988f28c3ca2331e2629273997)). Windows font-unit rates and
   essential-font aliases are regenerated from the pinned fpgen model.
+- **Font aliases only where the claimed OS resolves them.** The font bundle
+  added every fonts.conf alias to every base and to the essential floor, so
+  every macOS draw reported names whose absence marks newer macOS versions,
+  and every Linux draw reported Calibri and Cambria without their
+  metric-compatible targets. A base now carries an alias only where that OS
+  version resolves it, and the essential floor is what every base shares.
+  Ported from introvert's
+  [d44921e](https://github.com/introvert/camoufox/commit/d44921e7e8103486aa8ef1232edee1ce5089d3e9).
+  ([ae1f515](https://github.com/coffeegrind123/camoufox-free/commit/ae1f51504418287b2f8dbedc4650073f72e48207))
 - **Launcher failures are bounded and explicit.** Transient downloads retry
   429/5xx/connection failures, and the host GPU probe has a 30-second deadline
-  that reports the executable and display it was probing instead of hanging.
+  that reports the executable and display it was probing instead of hanging;
+  the probe deadline is offered upstream in
+  [#985](https://github.com/daijro/camoufox/pull/985).
   ([6fee36f](https://github.com/coffeegrind123/camoufox-free/commit/6fee36f05286233ea8c854faca4e53123fd283b6), [d5e2850](https://github.com/coffeegrind123/camoufox-free/commit/d5e28506cf2bca5a7d1a70083fa29bd5f3c2e3f8))
 - **A late window-manager frame keeps the identity's window size.** An X11
   window manager can set its frame (`_NET_FRAME_EXTENTS`) after the window
@@ -148,8 +179,10 @@ For an identity whose OS is not the host's. Offered upstream in
   tick, but Juggler's synthesized moves played on the trajectory's own clock:
   pages saw gaps of 5-13ms from Cursory and a steady ~22ms beat from mousecrack,
   most of them mid-frame. Each point now waits for the window's refresh and a
-  frame sends the newest point due, as stock delivers a real mouse. Offered
-  upstream in [#978](https://github.com/daijro/camoufox/pull/978).
+  frame sends the newest point due, as stock delivers a real mouse. It
+  replaces the trajectory-clock pacing upstream merged from our
+  [#808](https://github.com/daijro/camoufox/pull/808). Offered upstream in
+  [#978](https://github.com/daijro/camoufox/pull/978).
   ([MouseDispatch.js](browser/additions/juggler/input/MouseDispatch.js), guard
   [humanize-mouse-trajectory.py](browser/tests/playwright/patches/humanize-mouse-trajectory.py))
 - **A context reports the launch's core count.** NewContext drew a fresh
