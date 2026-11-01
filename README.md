@@ -142,6 +142,15 @@ For an identity whose OS is not the host's. Offered upstream in
   [4e1dde8](https://github.com/introvert/camoufox/commit/4e1dde86f5cfd8eb24afedef189ac976fed8df75).
   ([patch](browser/patches/zzz-context-locale.patch), guard
   [context-locale-follows.py](browser/tests/playwright/patches/context-locale-follows.py))
+- **A Linux host activates only the bundled fonts of the claimed OS.** Firefox
+  added `fonts/` as an application font directory, which fontconfig scans
+  recursively, so every OS's group sat on the search path and a Linux
+  identity's `Helvetica`, `Times` and `Courier` drew Apple's faces instead of
+  their Nimbus aliases. Only the files directly in `fonts/` are added now.
+  Ported from lang315's
+  [1b130b3](https://github.com/lang315/camoufox/commit/1b130b31ffa4196219faa1cd9abeffa147ead5db).
+  ([patch](browser/patches/linux-bundled-fonts-toplevel.patch), guard
+  [bundled-font-groups.py](browser/tests/playwright/patches/bundled-font-groups.py))
 
 ### Kept here after upstream declined
 

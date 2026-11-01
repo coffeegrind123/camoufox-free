@@ -991,3 +991,14 @@ def test_juggler_is_not_a_chrome_package():
         if f.is_file() and "chrome://juggler" in f.read_text(encoding="utf-8", errors="replace")
     ]
     assert not referencing, f"{referencing}\n" + explain("juggler-is-not-a-chrome-package")
+
+
+def test_fc_activates_only_firefox_own_bundled_fonts():
+    """Rule: fc-activates-only-firefox-own-bundled-fonts."""
+    patch = (BROWSER / "patches" / "linux-bundled-fonts-toplevel.patch").read_text(encoding="utf-8")
+    added = [line for line in patch.splitlines() if line.startswith("+") and not line.startswith("+++")]
+    removed = [line for line in patch.splitlines() if line.startswith("-") and not line.startswith("---")]
+    why = explain("fc-activates-only-firefox-own-bundled-fonts")
+    assert any("FcConfigAppFontAddFile(" in line for line in added), why
+    assert not any("FcConfigAppFontAddDir(" in line for line in added), why
+    assert any("FcConfigAppFontAddDir(" in line for line in removed), why
