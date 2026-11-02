@@ -118,6 +118,7 @@ export interface LauncherConstants {
 	windowsWebGpuLimits: Record<string, number>;
 	cachePrefs: Record<string, any>;
 	windowsBehaviourPrefs: Record<string, any>;
+	windowFrame: Record<string, Record<string, number>>;
 }
 export const LAUNCHER_CONSTANTS: Readonly<LauncherConstants> = loadDataFile(
 	"launcher-constants.json",

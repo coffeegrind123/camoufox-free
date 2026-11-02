@@ -134,6 +134,15 @@ For an identity whose OS is not the host's. Offered upstream in
   upstream in [#973](https://github.com/daijro/camoufox/pull/973).
   ([e2f61ee](https://github.com/coffeegrind123/camoufox-free/commit/e2f61eeeab04c977d839930237a8a4c94f529ee8), guard
   [startup-size-frame-extents.py](browser/tests/playwright/patches/startup-size-frame-extents.py))
+- **A Windows identity's window frame measures as Windows'.** A page can
+  measure the frame around its content area (`outerWidth - innerWidth`,
+  `mozInnerScreenX - screenX`), and it came from the host: GTK's 86x192 under
+  XWayland, 52x137 on Wayland, with the content 43,149 into the window, where
+  stock Firefox on Windows measures 16x93 and 8,85. A page now reads the real
+  content area plus Windows' frame, in a cross-site iframe too, and the window
+  is sized so the outer size is the identity's.
+  ([patch](browser/patches/window-sizing-claimed-os.patch), guard
+  [window-sizing-claimed-os.py](browser/tests/playwright/patches/window-sizing-claimed-os.py))
 - **Screen coordinates follow the spoofed window position.**
   `mozInnerScreenX/Y` and the `screenX/Y` of mouse and touch events came from
   the real window while `window.screenX/Y` reported the identity's, so wherever

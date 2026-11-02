@@ -100,7 +100,11 @@ def probe() -> tuple:
     with hidden_display(screen="1400x900"):
         x11 = X11()
         x11.advertise_frame_extents()
-        with Camoufox(**launch_kwargs(headless=False, os="windows", config=OUTER,
+        # A Linux identity: it reports the real window's frame, where a late
+        # one could reach the page. A Windows identity on this host reports
+        # Windows' frame around the content area (window-sizing-claimed-os.py),
+        # which a window manager's frame does not change.
+        with Camoufox(**launch_kwargs(headless=False, os="linux", config=OUTER,
                                       i_know_what_im_doing=True)) as browser:
             page = browser.new_page()
             started = time.monotonic()

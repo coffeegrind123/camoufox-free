@@ -145,3 +145,27 @@ def test_scrollbars_on_a_windows_host_are_left_alone(launch, monkeypatch):
 def test_caller_scrollbar_style_wins(launch):
     _, prefs = launch(WIN_UA, firefox_user_prefs={SCROLLBAR_STYLE: 2})
     assert prefs[SCROLLBAR_STYLE] == 2
+
+
+def test_windows_identity_gets_stock_windows_window_frame(launch):
+    config, _ = launch(WIN_UA)
+    frame = {key: config.get(f"window.frame{key}") for key in ("Left", "Top", "Right", "Bottom")}
+    assert frame == {"Left": 8, "Top": 85, "Right": 8, "Bottom": 8}
+
+
+@pytest.mark.parametrize("ua", [MAC_UA, LIN_UA])
+def test_other_identities_keep_the_real_window_frame(launch, ua):
+    config, _ = launch(ua)
+    assert not any(key.startswith("window.frame") for key in config)
+
+
+def test_windows_identity_on_windows_host_keeps_the_real_window_frame(launch, monkeypatch):
+    monkeypatch.setattr(utils, "_host_os_key", lambda: "win")
+    config, _ = launch(WIN_UA)
+    assert not any(key.startswith("window.frame") for key in config)
+
+
+def test_a_callers_window_frame_is_kept(launch):
+    config, _ = launch(WIN_UA, config={"window.frameTop": 120})
+    assert config["window.frameTop"] == 120
+    assert config["window.frameLeft"] == 8

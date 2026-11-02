@@ -108,6 +108,20 @@ function importCertificates() {
   }
 }
 
+// The claimed OS's window frame (window.frameLeft/Top/Right/Bottom), or null.
+// With it a page reads its content area plus this frame as the window's outer
+// size (window-sizing-claimed-os.patch), whatever the real window's chrome is.
+function claimedFrame() {
+  const sides = ["Left", "Top", "Right", "Bottom"].map(side =>
+    ChromeUtils.camouGetInt("window.frame" + side)
+  );
+  if (!sides.some(Boolean)) {
+    return null;
+  }
+  const [left, top, right, bottom] = sides.map(inset => inset || 0);
+  return { left, top, right, bottom };
+}
+
 function applyWindowSize(win) {
   // outerWidth/outerHeight report the real window, so the real window is resized
   // to the identity's size; pinning the document instead deadlocks Juggler's
@@ -132,6 +146,37 @@ function applyWindowSize(win) {
     // window maps. It changes only the margins Firefox adds to the outer size,
     // and with the content area unchanged no resize event fires, so the hold
     // also checks on a timer.
+    //
+    // With a claimed frame, the outer size a page reads is the content area
+    // plus that frame, so the hold sizes the content area instead: to the
+    // identity's outer size less the frame. The real window ends up as much
+    // larger as its own chrome is larger than the claimed OS's.
+    // A viewport pins the content area, and then no window size moves it: a
+    // resize is never repeated for a content size it already tried, or the
+    // window would grow on every check.
+    const frame = claimedFrame();
+    let triedFor = null;
+    const sizeDelta = () => {
+      if (!frame) {
+        return [
+          outerWidth ? outerWidth - win.outerWidth : 0,
+          outerHeight ? outerHeight - win.outerHeight : 0,
+        ];
+      }
+      const content = win.gBrowser?.selectedBrowser?.getBoundingClientRect();
+      if (!content?.width || !content?.height) {
+        return [0, 0];
+      }
+      const size = Math.round(content.width) + "x" + Math.round(content.height);
+      if (size === triedFor) {
+        return [0, 0];
+      }
+      triedFor = size;
+      return [
+        outerWidth ? outerWidth - frame.left - frame.right - Math.round(content.width) : 0,
+        outerHeight ? outerHeight - frame.top - frame.bottom - Math.round(content.height) : 0,
+      ];
+    };
     const deadline = Date.now() + 5000;
     const holdStartupSize = () => {
       if (Date.now() > deadline) {
@@ -143,8 +188,7 @@ function applyWindowSize(win) {
       if (win.windowState === win.STATE_MAXIMIZED) {
         win.restore();
       }
-      const dw = outerWidth ? outerWidth - win.outerWidth : 0;
-      const dh = outerHeight ? outerHeight - win.outerHeight : 0;
+      const [dw, dh] = sizeDelta();
       if (dw || dh) {
         win.resizeBy(dw, dh);
       }

@@ -58,6 +58,7 @@ be listed there.
 | `webgpu-limits-spoofing.patch` | `webGpu:limits` |
 | `webrtc-ip-spoofing.patch` | `webrtc:ipv4`, `webrtc:ipv6`, `navigator.platform` |
 | `window-screen-origin.patch` | `window.screenX`, `window.screenY` (moves `mozInnerScreenX/Y` and mouse and touch event `screenX/Y` with them) |
+| `window-sizing-claimed-os.patch` | `window.frameLeft`, `window.frameTop`, `window.frameRight`, `window.frameBottom` (a page's `outerWidth/outerHeight` and screen points measure the content area inside that frame) |
 | `windows-keyboard.patch` | `input:windowsKeyboard` (launch-wide: the shortcut tables and GTK's key handling are process-level) |
 | `zz-stock-cost-parity.patch` | `navigator.hardwareConcurrency`, `navigator.maxTouchPoints`, `screen.*`, `window.screenX`, `window.screenY` (re-orders the getters above so stock's work runs first) |
 
@@ -85,6 +86,7 @@ already set up, and do not add the include or `LOCAL_INCLUDES` themselves:
 | `font-system-fonts-css2.patch`, `system-ui-font-spoofing.patch`, `webrtc-ip-spoofing.patch`, `zz-stock-cost-parity.patch` | `navigator-spoofing.patch` for `NavigatorManager::GetSpoofedOS()` |
 | `windows-keyboard.patch` | `touchscreen-fingerprint-spoofing.patch` for `/camoucfg` in `dom/events/moz.build` |
 | `window-screen-origin.patch` | `fingerprint-injection.patch` for `MaskConfig.hpp` in `dom/base/nsGlobalWindowInner.cpp` |
+| `window-sizing-claimed-os.patch` | `window-screen-origin.patch` for `nsGlobalWindowInner::SpoofedScreenShift()`; `fingerprint-injection.patch` for `MaskConfig.hpp` in `dom/base/nsGlobalWindowInner.cpp` |
 | `zz-stock-cost-parity.patch` | `cross-process-storage.patch` for `RoverfoxStorageManager::Generation()`; `screen-spoofing.patch` for `ScreenDimensionManager` in `dom/base/nsScreen.cpp` |
 
 `zzz-context-locale.patch` applies last and depends on `locale-spoofing.patch`
