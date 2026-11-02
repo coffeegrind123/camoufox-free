@@ -524,6 +524,15 @@ describe("test_launch_environment: prefs", () => {
 			expect(prefs["media.eme.enabled"]).toBe(true);
 			expect(prefs["middlemouse.paste"]).toBe(false);
 		});
+		it("measures stock Windows' window frame", async () => {
+			const { config } = await onHost("lin", WIN_UA);
+			expect([
+				config["window.frameLeft"],
+				config["window.frameTop"],
+				config["window.frameRight"],
+				config["window.frameBottom"],
+			]).toEqual([8, 85, 8, 8]);
+		});
 		it("draws Windows' scrollbars at Windows' size", async () => {
 			const classic = await onHost("lin", WIN_UA, {
 				firefox_user_prefs: { "ui.useOverlayScrollbars": 0 },
@@ -545,6 +554,9 @@ describe("test_launch_environment: prefs", () => {
 				expect("input:windowsKeyboard" in config).toBe(false);
 				expect("middlemouse.paste" in prefs).toBe(false);
 				expect(STYLE in prefs).toBe(false);
+				expect(
+					Object.keys(config).some((key) => key.startsWith("window.frame")),
+				).toBe(false);
 			}
 		});
 		it("caller values win", async () => {

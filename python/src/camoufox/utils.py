@@ -94,6 +94,7 @@ CACHE_PREFS: Dict[str, Any] = LAUNCHER_CONSTANTS['cachePrefs']
 # Windows-only machinery (DirectComposition, ClearType, WMF) does nothing in a
 # Linux build and is left out.
 WINDOWS_BEHAVIOUR_PREFS: Dict[str, Any] = LAUNCHER_CONSTANTS['windowsBehaviourPrefs']
+WINDOW_FRAME: Dict[str, Dict[str, int]] = LAUNCHER_CONSTANTS['windowFrame']
 
 # Video codecs a Windows desktop decodes in hardware, so that
 # mediaCapabilities.decodingInfo() reports them powerEfficient (stock 152.0.4 on
@@ -1578,6 +1579,15 @@ def launch_options(
 
         for pref, value in WINDOWS_BEHAVIOUR_PREFS.items():
             firefox_user_prefs.setdefault(pref, value)
+
+        # The window frame a page measures (outer - inner size, where the
+        # content sits in the window) is the host's: GTK's 86x192 under
+        # XWayland, content 43,149 into the window. Stock Firefox on Windows
+        # (159, Windows 11, a normal window at 100%) has 8px resize borders and
+        # its tab strip and toolbar above the content: 16x93, content at 8,85.
+        # window-sizing-claimed-os.patch reports the frame from these insets.
+        for side, inset in WINDOW_FRAME['win'].items():
+            config.setdefault(f'window.frame{side.capitalize()}', inset)
 
         # The scrollbars pinned above are drawn by the host build's theme: on
         # a Linux host a Windows 10 identity's classic scrollbars measured

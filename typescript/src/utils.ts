@@ -118,6 +118,12 @@ export const CACHE_PREFS: Record<string, any> = LAUNCHER_CONSTANTS.cachePrefs;
 // WINDOWS_BEHAVIOUR_PREFS in the Python launcher for each one's reason).
 export const WINDOWS_BEHAVIOUR_PREFS: Record<string, any> =
 	LAUNCHER_CONSTANTS.windowsBehaviourPrefs;
+// The window frame of stock Firefox on each claimed OS, as content-area insets
+// (WINDOW_FRAME in the Python launcher has the measurement).
+export const WINDOW_FRAME: Record<
+	string,
+	Record<string, number>
+> = LAUNCHER_CONSTANTS.windowFrame;
 
 /** Monitor pixels per CSS pixel of the window at the scale it renders at.
  * Linux reports the monitor in pixels at scale 1. On Windows and macOS the
@@ -1891,6 +1897,17 @@ export async function launchOptions({
 
 		for (const [pref, value] of Object.entries(WINDOWS_BEHAVIOUR_PREFS)) {
 			setInto(firefox_user_prefs, pref, value);
+		}
+
+		// The window frame a page measures is the host's (GTK's 86x192 under
+		// XWayland); stock Windows Firefox measures 16x93 with the content at
+		// 8,85 (window-sizing-claimed-os.patch).
+		for (const [side, inset] of Object.entries(WINDOW_FRAME.win)) {
+			setInto(
+				config,
+				`window.frame${side[0].toUpperCase()}${side.slice(1)}`,
+				inset,
+			);
 		}
 
 		// The scrollbars pinned above are drawn by the host build's theme (GTK's

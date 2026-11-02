@@ -1,0 +1,198 @@
+diff --git a/docshell/base/BrowsingContext.h b/docshell/base/BrowsingContext.h
+index ae57102..f045e6d 100644
+--- a/docshell/base/BrowsingContext.h
++++ b/docshell/base/BrowsingContext.h
+@@ -290,6 +290,11 @@ struct EmbedderColorSchemes {
+   /* Used to propagate window.top's inner size for RFPTarget::Window*         \
+    * protections */                                                           \
+   FIELD(InnerSizeSpoofedForRFP, CSSIntSize)                                   \
++  /* Camoufox: a top-level context's real content area, its offset in its     \
++   * window and its size, in unscaled CSS pixels. Written by the parent       \
++   * (BrowserParent::UpdateDimensions) so a page's window frame can be        \
++   * reported as the claimed OS's (window-sizing-claimed-os.patch). */        \
++  FIELD(CamouContentRect, CSSIntRect)                                         \
+   /* Used to propagate document's IPAddressSpace  */                          \
+   FIELD(IPAddressSpace, nsILoadInfo::IPAddressSpace)                          \
+   /* This is true if we should redirect to an error page when inserting *     \
+@@ -1600,6 +1605,13 @@ class BrowsingContext : public nsILoadContext, public nsWrapperCache {
+     return IsTop();
+   }
+ 
++  // Camoufox: only the parent process, which owns the window, knows where the
++  // content area sits in it.
++  bool CanSet(FieldIndex<IDX_CamouContentRect>, const CSSIntRect&,
++              ContentParent* aSource) {
++    return IsTop() && !aSource;
++  }
++
+   bool CanSet(FieldIndex<IDX_EmbeddedInContentDocument>, bool,
+               ContentParent* aSource) {
+     return CheckOnlyEmbedderCanSet(aSource);
+diff --git a/dom/base/nsGlobalWindowInner.cpp b/dom/base/nsGlobalWindowInner.cpp
+index a8c861d..a528e68 100644
+--- a/dom/base/nsGlobalWindowInner.cpp
++++ b/dom/base/nsGlobalWindowInner.cpp
+@@ -3818,7 +3818,8 @@ float nsGlobalWindowInner::GetMozInnerScreenY(CallerType aCallerType,
+ CSSIntPoint nsGlobalWindowInner::SpoofedScreenShift(nsIGlobalObject* aGlobal) {
+   const auto x = MaskConfig::GetInt32("window.screenX");
+   const auto y = MaskConfig::GetInt32("window.screenY");
+-  if (!x && !y) {
++  const Maybe<CSSIntMargin>& frame = ClaimedWindowFrame();
++  if (!x && !y && !frame) {
+     return {};
+   }
+   nsPIDOMWindowInner* inner = aGlobal ? aGlobal->GetAsInnerWindow() : nullptr;
+@@ -3827,12 +3828,48 @@ CSSIntPoint nsGlobalWindowInner::SpoofedScreenShift(nsIGlobalObject* aGlobal) {
+   if (!outer) {
+     return {};
+   }
+-  IgnoredErrorResult rv;
+-  const CSSIntPoint real = outer->GetScreenXY(CallerType::System, rv);
+-  if (rv.Failed()) {
+-    return {};
++  CSSIntPoint shift;
++  if (x || y) {
++    IgnoredErrorResult rv;
++    const CSSIntPoint real = outer->GetScreenXY(CallerType::System, rv);
++    if (rv.Failed()) {
++      return {};
++    }
++    shift = CSSIntPoint(x ? *x - real.x : 0, y ? *y - real.y : 0);
++  }
++  // With the claimed OS's frame, the top page's content sits at the frame's
++  // top-left inset from the window's position, not where the real window's
++  // chrome put it. One shift for the whole window: an iframe's screen points
++  // keep their offset inside the top page.
++  if (frame) {
++    if (BrowsingContext* bc = inner->GetBrowsingContext()) {
++      const CSSIntRect content = bc->Top()->GetCamouContentRect();
++      if (!content.IsEmpty()) {
++        shift += CSSIntPoint(frame->left.value - content.x,
++                             frame->top.value - content.y);
++      }
++    }
+   }
+-  return CSSIntPoint(x ? *x - real.x : 0, y ? *y - real.y : 0);
++  return shift;
++}
++
++/* static */
++const Maybe<CSSIntMargin>& nsGlobalWindowInner::ClaimedWindowFrame() {
++  // Read once: the config never changes in a process.
++  MOZ_ASSERT(NS_IsMainThread());
++  static const Maybe<CSSIntMargin> sFrame = []() -> Maybe<CSSIntMargin> {
++    const auto left = MaskConfig::GetUint32("window.frameLeft");
++    const auto top = MaskConfig::GetUint32("window.frameTop");
++    const auto right = MaskConfig::GetUint32("window.frameRight");
++    const auto bottom = MaskConfig::GetUint32("window.frameBottom");
++    if (!left && !top && !right && !bottom) {
++      return Nothing();
++    }
++    return Some(CSSIntMargin(int32_t(top.value_or(0)), int32_t(right.value_or(0)),
++                             int32_t(bottom.value_or(0)),
++                             int32_t(left.value_or(0))));
++  }();
++  return sFrame;
+ }
+ 
+ static nsPresContext* GetPresContextForRatio(Document* aDoc) {
+diff --git a/dom/base/nsGlobalWindowInner.h b/dom/base/nsGlobalWindowInner.h
+index 04e05db..6166253 100644
+--- a/dom/base/nsGlobalWindowInner.h
++++ b/dom/base/nsGlobalWindowInner.h
+@@ -914,6 +914,11 @@ class nsGlobalWindowInner final : public mozilla::dom::EventTarget,
+   // coordinate a page reads moves by it, so all of them agree with
+   // window.screenX/Y.
+   static mozilla::CSSIntPoint SpoofedScreenShift(nsIGlobalObject* aGlobal);
++
++  // Camoufox: the claimed OS's window frame, as insets of the content area in
++  // the window (window.frameLeft/Top/Right/Bottom), or Nothing() when the
++  // real window's frame is reported. Main thread only.
++  static const mozilla::Maybe<mozilla::CSSIntMargin>& ClaimedWindowFrame();
+   double GetDevicePixelRatio(mozilla::dom::CallerType aCallerType,
+                              mozilla::ErrorResult& aError);
+   double GetDesktopToDeviceScale(mozilla::ErrorResult& aError);
+diff --git a/dom/base/nsGlobalWindowOuter.cpp b/dom/base/nsGlobalWindowOuter.cpp
+index a279ed5..7ee8260 100644
+--- a/dom/base/nsGlobalWindowOuter.cpp
++++ b/dom/base/nsGlobalWindowOuter.cpp
+@@ -3585,8 +3585,28 @@ CSSIntSize nsGlobalWindowOuter::GetOuterSize(CallerType aCallerType,
+     return {};
+   }
+ 
+-  return RoundedToInt(treeOwnerAsWin->GetSize() /
+-                      CSSToDevScaleForBaseWindow(treeOwnerAsWin));
++  const CSSIntSize stock = RoundedToInt(
++      treeOwnerAsWin->GetSize() / CSSToDevScaleForBaseWindow(treeOwnerAsWin));
++
++  // Camoufox: with the claimed OS's window frame, a page measures the real
++  // content area plus that frame, not the host's toolbars and decorations.
++  // From the top context's content area, so an iframe in any process reads
++  // its window's size. Stock's work stays first (timing parity; see
++  // nsScreen::PixelDepth), and browser code keeps the real size.
++  if (aCallerType != CallerType::System) {
++    if (const Maybe<CSSIntMargin>& frame =
++            nsGlobalWindowInner::ClaimedWindowFrame()) {
++      if (BrowsingContext* bc = GetBrowsingContext()) {
++        const CSSIntRect content = bc->Top()->GetCamouContentRect();
++        if (!content.IsEmpty()) {
++          return CSSIntSize(
++              content.width + frame->left.value + frame->right.value,
++              content.height + frame->top.value + frame->bottom.value);
++        }
++      }
++    }
++  }
++  return stock;
+ }
+ 
+ int32_t nsGlobalWindowOuter::GetOuterWidthOuter(CallerType aCallerType,
+diff --git a/dom/ipc/BrowserParent.cpp b/dom/ipc/BrowserParent.cpp
+index 7eba540..50617ba 100644
+--- a/dom/ipc/BrowserParent.cpp
++++ b/dom/ipc/BrowserParent.cpp
+@@ -1184,6 +1184,29 @@ void BrowserParent::UpdateDimensions(const LayoutDeviceIntRect& rect,
+     mChromeOffset = chromeOffset;
+ 
+     (void)SendUpdateDimensions(GetDimensionInfo());
++    UpdateCamouContentRect();
++  }
++}
++
++void BrowserParent::UpdateCamouContentRect() {
++  // Camoufox: where a top-level browser's content area really sits in its
++  // window, and its size, in unscaled CSS pixels: what a page's window frame
++  // (outerWidth - innerWidth, mozInnerScreenX - screenX) is measured from when
++  // the frame is reported as the claimed OS's. Only this process knows the
++  // window; an iframe in any process reads it from the top context.
++  if (GetBrowserBridgeParent()) {
++    return;
++  }
++  CanonicalBrowsingContext* bc = GetBrowsingContext();
++  if (!bc || !bc->IsTop()) {
++    return;
++  }
++  const CSSIntRect content(
++      RoundedToInt(LayoutDevicePoint(mClientOffset + mChromeOffset) /
++                   mDefaultScale),
++      RoundedToInt(mDimensions / mDefaultScale));
++  if (bc->GetCamouContentRect() != content) {
++    (void)bc->SetCamouContentRect(content);
+   }
+ }
+ 
+diff --git a/dom/ipc/BrowserParent.h b/dom/ipc/BrowserParent.h
+index 3d6b83a..e752756 100644
+--- a/dom/ipc/BrowserParent.h
++++ b/dom/ipc/BrowserParent.h
+@@ -468,6 +468,10 @@ class BrowserParent final : public PBrowserParent,
+ 
+   DimensionInfo GetDimensionInfo();
+ 
++  // Camoufox: records the real content area on the top context
++  // (BrowsingContext::CamouContentRect).
++  void UpdateCamouContentRect();
++
+   nsresult UpdatePosition();
+ 
+   void SizeModeChanged(const nsSizeMode& aSizeMode);
