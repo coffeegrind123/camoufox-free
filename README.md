@@ -6,13 +6,11 @@ how to build it, read [upstream's README](https://github.com/daijro/camoufox#rea
 
 This fork follows upstream `main` and pins Firefox `158.0.1` / Camoufox `beta.34`
 in [`browser/upstream.sh`](browser/upstream.sh). The newest published build is
-[`v158.0-beta.33-cg.9`](https://github.com/coffeegrind123/camoufox-free/releases/tag/v158.0-beta.33-cg.9),
-built from [f597fa6](https://github.com/coffeegrind123/camoufox-free/commit/f597fa67fe29030b38c10dab193679adf84c073d);
-it predates
-[PR #2](https://github.com/coffeegrind123/camoufox-free/pull/2), where the
-current feature set was merged. The newest stable release remains
+[`v158.0.1-beta.34-cg.10`](https://github.com/coffeegrind123/camoufox-free/releases/tag/v158.0.1-beta.34-cg.10),
+built from [389d718](https://github.com/coffeegrind123/camoufox-free/commit/389d71845f1d9079df9949bfc440b75c92c31905).
+The newest stable release remains
 [`v152.0.4-beta.31-cg.4`](https://github.com/coffeegrind123/camoufox-free/releases/tag/v152.0.4-beta.31-cg.4).
-Features below that landed after cg.9 require a newer build or a source
+Features below that landed after cg.10 require a newer build or a source
 checkout. Fixes are offered upstream when appropriate.
 
 > [!NOTE]
@@ -366,7 +364,7 @@ its `CamoufoxFree` pin and fetches the matching fork tag. The fork source is
 also available explicitly:
 
 ```bash
-camoufox fetch camoufoxfree/158.0-beta.33-cg.9
+camoufox fetch camoufoxfree/158.0.1-beta.34-cg.10
 ```
 
 The release zip can still be installed manually and passed through
