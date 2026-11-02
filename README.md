@@ -189,7 +189,8 @@ For an identity whose OS is not the host's. Offered upstream in
   reappearing elsewhere, mid-page when a slow frame coalesced the re-entry.
   The pointer now moves off the content (over the toolbar when it left through
   the top) and re-enters with `mouseover`, and a page's first move redraws a
-  path that climbs out of the page.
+  path that climbs out of the page. The page exit is offered upstream in
+  [#987](https://github.com/daijro/camoufox/pull/987).
   ([MouseDispatch.js](browser/additions/juggler/input/MouseDispatch.js), guard
   [humanize-mouse-trajectory.py](browser/tests/playwright/patches/humanize-mouse-trajectory.py))
 - **A context reports the launch's core count.** NewContext drew a fresh
