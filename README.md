@@ -65,7 +65,10 @@ For an identity whose OS is not the host's. Offered upstream in
   derives its WebRTC IP, timezone, locale and geolocation from that proxy's
   exit IP. Context viewports are bounded by the shared launch window. A guard
   also asserts that contexts never share Firefox's web-content process, so a
-  cached font, locale or other context value cannot cross identities.
+  cached font, locale or other context value cannot cross identities. The
+  proxy exit placement and the guard are offered upstream in
+  [#990](https://github.com/daijro/camoufox/pull/990) and
+  [#991](https://github.com/daijro/camoufox/pull/991).
   ([b84880a](https://github.com/coffeegrind123/camoufox-free/commit/b84880ae39c173aa8250d377b8e0679689c4cad2), [3777eaf](https://github.com/coffeegrind123/camoufox-free/commit/3777eaf09cc91a2eb1d7d1522a425785d8b23353))
 - **Authenticated SOCKS5 proxies.** Playwright rejects SOCKS5 credentials
   before Juggler receives the proxy, so the launchers pass them through an
@@ -88,7 +91,10 @@ For an identity whose OS is not the host's. Offered upstream in
   original header order; UA, Accept-Language and per-scheme Accept-Encoding
   stay coherent; DNT and context locale are stable across navigation.
   WebSocket close arguments follow Firefox 158, and a failed promise-reaction
-  attach rejects immediately instead of leaving Juggler hanging.
+  attach rejects immediately instead of leaving Juggler hanging. The header
+  order and WebSocket fixes are offered upstream in
+  [#989](https://github.com/daijro/camoufox/pull/989) and
+  [#988](https://github.com/daijro/camoufox/pull/988).
   ([a645377](https://github.com/coffeegrind123/camoufox-free/commit/a645377641887a9443c5e6be0d0f7e1e209eed39), [bf238e4](https://github.com/coffeegrind123/camoufox-free/commit/bf238e4a9f41f026674a0e6361f4ec496f5f542a), [3cebf99](https://github.com/coffeegrind123/camoufox-free/commit/3cebf99c8f486c211a5502099c9ecfdc91164813))
 - **The spoofed user agent is read once.** Firefox's HTTP handler rewrote
   its shared user-agent string on every `UserAgent()` call, and that also runs
@@ -116,14 +122,6 @@ For an identity whose OS is not the host's. Offered upstream in
   `window.innerWidth`/`innerHeight` no longer deadlocks viewport updates.
   Explicit `webgl_config` replaces a preset's GPU as one complete pair in both
   launchers. ([1fcfad6](https://github.com/coffeegrind123/camoufox-free/commit/1fcfad6245cf91797d80d3943903cbf46ec3b017), [6932314](https://github.com/coffeegrind123/camoufox-free/commit/6932314b3b76380af9ab4c714d069c02f9e7f2be))
-- **A caller's user agent fixes the drawn platform.** Setting only
-  `navigator.userAgent` counted as setting the whole navigator, so the launcher
-  skipped its platform fix, and fpgen's Linux draws that carry another OS's
-  `navigator.platform` reached the page as `Win32` behind a Linux user agent.
-  The fix now stands down only when the caller sets `navigator.platform` or
-  `navigator.oscpu`, in both launchers. Offered upstream in
-  [#983](https://github.com/daijro/camoufox/pull/983).
-  ([f7b091c](https://github.com/coffeegrind123/camoufox-free/commit/f7b091c1d1533ceae016a1ef6b85c861f8c0582c))
 - **A context reports its own GPU's WebGL limits.** A `NewContext` that claimed
   another GPU named that GPU in `UNMASKED_RENDERER_WEBGL`, but its
   `getParameter` limits, `getSupportedExtensions()` and
@@ -163,13 +161,15 @@ For an identity whose OS is not the host's. Offered upstream in
   upstream in [#973](https://github.com/daijro/camoufox/pull/973).
   ([e2f61ee](https://github.com/coffeegrind123/camoufox-free/commit/e2f61eeeab04c977d839930237a8a4c94f529ee8), guard
   [startup-size-frame-extents.py](browser/tests/playwright/patches/startup-size-frame-extents.py))
-- **A Windows identity's window frame measures as Windows'.** A page can
-  measure the frame around its content area (`outerWidth - innerWidth`,
+- **A Windows or macOS identity's window frame measures as stock's.** A page
+  can measure the frame around its content area (`outerWidth - innerWidth`,
   `mozInnerScreenX - screenX`), and it came from the host: GTK's 86x192 under
-  XWayland, 52x137 on Wayland, with the content 43,149 into the window, where
-  stock Firefox on Windows measures 16x93 and 8,85. A page now reads the real
-  content area plus Windows' frame, in a cross-site iframe too, and the window
-  is sized so the outer size is the identity's.
+  XWayland, with the content 43,149 into the window, where stock Firefox on
+  Windows measures 16x93 and 8,85. A page now reads the real content area plus
+  the claimed OS's frame at its display scale, in a cross-site iframe too, and
+  no frame in fullscreen. A Windows identity drawn maximized gets stock's
+  maximized geometry (outer the available area plus the borders, at minus the
+  border), and a window maximized later goes back to the identity's size.
   ([patch](browser/patches/window-sizing-claimed-os.patch), guard
   [window-sizing-claimed-os.py](browser/tests/playwright/patches/window-sizing-claimed-os.py))
 - **Screen coordinates follow the spoofed window position.**

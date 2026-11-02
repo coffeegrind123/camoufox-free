@@ -37,6 +37,7 @@ import {
 	identitySalt,
 	identitySeed,
 	loadOsFonts,
+	presentWindowFrame,
 	raiseScreenToModernFloor,
 	Screen,
 	setMediaDevicesDefaults,
@@ -118,12 +119,6 @@ export const CACHE_PREFS: Record<string, any> = LAUNCHER_CONSTANTS.cachePrefs;
 // WINDOWS_BEHAVIOUR_PREFS in the Python launcher for each one's reason).
 export const WINDOWS_BEHAVIOUR_PREFS: Record<string, any> =
 	LAUNCHER_CONSTANTS.windowsBehaviourPrefs;
-// The window frame of stock Firefox on each claimed OS, as content-area insets
-// (WINDOW_FRAME in the Python launcher has the measurement).
-export const WINDOW_FRAME: Record<
-	string,
-	Record<string, number>
-> = LAUNCHER_CONSTANTS.windowFrame;
 
 /** Monitor pixels per CSS pixel of the window at the scale it renders at.
  * Linux reports the monitor in pixels at scale 1. On Windows and macOS the
@@ -1899,17 +1894,6 @@ export async function launchOptions({
 			setInto(firefox_user_prefs, pref, value);
 		}
 
-		// The window frame a page measures is the host's (GTK's 86x192 under
-		// XWayland); stock Windows Firefox measures 16x93 with the content at
-		// 8,85 (window-sizing-claimed-os.patch).
-		for (const [side, inset] of Object.entries(WINDOW_FRAME.win)) {
-			setInto(
-				config,
-				`window.frame${side[0].toUpperCase()}${side.slice(1)}`,
-				inset,
-			);
-		}
-
 		// The scrollbars pinned above are drawn by the host build's theme (GTK's
 		// 12 px where Windows 10 draws 17): draw Windows' own, 4 Windows 10 or
 		// 5 Windows 11 (17 px: only Windows' build reads a system metric).
@@ -2315,16 +2299,40 @@ export async function launchOptions({
 	if (dpr && !("layout.css.devPixelsPerPx" in firefox_user_prefs)) {
 		firefox_user_prefs["layout.css.devPixelsPerPx"] = String(dpr);
 	}
+
+	// The window frame a page measures is the host's own chrome (GTK's 86x192
+	// under XWayland); a Windows or macOS identity on another host reports its
+	// OS's frame at its display scale, after the coherence pass (present_window_frame
+	// in the Python launcher).
+	if (
+		(targetOs === "win" || targetOs === "mac") &&
+		utilsDeps.hostOsKey() !== targetOs
+	) {
+		presentWindowFrame(config, targetOs, !userSetScreenWindow);
+	}
 	if (headless === false && !virtual_display && screenCons) {
 		const fit = physicalScale(config, firefox_user_prefs);
+		// With a claimed frame the real window holds the content area, the outer
+		// size less that frame.
+		const frameSides = { Width: ["Left", "Right"], Height: ["Top", "Bottom"] };
 		for (const [axis, cap] of [
 			["Width", screenCons.maxWidth],
 			["Height", screenCons.maxHeight],
 		] as const) {
-			const size = config[`window.outer${axis}`];
+			const outer = config[`window.outer${axis}`];
+			let size = outer;
+			if (size) {
+				for (const side of frameSides[axis]) {
+					size -= Number(config[`window.frame${side}`] ?? 0);
+				}
+			}
+			const held =
+				size !== outer
+					? ` (a ${size}px content area inside the claimed frame)`
+					: "";
 			if (cap && size && size * fit > cap) {
 				throw new Error(
-					`window.outer${axis} ${size} at display scale ${fit} needs ${size * fit} pixels, ` +
+					`window.outer${axis} ${outer}${held} at display scale ${fit} needs ${size * fit} pixels, ` +
 						`but this monitor has ${cap}. Pass a smaller screen and window, or run headless.`,
 				);
 			}

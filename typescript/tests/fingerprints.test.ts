@@ -31,6 +31,7 @@ import {
 	normalizePresetVoices,
 	PLAUSIBLE_CORE_COUNTS,
 	type Preset,
+	presentWindowFrame,
 	Screen,
 	setMediaDevicesDefaults,
 	versionlessUa,
@@ -205,6 +206,73 @@ describe("clampScreenToDisplay", () => {
 		expect(c["window.innerHeight"]).toBeLessThanOrEqual(
 			c["window.outerHeight"],
 		);
+	});
+});
+
+// test_windows_identity.py
+describe("presentWindowFrame", () => {
+	const windowAt = (
+		outer: [number, number],
+		position: [number, number] = [0, 0],
+		dpr?: number,
+		avail: [number, number] = [1920, 1032],
+	): Record<string, number> => ({
+		"screen.availLeft": 0,
+		"screen.availTop": 0,
+		"screen.availWidth": avail[0],
+		"screen.availHeight": avail[1],
+		"window.outerWidth": outer[0],
+		"window.outerHeight": outer[1],
+		"window.screenX": position[0],
+		"window.screenY": position[1],
+		...(dpr ? { "window.devicePixelRatio": dpr } : {}),
+	});
+	const frameOf = (c: Record<string, number>) =>
+		["Left", "Top", "Right", "Bottom"].map((side) => c[`window.frame${side}`]);
+
+	it("a normal Windows window keeps its place", () => {
+		const c = windowAt([1280, 900], [100, 50]);
+		presentWindowFrame(c, "win", true);
+		expect(frameOf(c)).toEqual([8, 85, 8, 8]);
+		expect([c["window.outerWidth"], c["window.screenX"]]).toEqual([1280, 100]);
+	});
+	it("a Windows window filling the available area is maximized", () => {
+		const c = windowAt([1920, 1032]);
+		presentWindowFrame(c, "win", true);
+		expect([c["window.outerWidth"], c["window.outerHeight"]]).toEqual([
+			1936, 1048,
+		]);
+		expect([c["window.screenX"], c["window.screenY"]]).toEqual([-8, -8]);
+		expect(frameOf(c)).toEqual([8, 93, 8, 8]);
+	});
+	it("a caller's geometry is never maximized", () => {
+		const c = windowAt([1920, 1032]);
+		presentWindowFrame(c, "win", false);
+		expect(c["window.outerWidth"]).toBe(1920);
+		expect(frameOf(c)).toEqual([8, 85, 8, 8]);
+	});
+	it("a maximized window follows the display scale", () => {
+		for (const [dpr, outer, frame] of [
+			[1.25, [1934, 1046], [7, 92, 7, 7]],
+			[1.5, [1935, 1047], [7, 92, 8, 8]],
+			[2, [1933, 1045], [7, 91, 6, 6]],
+		] as const) {
+			const c = windowAt([1920, 1032], [0, 0], dpr);
+			presentWindowFrame(c, "win", true);
+			expect([c["window.outerWidth"], c["window.outerHeight"]]).toEqual(outer);
+			expect(frameOf(c)).toEqual(frame);
+		}
+	});
+	it("a scale between steps takes the nearest", () => {
+		const c = windowAt([1280, 900], [10, 10], 1.2);
+		presentWindowFrame(c, "win", true);
+		expect(frameOf(c)).toEqual([7, 85, 7, 7]);
+	});
+	it("a macOS window is never moved", () => {
+		const c = windowAt([1440, 875], [0, 0], 2, [1440, 875]);
+		presentWindowFrame(c, "mac", true);
+		expect(frameOf(c)).toEqual([0, 84, 0, 0]);
+		expect([c["window.outerWidth"], c["window.screenX"]]).toEqual([1440, 0]);
 	});
 });
 

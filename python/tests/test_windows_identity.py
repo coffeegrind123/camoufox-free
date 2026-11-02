@@ -12,7 +12,7 @@ that way, and a macOS or Linux identity is left as it is.
 
 import pytest
 
-from camoufox import utils
+from camoufox import fingerprints, utils
 
 from test_launch_environment import isolated_launch_dependencies  # noqa: F401
 
@@ -147,21 +147,38 @@ def test_caller_scrollbar_style_wins(launch):
     assert prefs[SCROLLBAR_STYLE] == 2
 
 
+FRAME_KEYS = ("Left", "Top", "Right", "Bottom")
+
+
+def frame_of(config):
+    return tuple(config.get(f"window.frame{key}") for key in FRAME_KEYS)
+
+
 def test_windows_identity_gets_stock_windows_window_frame(launch):
     config, _ = launch(WIN_UA)
-    frame = {key: config.get(f"window.frame{key}") for key in ("Left", "Top", "Right", "Bottom")}
-    assert frame == {"Left": 8, "Top": 85, "Right": 8, "Bottom": 8}
+    left, top, right, bottom = frame_of(config)
+    # A normal window (8, 85, 8, 8) or a maximized one, whose top border
+    # hangs off the screen above the toolbars (8, 93, 8, 8).
+    assert (left, right, bottom) == (8, 8, 8)
+    assert top in (85, 93)
 
 
-@pytest.mark.parametrize("ua", [MAC_UA, LIN_UA])
-def test_other_identities_keep_the_real_window_frame(launch, ua):
-    config, _ = launch(ua)
+def test_macos_identity_on_another_host_gets_stock_macos_window_frame(launch):
+    config, _ = launch(MAC_UA)
+    assert frame_of(config)[0::2] == (0, 0)
+    assert frame_of(config)[3] == 0
+    assert frame_of(config)[1] in (84, 85)
+
+
+def test_linux_identity_keeps_the_real_window_frame(launch):
+    config, _ = launch(LIN_UA)
     assert not any(key.startswith("window.frame") for key in config)
 
 
-def test_windows_identity_on_windows_host_keeps_the_real_window_frame(launch, monkeypatch):
-    monkeypatch.setattr(utils, "_host_os_key", lambda: "win")
-    config, _ = launch(WIN_UA)
+@pytest.mark.parametrize("host, ua", [("win", WIN_UA), ("mac", MAC_UA)])
+def test_an_identity_on_its_own_os_keeps_the_real_window_frame(launch, monkeypatch, host, ua):
+    monkeypatch.setattr(utils, "_host_os_key", lambda: host)
+    config, _ = launch(ua)
     assert not any(key.startswith("window.frame") for key in config)
 
 
@@ -169,3 +186,67 @@ def test_a_callers_window_frame_is_kept(launch):
     config, _ = launch(WIN_UA, config={"window.frameTop": 120})
     assert config["window.frameTop"] == 120
     assert config["window.frameLeft"] == 8
+
+
+def test_a_callers_window_geometry_is_not_maximized(launch):
+    geometry = {"screen.width": 1920, "screen.height": 1080, "screen.availWidth": 1920,
+                "screen.availHeight": 1032, "window.outerWidth": 1920, "window.outerHeight": 1032,
+                "window.screenX": 0, "window.screenY": 0}
+    config, _ = launch(WIN_UA, config=geometry)
+    assert (config["window.outerWidth"], config["window.screenX"]) == (1920, 0)
+    assert frame_of(config) == (8, 85, 8, 8)
+
+
+def _window(outer, avail=(1920, 1032), position=(0, 0), dpr=None):
+    config = {"screen.availLeft": 0, "screen.availTop": 0,
+              "screen.availWidth": avail[0], "screen.availHeight": avail[1],
+              "window.outerWidth": outer[0], "window.outerHeight": outer[1],
+              "window.screenX": position[0], "window.screenY": position[1]}
+    if dpr:
+        config["window.devicePixelRatio"] = dpr
+    return config
+
+
+def test_a_normal_windows_window_keeps_its_place():
+    config = _window((1280, 900), position=(100, 50))
+    fingerprints.present_window_frame(config, "win", own_geometry=True)
+    assert frame_of(config) == (8, 85, 8, 8)
+    assert (config["window.outerWidth"], config["window.screenX"]) == (1280, 100)
+
+
+def test_a_windows_window_filling_the_available_area_is_maximized():
+    # A maximized window at 100% in fpgen's records: outer the available area
+    # plus 16x16 at -8,-8, outer - inner 16x101, so on a 1920x1032 work area
+    # outer 1936x1048 and content 1920x947 at 0,85.
+    config = _window((1920, 1032))
+    fingerprints.present_window_frame(config, "win", own_geometry=True)
+    assert (config["window.outerWidth"], config["window.outerHeight"]) == (1936, 1048)
+    assert (config["window.screenX"], config["window.screenY"]) == (-8, -8)
+    assert frame_of(config) == (8, 93, 8, 8)
+    content = (1936 - 8 - 8, 1048 - 93 - 8)
+    assert content == (1920, 1032 - 85)
+
+
+@pytest.mark.parametrize("dpr, outer, frame", [
+    (1.25, (1934, 1046), (7, 92, 7, 7)),
+    (1.5, (1935, 1047), (7, 92, 8, 8)),
+    (2, (1933, 1045), (7, 91, 6, 6)),
+])
+def test_a_maximized_windows_window_follows_the_display_scale(dpr, outer, frame):
+    config = _window((1920, 1032), dpr=dpr)
+    fingerprints.present_window_frame(config, "win", own_geometry=True)
+    assert (config["window.outerWidth"], config["window.outerHeight"]) == outer
+    assert frame_of(config) == frame
+
+
+def test_a_scale_between_steps_takes_the_nearest():
+    config = _window((1280, 900), position=(10, 10), dpr=1.2)
+    fingerprints.present_window_frame(config, "win", own_geometry=True)
+    assert frame_of(config) == (7, 85, 7, 7)
+
+
+def test_a_macos_window_is_never_moved():
+    config = _window((1440, 875), avail=(1440, 875), dpr=2)
+    fingerprints.present_window_frame(config, "mac", own_geometry=True)
+    assert frame_of(config) == (0, 84, 0, 0)
+    assert (config["window.outerWidth"], config["window.screenX"]) == (1440, 0)
