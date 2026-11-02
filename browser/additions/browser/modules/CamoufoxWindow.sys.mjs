@@ -196,6 +196,17 @@ function applyWindowSize(win) {
     win.addEventListener("sizemodechange", holdStartupSize);
     win.addEventListener("resize", holdStartupSize);
     const holdTimer = win.setInterval(holdStartupSize, 100);
+
+    // After startup too, a maximized window would take the real display's
+    // size, larger than the identity's screen, and outerWidth/innerWidth
+    // follow the real window: a window bigger than its screen. It goes back to
+    // the identity's size. An identity drawn maximized already fills its
+    // screen, and a page reads it as maximized.
+    win.addEventListener("sizemodechange", () => {
+      if (Date.now() > deadline && win.windowState === win.STATE_MAXIMIZED) {
+        win.restore();
+      }
+    });
   }
 
   const innerWidth = ChromeUtils.camouGetInt("window.innerWidth");

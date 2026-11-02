@@ -58,7 +58,7 @@ be listed there.
 | `webgpu-limits-spoofing.patch` | `webGpu:limits` |
 | `webrtc-ip-spoofing.patch` | `webrtc:ipv4`, `webrtc:ipv6`, `navigator.platform` |
 | `window-screen-origin.patch` | `window.screenX`, `window.screenY` (moves `mozInnerScreenX/Y` and mouse and touch event `screenX/Y` with them) |
-| `window-sizing-claimed-os.patch` | `window.frameLeft`, `window.frameTop`, `window.frameRight`, `window.frameBottom` (a page's `outerWidth/outerHeight` and screen points measure the content area inside that frame) |
+| `window-sizing-claimed-os.patch` | `window.frameLeft`, `window.frameTop`, `window.frameRight`, `window.frameBottom` (a page's `outerWidth/outerHeight` and screen points measure the content area inside that frame; none in fullscreen) |
 | `windows-keyboard.patch` | `input:windowsKeyboard` (launch-wide: the shortcut tables and GTK's key handling are process-level) |
 | `zz-stock-cost-parity.patch` | `navigator.hardwareConcurrency`, `navigator.maxTouchPoints`, `screen.*`, `window.screenX`, `window.screenY` (re-orders the getters above so stock's work runs first) |
 

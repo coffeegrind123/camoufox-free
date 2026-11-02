@@ -1,8 +1,8 @@
 diff --git a/docshell/base/BrowsingContext.h b/docshell/base/BrowsingContext.h
-index ae57102..f045e6d 100644
+index ae57102633..58bbd46c79 100644
 --- a/docshell/base/BrowsingContext.h
 +++ b/docshell/base/BrowsingContext.h
-@@ -290,6 +290,11 @@ struct EmbedderColorSchemes {
+@@ -290,6 +290,13 @@ struct EmbedderColorSchemes {
    /* Used to propagate window.top's inner size for RFPTarget::Window*         \
     * protections */                                                           \
    FIELD(InnerSizeSpoofedForRFP, CSSIntSize)                                   \
@@ -11,10 +11,12 @@ index ae57102..f045e6d 100644
 +   * (BrowserParent::UpdateDimensions) so a page's window frame can be        \
 +   * reported as the claimed OS's (window-sizing-claimed-os.patch). */        \
 +  FIELD(CamouContentRect, CSSIntRect)                                         \
++  /* Camoufox: whether that window is fullscreen, where stock has no frame. */\
++  FIELD(CamouFullscreen, bool)                                                \
    /* Used to propagate document's IPAddressSpace  */                          \
    FIELD(IPAddressSpace, nsILoadInfo::IPAddressSpace)                          \
    /* This is true if we should redirect to an error page when inserting *     \
-@@ -1600,6 +1605,13 @@ class BrowsingContext : public nsILoadContext, public nsWrapperCache {
+@@ -1600,6 +1607,16 @@ class BrowsingContext : public nsILoadContext, public nsWrapperCache {
      return IsTop();
    }
  
@@ -24,12 +26,15 @@ index ae57102..f045e6d 100644
 +              ContentParent* aSource) {
 +    return IsTop() && !aSource;
 +  }
++  bool CanSet(FieldIndex<IDX_CamouFullscreen>, bool, ContentParent* aSource) {
++    return IsTop() && !aSource;
++  }
 +
    bool CanSet(FieldIndex<IDX_EmbeddedInContentDocument>, bool,
                ContentParent* aSource) {
      return CheckOnlyEmbedderCanSet(aSource);
 diff --git a/dom/base/nsGlobalWindowInner.cpp b/dom/base/nsGlobalWindowInner.cpp
-index a8c861d..a528e68 100644
+index a8c861d77b..2520a11263 100644
 --- a/dom/base/nsGlobalWindowInner.cpp
 +++ b/dom/base/nsGlobalWindowInner.cpp
 @@ -3818,7 +3818,8 @@ float nsGlobalWindowInner::GetMozInnerScreenY(CallerType aCallerType,
@@ -42,7 +47,7 @@ index a8c861d..a528e68 100644
      return {};
    }
    nsPIDOMWindowInner* inner = aGlobal ? aGlobal->GetAsInnerWindow() : nullptr;
-@@ -3827,12 +3828,48 @@ CSSIntPoint nsGlobalWindowInner::SpoofedScreenShift(nsIGlobalObject* aGlobal) {
+@@ -3827,12 +3828,51 @@ CSSIntPoint nsGlobalWindowInner::SpoofedScreenShift(nsIGlobalObject* aGlobal) {
    if (!outer) {
      return {};
    }
@@ -63,12 +68,15 @@ index a8c861d..a528e68 100644
 +  // top-left inset from the window's position, not where the real window's
 +  // chrome put it. One shift for the whole window: an iframe's screen points
 +  // keep their offset inside the top page.
++  // A fullscreen window has no frame.
 +  if (frame) {
 +    if (BrowsingContext* bc = inner->GetBrowsingContext()) {
-+      const CSSIntRect content = bc->Top()->GetCamouContentRect();
++      BrowsingContext* top = bc->Top();
++      const CSSIntRect content = top->GetCamouContentRect();
 +      if (!content.IsEmpty()) {
-+        shift += CSSIntPoint(frame->left.value - content.x,
-+                             frame->top.value - content.y);
++        const bool fullscreen = top->GetCamouFullscreen();
++        shift += CSSIntPoint((fullscreen ? 0 : frame->left.value) - content.x,
++                             (fullscreen ? 0 : frame->top.value) - content.y);
 +      }
 +    }
    }
@@ -97,7 +105,7 @@ index a8c861d..a528e68 100644
  
  static nsPresContext* GetPresContextForRatio(Document* aDoc) {
 diff --git a/dom/base/nsGlobalWindowInner.h b/dom/base/nsGlobalWindowInner.h
-index 04e05db..6166253 100644
+index 04e05dbba7..6166253480 100644
 --- a/dom/base/nsGlobalWindowInner.h
 +++ b/dom/base/nsGlobalWindowInner.h
 @@ -914,6 +914,11 @@ class nsGlobalWindowInner final : public mozilla::dom::EventTarget,
@@ -113,10 +121,10 @@ index 04e05db..6166253 100644
                               mozilla::ErrorResult& aError);
    double GetDesktopToDeviceScale(mozilla::ErrorResult& aError);
 diff --git a/dom/base/nsGlobalWindowOuter.cpp b/dom/base/nsGlobalWindowOuter.cpp
-index a279ed5..7ee8260 100644
+index a279ed59a6..363d08b787 100644
 --- a/dom/base/nsGlobalWindowOuter.cpp
 +++ b/dom/base/nsGlobalWindowOuter.cpp
-@@ -3585,8 +3585,28 @@ CSSIntSize nsGlobalWindowOuter::GetOuterSize(CallerType aCallerType,
+@@ -3585,8 +3585,33 @@ CSSIntSize nsGlobalWindowOuter::GetOuterSize(CallerType aCallerType,
      return {};
    }
  
@@ -134,7 +142,12 @@ index a279ed5..7ee8260 100644
 +    if (const Maybe<CSSIntMargin>& frame =
 +            nsGlobalWindowInner::ClaimedWindowFrame()) {
 +      if (BrowsingContext* bc = GetBrowsingContext()) {
-+        const CSSIntRect content = bc->Top()->GetCamouContentRect();
++        BrowsingContext* top = bc->Top();
++        const CSSIntRect content = top->GetCamouContentRect();
++        // A fullscreen window has no frame: outer is inner, as in stock.
++        if (!content.IsEmpty() && top->GetCamouFullscreen()) {
++          return content.Size();
++        }
 +        if (!content.IsEmpty()) {
 +          return CSSIntSize(
 +              content.width + frame->left.value + frame->right.value,
@@ -148,10 +161,10 @@ index a279ed5..7ee8260 100644
  
  int32_t nsGlobalWindowOuter::GetOuterWidthOuter(CallerType aCallerType,
 diff --git a/dom/ipc/BrowserParent.cpp b/dom/ipc/BrowserParent.cpp
-index 7eba540..50617ba 100644
+index 7eba540147..9e4a22c3a9 100644
 --- a/dom/ipc/BrowserParent.cpp
 +++ b/dom/ipc/BrowserParent.cpp
-@@ -1184,6 +1184,29 @@ void BrowserParent::UpdateDimensions(const LayoutDeviceIntRect& rect,
+@@ -1184,6 +1184,33 @@ void BrowserParent::UpdateDimensions(const LayoutDeviceIntRect& rect,
      mChromeOffset = chromeOffset;
  
      (void)SendUpdateDimensions(GetDimensionInfo());
@@ -178,11 +191,23 @@ index 7eba540..50617ba 100644
 +      RoundedToInt(mDimensions / mDefaultScale));
 +  if (bc->GetCamouContentRect() != content) {
 +    (void)bc->SetCamouContentRect(content);
++  }
++  const bool fullscreen = mSizeMode == nsSizeMode_Fullscreen;
++  if (bc->GetCamouFullscreen() != fullscreen) {
++    (void)bc->SetCamouFullscreen(fullscreen);
+   }
+ }
+ 
+@@ -1198,6 +1225,7 @@ void BrowserParent::SizeModeChanged(const nsSizeMode& aSizeMode) {
+   if (!mIsDestroyed && aSizeMode != mSizeMode) {
+     mSizeMode = aSizeMode;
+     (void)SendSizeModeChanged(aSizeMode);
++    UpdateCamouContentRect();
    }
  }
  
 diff --git a/dom/ipc/BrowserParent.h b/dom/ipc/BrowserParent.h
-index 3d6b83a..e752756 100644
+index 3d6b83a8fe..e7527565bd 100644
 --- a/dom/ipc/BrowserParent.h
 +++ b/dom/ipc/BrowserParent.h
 @@ -468,6 +468,10 @@ class BrowserParent final : public PBrowserParent,

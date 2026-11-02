@@ -832,6 +832,57 @@ def follow_baseline_protection(config: Dict[str, Any], target_os: str) -> None:
         config['navigator.maxTouchPoints'] = BASELINE_MULTI_TOUCH_POINTS
 
 
+# Stock Firefox's window frame on each OS, per display scale, in CSS pixels:
+# the resize borders (left, right, bottom, and borderTop, which only a
+# maximized window hangs off the screen) and the toolbars above the content
+# (tab strip and navigation bar). Windows 1x was measured on stock Firefox 159
+# on Windows 11 (a normal window: 16x93, content at 8,85); the rest are the
+# modes of fpgen's records, where a maximized window's outer size is the
+# available area plus left+right and borderTop+bottom, at availLeft-left,
+# availTop-borderTop.
+WINDOW_FRAME: Dict[str, Dict[str, Dict[str, int]]] = LAUNCHER_CONSTANTS['windowFrame']
+
+
+def present_window_frame(config: Dict[str, Any], target_os: str, own_geometry: bool) -> None:
+    """Report the claimed OS's window frame (window.frameLeft/Top/Right/Bottom).
+
+    The browser reports outerWidth/outerHeight as the content area plus this
+    frame, and puts the content at its top-left inset from screenX/Y
+    (window-sizing-claimed-os.patch). With own_geometry (the launcher drew the
+    window), a Windows window that fills the available area is presented as
+    stock presents a maximized one, the common state in fpgen's records:
+    outer size the available area plus the borders, hanging that far off the
+    screen's edges. clamp_window_dimensions and clamp_window_position turn
+    exactly that draw into a window filling the available area.
+    """
+    table = WINDOW_FRAME.get(target_os)
+    if not table:
+        return
+    dpr = float(config.get('window.devicePixelRatio') or 1)
+    frame = table[min(table, key=lambda scale: abs(float(scale) - dpr))]
+    top = frame['toolbars']
+    avail = [config.get(f'screen.avail{axis}') for axis in ('Left', 'Top', 'Width', 'Height')]
+    left, avail_top, width, height = (v if v is not None else 0 for v in avail)
+    maximized = (
+        own_geometry
+        and (frame['borderTop'] or frame['bottom'])
+        and width and height
+        and config.get('window.outerWidth') == width
+        and config.get('window.outerHeight') == height
+        and config.get('window.screenX', 0) == left
+        and config.get('window.screenY', 0) == avail_top
+    )
+    if maximized:
+        config['window.outerWidth'] = width + frame['left'] + frame['right']
+        config['window.outerHeight'] = height + frame['borderTop'] + frame['bottom']
+        config['window.screenX'] = left - frame['left']
+        config['window.screenY'] = avail_top - frame['borderTop']
+        top += frame['borderTop']
+    for side, inset in (('Left', frame['left']), ('Top', top),
+                        ('Right', frame['right']), ('Bottom', frame['bottom'])):
+        config.setdefault(f'window.frame{side}', inset)
+
+
 def clamp_window_dimensions(config: Dict[str, Any]) -> None:
     """Enforce inner <= outer <= avail <= screen on BOTH axes.
 

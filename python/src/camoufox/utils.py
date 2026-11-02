@@ -22,7 +22,7 @@ from .exceptions import (
     NonFirefoxFingerprint,
     UnknownIPLocation,
 )
-from .fingerprints import Screen, platform_to_os, from_fpgen, from_preset, generate_fingerprint, get_random_preset, _generate_random_font_subset, _generate_random_voice_subset, fix_navigator_arch, fix_hardware_concurrency, identity_salt, drop_audio_seed, identity_seed, voice_pool, follow_baseline_protection, clamp_screen_to_display, clamp_window_dimensions, clamp_window_position, raise_screen_to_modern_floor, set_media_devices_defaults, WINDOWS_11_MARKER_FONTS, OS_KEYS, OS_NAMES
+from .fingerprints import Screen, platform_to_os, from_fpgen, from_preset, generate_fingerprint, get_random_preset, _generate_random_font_subset, _generate_random_voice_subset, fix_navigator_arch, fix_hardware_concurrency, present_window_frame, identity_salt, drop_audio_seed, identity_seed, voice_pool, follow_baseline_protection, clamp_screen_to_display, clamp_window_dimensions, clamp_window_position, raise_screen_to_modern_floor, set_media_devices_defaults, WINDOWS_11_MARKER_FONTS, OS_KEYS, OS_NAMES
 from . import coherence
 from .geolocation import geoip_allowed, get_geolocation
 from .ip import (
@@ -94,7 +94,6 @@ CACHE_PREFS: Dict[str, Any] = LAUNCHER_CONSTANTS['cachePrefs']
 # Windows-only machinery (DirectComposition, ClearType, WMF) does nothing in a
 # Linux build and is left out.
 WINDOWS_BEHAVIOUR_PREFS: Dict[str, Any] = LAUNCHER_CONSTANTS['windowsBehaviourPrefs']
-WINDOW_FRAME: Dict[str, Dict[str, int]] = LAUNCHER_CONSTANTS['windowFrame']
 
 # Video codecs a Windows desktop decodes in hardware, so that
 # mediaCapabilities.decodingInfo() reports them powerEfficient (stock 152.0.4 on
@@ -1580,15 +1579,6 @@ def launch_options(
         for pref, value in WINDOWS_BEHAVIOUR_PREFS.items():
             firefox_user_prefs.setdefault(pref, value)
 
-        # The window frame a page measures (outer - inner size, where the
-        # content sits in the window) is the host's: GTK's 86x192 under
-        # XWayland, content 43,149 into the window. Stock Firefox on Windows
-        # (159, Windows 11, a normal window at 100%) has 8px resize borders and
-        # its tab strip and toolbar above the content: 16x93, content at 8,85.
-        # window-sizing-claimed-os.patch reports the frame from these insets.
-        for side, inset in WINDOW_FRAME['win'].items():
-            config.setdefault(f'window.frame{side.capitalize()}', inset)
-
         # The scrollbars pinned above are drawn by the host build's theme: on
         # a Linux host a Windows 10 identity's classic scrollbars measured
         # 12 px (GTK's) where stock Firefox on Windows draws 17. Draw Windows'
@@ -1970,10 +1960,26 @@ def launch_options(
     # on a HiDPI host the host's own scale would otherwise reach (resolution).
     if config.get('window.devicePixelRatio'):
         firefox_user_prefs.setdefault('layout.css.devPixelsPerPx', f"{float(config['window.devicePixelRatio']):g}")
+
+    # The window frame a page measures (outer - inner size, where the content
+    # sits in the window) is the host's own chrome: GTK's 86x192 under
+    # XWayland, the content 43,149 into the window, where stock Firefox on
+    # Windows at 100% measures 16x93 and 8,85. A Windows or macOS identity on
+    # another host reports its OS's frame at its display scale (after the
+    # coherence pass, which can move that scale). A host of the claimed OS
+    # already has it.
+    if target_os in ('win', 'mac') and _host_os_key() != target_os:
+        present_window_frame(config, target_os, own_geometry=not _user_set_screen_window)
     if headless is False and not virtual_display and screen_cons:
         fit = _physical_scale(config, firefox_user_prefs)
+        # With the claimed OS's frame the real window holds the content area,
+        # the outer size less that frame: a maximized Windows window reports
+        # the borders that hang off the screen.
+        frame = {'Width': ('Left', 'Right'), 'Height': ('Top', 'Bottom')}
         for axis, cap in (('Width', screen_cons.max_width), ('Height', screen_cons.max_height)):
             size = config.get(f'window.outer{axis}')
+            if size:
+                size -= sum(config.get(f'window.frame{side}') or 0 for side in frame[axis])
             if cap and size and size * fit > cap:
                 raise ValueError(
                     f'window.outer{axis} {size} at display scale {fit:g} needs {size * fit:g} pixels, '

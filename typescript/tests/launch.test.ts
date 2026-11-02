@@ -528,10 +528,17 @@ describe("test_launch_environment: prefs", () => {
 			const { config } = await onHost("lin", WIN_UA);
 			expect([
 				config["window.frameLeft"],
-				config["window.frameTop"],
 				config["window.frameRight"],
 				config["window.frameBottom"],
-			]).toEqual([8, 85, 8, 8]);
+			]).toEqual([8, 8, 8]);
+			// Normal, or maximized with the top border above the toolbars.
+			expect([85, 93]).toContain(config["window.frameTop"]);
+		});
+		it("measures stock macOS' window frame on another host", async () => {
+			const { config } = await onHost("lin", MAC_UA);
+			expect(config["window.frameLeft"]).toBe(0);
+			expect(config["window.frameBottom"]).toBe(0);
+			expect([84, 85]).toContain(config["window.frameTop"]);
 		});
 		it("draws Windows' scrollbars at Windows' size", async () => {
 			const classic = await onHost("lin", WIN_UA, {
@@ -554,6 +561,13 @@ describe("test_launch_environment: prefs", () => {
 				expect("input:windowsKeyboard" in config).toBe(false);
 				expect("middlemouse.paste" in prefs).toBe(false);
 				expect(STYLE in prefs).toBe(false);
+			}
+			for (const [host, u] of [
+				["lin", LINUX_UA],
+				["win", WIN_UA],
+				["mac", MAC_UA],
+			] as const) {
+				const { config } = await onHost(host, u);
 				expect(
 					Object.keys(config).some((key) => key.startsWith("window.frame")),
 				).toBe(false);

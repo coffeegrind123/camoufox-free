@@ -947,6 +947,62 @@ export function followBaselineProtection(
 	}
 }
 
+/**
+ * Stock Firefox's window frame on each OS, per display scale, in CSS pixels
+ * (present_window_frame in the Python launcher has the sources).
+ */
+export const WINDOW_FRAME = LAUNCHER_CONSTANTS.windowFrame;
+
+/**
+ * Report the claimed OS's window frame (window.frameLeft/Top/Right/Bottom),
+ * and present a Windows window that fills the available area as stock presents
+ * a maximized one (present_window_frame in the Python launcher).
+ */
+export function presentWindowFrame(
+	config: Config,
+	targetOs: string,
+	ownGeometry: boolean,
+): void {
+	const table = WINDOW_FRAME[targetOs];
+	if (!table) return;
+	const dpr = Number(config["window.devicePixelRatio"]) || 1;
+	const scale = Object.keys(table).reduce((best, key) =>
+		Math.abs(Number(key) - dpr) < Math.abs(Number(best) - dpr) ? key : best,
+	);
+	const frame = table[scale];
+	let top = frame.toolbars;
+	const left = num(config["screen.availLeft"] ?? 0);
+	const availTop = num(config["screen.availTop"] ?? 0);
+	const width = num(config["screen.availWidth"] ?? 0);
+	const height = num(config["screen.availHeight"] ?? 0);
+	const maximized =
+		ownGeometry &&
+		Boolean(frame.borderTop || frame.bottom) &&
+		width > 0 &&
+		height > 0 &&
+		config["window.outerWidth"] === width &&
+		config["window.outerHeight"] === height &&
+		num(config["window.screenX"] ?? 0) === left &&
+		num(config["window.screenY"] ?? 0) === availTop;
+	if (maximized) {
+		config["window.outerWidth"] = width + frame.left + frame.right;
+		config["window.outerHeight"] = height + frame.borderTop + frame.bottom;
+		config["window.screenX"] = left - frame.left;
+		config["window.screenY"] = availTop - frame.borderTop;
+		top += frame.borderTop;
+	}
+	for (const [side, inset] of [
+		["Left", frame.left],
+		["Top", top],
+		["Right", frame.right],
+		["Bottom", frame.bottom],
+	] as const) {
+		if (!(`window.frame${side}` in config)) {
+			config[`window.frame${side}`] = inset;
+		}
+	}
+}
+
 /** Enforce inner <= outer <= avail <= screen on both axes. */
 export function clampWindowDimensions(config: Config): void {
 	for (const axis of ["Width", "Height"]) {
