@@ -480,7 +480,9 @@ describe("test_launch_environment: prefs", () => {
 					headless: false,
 					screen: new fingerprints.Screen({ maxWidth: 1920, maxHeight: 1080 }),
 				}),
-			).rejects.toThrow("needs 3200 pixels, but this monitor has 1920");
+				// 1280 CSS px at 250%, less the 13px of Windows' frame at that scale
+				// that the real window does not hold (test_display_scale.py).
+			).rejects.toThrow("needs 3167.5 pixels, but this monitor has 1920");
 		});
 	});
 
@@ -1128,26 +1130,39 @@ describe.skipIf(!MODEL.ok)(
 			withDisplay({ maxWidth: 1280, maxHeight: 720 });
 			for (let attempt = 0; attempt < 15; attempt++) {
 				const config = await launchConfig({ headless: false });
-				for (const [key, bound] of [
-					["screen.width", 1280],
-					["screen.height", 720],
-					["window.outerWidth", 1280],
-					["window.outerHeight", 720],
-				] as const) {
-					expect(config[key], key).toBeLessThanOrEqual(bound);
-				}
+				// With the claimed OS's window frame, the real window holds the
+				// content area, the outer size less that frame: a maximized
+				// Windows window reports borders that hang off the screen, as
+				// stock's do (test_launch_geometry.py).
+				const frame = (side: string) =>
+					Number(config[`window.frame${side}`] ?? 0);
+				const contentWidth =
+					config["window.outerWidth"] - frame("Left") - frame("Right");
+				const contentHeight =
+					config["window.outerHeight"] - frame("Top") - frame("Bottom");
+				expect(config["screen.width"]).toBeLessThanOrEqual(1280);
+				expect(config["screen.height"]).toBeLessThanOrEqual(720);
+				expect(contentWidth).toBeLessThanOrEqual(1280);
+				expect(contentHeight).toBeLessThanOrEqual(720);
 				expect(config["screen.availWidth"]).toBeLessThanOrEqual(
 					config["screen.width"],
 				);
 				expect(config["screen.availHeight"]).toBeLessThan(
 					config["screen.height"],
 				);
-				expect(config["window.outerWidth"]).toBeLessThanOrEqual(
-					config["screen.availWidth"],
-				);
-				expect(config["window.outerHeight"]).toBeLessThanOrEqual(
-					config["screen.availHeight"],
-				);
+				expect(contentWidth).toBeLessThanOrEqual(config["screen.availWidth"]);
+				expect(contentHeight).toBeLessThanOrEqual(config["screen.availHeight"]);
+				if (
+					Number(config["window.screenX"] ?? 0) >= 0 &&
+					Number(config["window.screenY"] ?? 0) >= 0
+				) {
+					expect(config["window.outerWidth"]).toBeLessThanOrEqual(
+						config["screen.availWidth"],
+					);
+					expect(config["window.outerHeight"]).toBeLessThanOrEqual(
+						config["screen.availHeight"],
+					);
+				}
 			}
 		});
 

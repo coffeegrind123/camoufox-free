@@ -104,9 +104,15 @@ class TestHeadfulFitsOnDisplay:
         with host(SCALED_DISPLAY):
             config = launch(headless=False)
 
+        # With the claimed OS's window frame (a Windows or macOS identity on
+        # this host), the real window holds the content area, the outer size
+        # less that frame: a maximized Windows window reports borders that hang
+        # off the screen, as stock does.
+        frame = {"window.outerWidth": ("Left", "Right"), "window.outerHeight": ("Top", "Bottom")}
         for key, bound in BOUNDED_BY.items():
             limit = getattr(SCALED_DISPLAY, bound)
-            assert config[key] <= limit, f"{key}={config[key]} exceeds {limit}"
+            size = config[key] - sum(config.get(f"window.frame{side}", 0) for side in frame.get(key, ()))
+            assert size <= limit, f"{key}={config[key]} holds {size}, exceeds {limit}"
 
     def test_geometry_stays_internally_consistent(self):
         with host(SCALED_DISPLAY):
@@ -114,8 +120,15 @@ class TestHeadfulFitsOnDisplay:
 
         assert config["screen.availWidth"] <= config["screen.width"]
         assert config["screen.availHeight"] < config["screen.height"]  # taskbar
-        assert config["window.outerWidth"] <= config["screen.availWidth"]
-        assert config["window.outerHeight"] <= config["screen.availHeight"]
+        # The content area fits the available area. The whole window does too,
+        # unless it is a maximized Windows window, whose borders hang off the
+        # screen's edges (a negative screenX/Y), as stock's do.
+        frame = {side: config.get(f"window.frame{side}", 0) for side in ("Left", "Top", "Right", "Bottom")}
+        assert config["window.outerWidth"] - frame["Left"] - frame["Right"] <= config["screen.availWidth"]
+        assert config["window.outerHeight"] - frame["Top"] - frame["Bottom"] <= config["screen.availHeight"]
+        if config.get("window.screenX", 0) >= 0 and config.get("window.screenY", 0) >= 0:
+            assert config["window.outerWidth"] <= config["screen.availWidth"]
+            assert config["window.outerHeight"] <= config["screen.availHeight"]
 
     def test_unprobeable_display_is_not_clamped(self):
         """A host we cannot measure must not silently shrink the fingerprint."""

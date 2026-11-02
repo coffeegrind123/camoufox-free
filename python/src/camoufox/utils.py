@@ -1977,12 +1977,14 @@ def launch_options(
         # the borders that hang off the screen.
         frame = {'Width': ('Left', 'Right'), 'Height': ('Top', 'Bottom')}
         for axis, cap in (('Width', screen_cons.max_width), ('Height', screen_cons.max_height)):
-            size = config.get(f'window.outer{axis}')
+            outer = config.get(f'window.outer{axis}')
+            size = outer
             if size:
                 size -= sum(config.get(f'window.frame{side}') or 0 for side in frame[axis])
+            held = f' (a {size}px content area inside the claimed frame)' if size != outer else ''
             if cap and size and size * fit > cap:
                 raise ValueError(
-                    f'window.outer{axis} {size} at display scale {fit:g} needs {size * fit:g} pixels, '
+                    f'window.outer{axis} {outer}{held} at display scale {fit:g} needs {size * fit:g} pixels, '
                     f'but this monitor has {cap}. Pass a smaller screen and window, or run headless.'
                 )
 

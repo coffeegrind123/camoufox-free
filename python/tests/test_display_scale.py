@@ -28,6 +28,8 @@ def test_caller_pref_wins(isolated_launch_dependencies):  # noqa: F811
 
 def test_window_too_large_for_the_monitor_raises(monkeypatch, isolated_launch_dependencies):  # noqa: F811
     monkeypatch.setattr(utils, "OS_NAME", "lin")
-    with pytest.raises(ValueError, match="needs 3200 pixels, but this monitor has 1920"):
+    # 1280 CSS px at 250%, less the 13px of Windows' frame at that scale that
+    # the real window does not hold.
+    with pytest.raises(ValueError, match="needs 3167.5 pixels, but this monitor has 1920"):
         prefs(2.5, headless=False, screen=Screen(max_width=1920, max_height=1080))
     assert prefs(1.25, headless=False, screen=Screen(max_width=1920, max_height=1200))[PREF] == "1.25"

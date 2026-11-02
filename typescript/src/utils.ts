@@ -2319,15 +2319,20 @@ export async function launchOptions({
 			["Width", screenCons.maxWidth],
 			["Height", screenCons.maxHeight],
 		] as const) {
-			let size = config[`window.outer${axis}`];
+			const outer = config[`window.outer${axis}`];
+			let size = outer;
 			if (size) {
 				for (const side of frameSides[axis]) {
 					size -= Number(config[`window.frame${side}`] ?? 0);
 				}
 			}
+			const held =
+				size !== outer
+					? ` (a ${size}px content area inside the claimed frame)`
+					: "";
 			if (cap && size && size * fit > cap) {
 				throw new Error(
-					`window.outer${axis} ${size} at display scale ${fit} needs ${size * fit} pixels, ` +
+					`window.outer${axis} ${outer}${held} at display scale ${fit} needs ${size * fit} pixels, ` +
 						`but this monitor has ${cap}. Pass a smaller screen and window, or run headless.`,
 				);
 			}
