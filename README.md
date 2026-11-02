@@ -152,6 +152,15 @@ For an identity whose OS is not the host's. Offered upstream in
   upstream in [#978](https://github.com/daijro/camoufox/pull/978).
   ([MouseDispatch.js](browser/additions/juggler/input/MouseDispatch.js), guard
   [humanize-mouse-trajectory.py](browser/tests/playwright/patches/humanize-mouse-trajectory.py))
+- **A humanized curve leaves the page as a real pointer does.** A point
+  outside the viewport was skipped with no event, so a curve that strayed off
+  the page left the cursor frozen at the edge with no `mouseout`, then
+  reappearing elsewhere, mid-page when a slow frame coalesced the re-entry.
+  The pointer now moves off the content (over the toolbar when it left through
+  the top) and re-enters with `mouseover`, and a page's first move redraws a
+  path that climbs out of the page.
+  ([MouseDispatch.js](browser/additions/juggler/input/MouseDispatch.js), guard
+  [humanize-mouse-trajectory.py](browser/tests/playwright/patches/humanize-mouse-trajectory.py))
 - **A context reports the launch's core count.** NewContext drew a fresh
   `navigator.hardwareConcurrency` for each context, while the launch reports
   the host's cores (`fix_hardware_concurrency`), which a page can measure with
