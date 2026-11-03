@@ -1,0 +1,244 @@
+diff --git a/docshell/base/BrowsingContext.h b/docshell/base/BrowsingContext.h
+index 7b5123ac34..4a9dadf43f 100644
+--- a/docshell/base/BrowsingContext.h
++++ b/docshell/base/BrowsingContext.h
+@@ -356,6 +356,10 @@ struct EmbedderColorSchemes {
+   /* Camoufox: whether that window is fullscreen, where stock has no frame. */ \
+   FIELD(CamouFullscreen, bool,                                                 \
+         {.mTopOnly = true, .mCanSet = CanSet::ParentOnly})                     \
++  /* Camoufox: whether that window is maximized, which moves the claimed       \
++   * frame (zz-window-presentation.patch). */                                  \
++  FIELD(CamouMaximized, bool,                                                  \
++        {.mTopOnly = true, .mCanSet = CanSet::ParentOnly})                     \
+   /* Used to propagate document's IPAddressSpace  */                           \
+   FIELD(IPAddressSpace, nsILoadInfo::IPAddressSpace,                           \
+         {.mCanSet = CanSet::ParentOnly})                                       \
+diff --git a/dom/base/nsGlobalWindowInner.cpp b/dom/base/nsGlobalWindowInner.cpp
+index 13afcc0641..aceb165308 100644
+--- a/dom/base/nsGlobalWindowInner.cpp
++++ b/dom/base/nsGlobalWindowInner.cpp
+@@ -3799,6 +3799,10 @@ int32_t nsGlobalWindowInner::GetScreenX(CallerType aCallerType,
+   if (aError.Failed()) {
+     return stock;
+   }
++  if (Maybe<PresentedWindow> presented = PresentWindow(GetBrowsingContext());
++      presented && presented->mPosition) {
++    return presented->mPosition->x;
++  }
+   if (auto value = MaskConfig::GetInt32("window.screenX")) {
+     return value.value();
+   }
+@@ -3816,6 +3820,10 @@ int32_t nsGlobalWindowInner::GetScreenY(CallerType aCallerType,
+   if (aError.Failed()) {
+     return stock;
+   }
++  if (Maybe<PresentedWindow> presented = PresentWindow(GetBrowsingContext());
++      presented && presented->mPosition) {
++    return presented->mPosition->y;
++  }
+   if (auto value = MaskConfig::GetInt32("window.screenY")) {
+     return value.value();
+   }
+@@ -3867,34 +3875,115 @@ CSSIntPoint nsGlobalWindowInner::SpoofedScreenShift(nsIGlobalObject* aGlobal) {
+   if (!outer) {
+     return {};
+   }
++  const Maybe<PresentedWindow> presented =
++      frame ? PresentWindow(inner->GetBrowsingContext()) : Nothing();
++  std::optional<int32_t> px = x;
++  std::optional<int32_t> py = y;
++  if (presented && presented->mPosition) {
++    px = presented->mPosition->x;
++    py = presented->mPosition->y;
++  }
+   CSSIntPoint shift;
+-  if (x || y) {
++  if (px || py) {
+     IgnoredErrorResult rv;
+     const CSSIntPoint real = outer->GetScreenXY(CallerType::System, rv);
+     if (rv.Failed()) {
+       return {};
+     }
+-    shift = CSSIntPoint(x ? *x - real.x : 0, y ? *y - real.y : 0);
++    shift = CSSIntPoint(px ? *px - real.x : 0, py ? *py - real.y : 0);
+   }
+   // With the claimed OS's frame, the top page's content sits at the frame's
+   // top-left inset from the window's position, not where the real window's
+   // chrome put it. One shift for the whole window: an iframe's screen points
+   // keep their offset inside the top page.
+-  // A fullscreen window has no frame.
+-  if (frame) {
+-    if (BrowsingContext* bc = inner->GetBrowsingContext()) {
+-      BrowsingContext* top = bc->Top();
+-      const CSSIntRect content = top->GetCamouContentRect();
+-      if (!content.IsEmpty()) {
+-        const bool fullscreen = top->GetCamouFullscreen();
+-        shift += CSSIntPoint((fullscreen ? 0 : frame->left.value) - content.x,
+-                             (fullscreen ? 0 : frame->top.value) - content.y);
+-      }
+-    }
++  if (presented) {
++    shift += CSSIntPoint(presented->mFrame.left.value - presented->mContent.x,
++                         presented->mFrame.top.value - presented->mContent.y);
+   }
+   return shift;
+ }
+ 
++/* static */
++Maybe<nsGlobalWindowInner::PresentedWindow> nsGlobalWindowInner::PresentWindow(
++    BrowsingContext* aContext) {
++  MOZ_ASSERT(NS_IsMainThread());
++  const Maybe<CSSIntMargin>& frame = ClaimedWindowFrame();
++  if (!frame || !aContext) {
++    return Nothing();
++  }
++  BrowsingContext* top = aContext->Top();
++  const CSSIntRect content = top->GetCamouContentRect();
++  if (content.IsEmpty()) {
++    return Nothing();
++  }
++  // Stock Firefox has no frame in fullscreen: outer is inner, at the screen's
++  // origin.
++  if (top->GetCamouFullscreen()) {
++    return Some(PresentedWindow{CSSIntMargin(), Some(CSSIntPoint(0, 0)), content});
++  }
++
++  // The launch state, read once: the config never changes in a process.
++  // window.frameTop is the frame the window launched with, which includes
++  // window.frameBorderTop when it launched maximized (window.maximized).
++  struct Launch {
++    int32_t mBorderTop = 0;
++    bool mMaximized = false;
++    std::optional<int32_t> mX, mY;
++    std::optional<std::array<uint32_t, 4>> mAvail;
++  };
++  static const Launch sLaunch = [] {
++    Launch launch;
++    launch.mBorderTop =
++        int32_t(MaskConfig::GetUint32("window.frameBorderTop").value_or(0));
++    launch.mMaximized = MaskConfig::GetBool("window.maximized");
++    launch.mX = MaskConfig::GetInt32("window.screenX");
++    launch.mY = MaskConfig::GetInt32("window.screenY");
++    launch.mAvail = MaskConfig::GetRect("screen.availLeft", "screen.availTop",
++                                        "screen.availWidth",
++                                        "screen.availHeight");
++    return launch;
++  }();
++
++  const int32_t toolbars =
++      frame->top.value - (sLaunch.mMaximized ? sLaunch.mBorderTop : 0);
++
++  // Maximized as stock presents it on Windows: the window is the available
++  // area plus its resize borders, which hang off the screen's edges, so the
++  // top border sits above the toolbars. A window counts as maximized when the
++  // real one is, or when its content fills the claimed available area, as a
++  // launch drawn maximized does (the real window is not WM-maximized there).
++  // A user's resize leaves it, and the window then has the normal frame.
++  if (sLaunch.mBorderTop > 0 && sLaunch.mAvail) {
++    const auto& avail = *sLaunch.mAvail;
++    const int32_t availLeft = int32_t(avail[0]);
++    const int32_t availTop = int32_t(avail[1]);
++    const bool fills = content.width == int32_t(avail[2]) &&
++                       content.height == int32_t(avail[3]) - toolbars;
++    if (top->GetCamouMaximized() || fills) {
++      return Some(PresentedWindow{
++          CSSIntMargin(toolbars + sLaunch.mBorderTop, frame->right.value,
++                       frame->bottom.value, frame->left.value),
++          Some(CSSIntPoint(availLeft - frame->left.value,
++                           availTop - sLaunch.mBorderTop)),
++          content});
++    }
++  }
++
++  // A normal window. One that launched maximized has no remembered normal
++  // place, so it sits at the available area's origin.
++  Maybe<CSSIntPoint> position;
++  if (sLaunch.mMaximized && sLaunch.mAvail) {
++    position = Some(CSSIntPoint(int32_t((*sLaunch.mAvail)[0]),
++                                int32_t((*sLaunch.mAvail)[1])));
++  } else if (sLaunch.mX && sLaunch.mY) {
++    position = Some(CSSIntPoint(*sLaunch.mX, *sLaunch.mY));
++  }
++  return Some(PresentedWindow{
++      CSSIntMargin(toolbars, frame->right.value, frame->bottom.value,
++                   frame->left.value),
++      position, content});
++}
++
+ /* static */
+ const Maybe<CSSIntMargin>& nsGlobalWindowInner::ClaimedWindowFrame() {
+   // Read once: the config never changes in a process.
+diff --git a/dom/base/nsGlobalWindowInner.h b/dom/base/nsGlobalWindowInner.h
+index fae24ca86c..0ad803985e 100644
+--- a/dom/base/nsGlobalWindowInner.h
++++ b/dom/base/nsGlobalWindowInner.h
+@@ -927,6 +927,19 @@ class nsGlobalWindowInner final : public mozilla::dom::EventTarget,
+   // the window (window.frameLeft/Top/Right/Bottom), or Nothing() when the
+   // real window's frame is reported. Main thread only.
+   static const mozilla::Maybe<mozilla::CSSIntMargin>& ClaimedWindowFrame();
++
++  // Camoufox: the window a page is shown with the claimed OS's frame, decided
++  // from the window's current state rather than once at launch: its frame,
++  // where it sits (Nothing() leaves window.screenX/Y unspoofed), and the real
++  // content area the frame surrounds. Nothing() without a claimed frame or
++  // before the parent has reported the content area. Main thread only.
++  struct PresentedWindow {
++    mozilla::CSSIntMargin mFrame;
++    mozilla::Maybe<mozilla::CSSIntPoint> mPosition;
++    mozilla::CSSIntRect mContent;
++  };
++  static mozilla::Maybe<PresentedWindow> PresentWindow(
++      mozilla::dom::BrowsingContext* aContext);
+   double GetDevicePixelRatio(mozilla::dom::CallerType aCallerType,
+                              mozilla::ErrorResult& aError);
+   double GetDesktopToDeviceScale(mozilla::ErrorResult& aError);
+diff --git a/dom/base/nsGlobalWindowOuter.cpp b/dom/base/nsGlobalWindowOuter.cpp
+index c8d9959127..c8916d7bdc 100644
+--- a/dom/base/nsGlobalWindowOuter.cpp
++++ b/dom/base/nsGlobalWindowOuter.cpp
+@@ -3622,22 +3622,15 @@ CSSIntSize nsGlobalWindowOuter::GetOuterSize(CallerType aCallerType,
+   // From the top context's content area, so an iframe in any process reads
+   // its window's size. Stock's work stays first (timing parity; see
+   // nsScreen::PixelDepth), and browser code keeps the real size.
++  // The frame follows the window's state: none in fullscreen, the borders
++  // off the screen when maximized (nsGlobalWindowInner::PresentWindow).
+   if (aCallerType != CallerType::System) {
+-    if (const Maybe<CSSIntMargin>& frame =
+-            nsGlobalWindowInner::ClaimedWindowFrame()) {
+-      if (BrowsingContext* bc = GetBrowsingContext()) {
+-        BrowsingContext* top = bc->Top();
+-        const CSSIntRect content = top->GetCamouContentRect();
+-        // A fullscreen window has no frame: outer is inner, as in stock.
+-        if (!content.IsEmpty() && top->GetCamouFullscreen()) {
+-          return content.Size();
+-        }
+-        if (!content.IsEmpty()) {
+-          return CSSIntSize(
+-              content.width + frame->left.value + frame->right.value,
+-              content.height + frame->top.value + frame->bottom.value);
+-        }
+-      }
++    if (const Maybe<nsGlobalWindowInner::PresentedWindow> presented =
++            nsGlobalWindowInner::PresentWindow(GetBrowsingContext())) {
++      const CSSIntMargin& frame = presented->mFrame;
++      return CSSIntSize(
++          presented->mContent.width + frame.left.value + frame.right.value,
++          presented->mContent.height + frame.top.value + frame.bottom.value);
+     }
+   }
+   return stock;
+diff --git a/dom/ipc/BrowserParent.cpp b/dom/ipc/BrowserParent.cpp
+index 51b9c42ae9..2abf64a4de 100644
+--- a/dom/ipc/BrowserParent.cpp
++++ b/dom/ipc/BrowserParent.cpp
+@@ -1220,6 +1220,10 @@ void BrowserParent::UpdateCamouContentRect() {
+   if (bc->GetCamouFullscreen() != fullscreen) {
+     (void)bc->SetCamouFullscreen(fullscreen);
+   }
++  const bool maximized = mSizeMode == nsSizeMode_Maximized;
++  if (bc->GetCamouMaximized() != maximized) {
++    (void)bc->SetCamouMaximized(maximized);
++  }
+ }
+ 
+ DimensionInfo BrowserParent::GetDimensionInfo() {

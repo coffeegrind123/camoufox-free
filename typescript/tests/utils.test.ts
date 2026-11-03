@@ -142,7 +142,10 @@ describe("the runtime fontconfig's font directories", () => {
 		}
 	});
 
-	const bundle = (groups: string | null, dirs = ["L", "LW", "M", "W", "windows"]) => {
+	const bundle = (
+		groups: string | null,
+		dirs = ["L", "LW", "M", "W", "windows"],
+	) => {
 		const root = fs.mkdtempSync(path.join(os.tmpdir(), "camoufox-groups-"));
 		roots.push(root);
 		vi.spyOn(utilsDeps, "osName").mockReturnValue("lin");

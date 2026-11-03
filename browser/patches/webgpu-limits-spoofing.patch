@@ -1,4 +1,5 @@
 diff --git a/dom/webgpu/Adapter.cpp b/dom/webgpu/Adapter.cpp
+index 2814b6354a..99d655634b 100644
 --- a/dom/webgpu/Adapter.cpp
 +++ b/dom/webgpu/Adapter.cpp
 @@ -9,6 +9,7 @@
@@ -9,7 +10,7 @@ diff --git a/dom/webgpu/Adapter.cpp b/dom/webgpu/Adapter.cpp
  #include "SupportedFeatures.h"
  #include "SupportedLimits.h"
  #include "ipc/WebGPUChild.h"
-@@ -257,6 +258,8 @@
+@@ -252,6 +253,8 @@ struct FeatureImplementationStatus {
    }
  };
  
@@ -18,7 +19,7 @@ diff --git a/dom/webgpu/Adapter.cpp b/dom/webgpu/Adapter.cpp
  Adapter::Adapter(Instance* const aParent, WebGPUChild* const aChild,
                   const std::shared_ptr<ffi::WGPUAdapterInformation>& aInfo)
      : ObjectBase(aChild, aInfo->id, ffi::wgpu_client_drop_adapter),
-@@ -331,6 +334,12 @@
+@@ -326,6 +329,12 @@ Adapter::Adapter(Instance* const aParent, WebGPUChild* const aChild,
    // So, we should clamp the limits here too if we should RFP.
    if (GetParentObject()->ShouldResistFingerprinting(RFPTarget::WebGPULimits)) {
      ffi::wgpu_client_fill_default_limits(mLimits->mFfi.get());
@@ -31,7 +32,7 @@ diff --git a/dom/webgpu/Adapter.cpp b/dom/webgpu/Adapter.cpp
    }
  }
  
-@@ -420,6 +429,20 @@
+@@ -415,6 +424,20 @@ static std::string_view ToJsKey(const Limit limit) {
    MOZ_CRASH("Bad Limit");
  }
  
@@ -52,8 +53,8 @@ diff --git a/dom/webgpu/Adapter.cpp b/dom/webgpu/Adapter.cpp
  uint64_t Adapter::MissingFeatures() const {
    uint64_t missingFeatures = 0;
  
-@@ -608,9 +631,23 @@
- 
+@@ -607,9 +630,23 @@ already_AddRefed<dom::Promise> Adapter::RequestDevice(
+     // response, since wgpu-core may adjust what we ask for here.
      RefPtr<SupportedLimits> limits = new SupportedLimits(this, deviceLimits);
  
 +    // Camoufox: requiredLimits were validated against the reported (possibly
@@ -78,9 +79,10 @@ diff --git a/dom/webgpu/Adapter.cpp b/dom/webgpu/Adapter.cpp
      ffi::WGPUDeviceQueueId ids =
          ffi::wgpu_client_request_device(GetClient(), GetId(), &ffiDesc);
 diff --git a/dom/webgpu/moz.build b/dom/webgpu/moz.build
+index a0d0ceba2c..5db732f0b8 100644
 --- a/dom/webgpu/moz.build
 +++ b/dom/webgpu/moz.build
-@@ -119,3 +119,6 @@
+@@ -117,3 +117,6 @@ if CONFIG["CC_TYPE"] in ("clang", "clang-cl"):
  include("/ipc/chromium/chromium-config.mozbuild")
  
  FINAL_LIBRARY = "xul"

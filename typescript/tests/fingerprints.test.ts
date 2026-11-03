@@ -235,6 +235,10 @@ describe("presentWindowFrame", () => {
 		presentWindowFrame(c, "win", true);
 		expect(frameOf(c)).toEqual([8, 85, 8, 8]);
 		expect([c["window.outerWidth"], c["window.screenX"]]).toEqual([1280, 100]);
+		// The browser maximizes it with the top border the frame lacks here
+		// (zz-window-presentation.patch); it did not launch maximized.
+		expect(c["window.frameBorderTop"]).toBe(8);
+		expect("window.maximized" in c).toBe(false);
 	});
 	it("a Windows window filling the available area is maximized", () => {
 		const c = windowAt([1920, 1032]);
@@ -244,6 +248,10 @@ describe("presentWindowFrame", () => {
 		]);
 		expect([c["window.screenX"], c["window.screenY"]]).toEqual([-8, -8]);
 		expect(frameOf(c)).toEqual([8, 93, 8, 8]);
+		// The launch state, so the browser can show the normal frame once a
+		// user's resize leaves the available area.
+		expect(c["window.maximized"]).toBe(true);
+		expect(c["window.frameBorderTop"]).toBe(8);
 	});
 	it("a caller's geometry is never maximized", () => {
 		const c = windowAt([1920, 1032]);
@@ -273,6 +281,9 @@ describe("presentWindowFrame", () => {
 		presentWindowFrame(c, "mac", true);
 		expect(frameOf(c)).toEqual([0, 84, 0, 0]);
 		expect([c["window.outerWidth"], c["window.screenX"]]).toEqual([1440, 0]);
+		// macOS has no borders off the screen, so nothing moves when it zooms.
+		expect("window.frameBorderTop" in c).toBe(false);
+		expect("window.maximized" in c).toBe(false);
 	});
 });
 

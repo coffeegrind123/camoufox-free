@@ -23,6 +23,10 @@ Cases:
   * a Windows window the launcher drew maximized: stock's maximized geometry,
     outer the available area plus 16x16 at -8,-8, content at the available
     area's origin plus the 85px of toolbars;
+  * the same window once its content area no longer fills the available area,
+    as after a user's resize: the normal frame, 16x93, at the available area's
+    origin (zz-window-presentation.patch). Presented once at launch, it kept
+    the maximized frame at -8,-8 at any size, which no Windows window does;
   * a macOS window: no side frame, 85px of toolbars;
 and for the first, the same after a viewport change.
 
@@ -194,12 +198,17 @@ def main() -> int:
         os="windows", config={**SPOOFED, "window.devicePixelRatio": 1.25})
     check("Windows at 125%", scaled["first"], WINDOWS_125, failures)
 
-    results["windows-maximized"] = maximized = probe(os="windows",
+    results["windows-maximized"] = maximized = probe(resize=True, os="windows",
                                                      fingerprint=maximized_fingerprint())
     g = maximized["first"]["top"]["geometry"]
     check("Windows, maximized", maximized["first"], WINDOWS_MAXIMIZED, failures,
           expect_outer=(g["availWidth"] + 16, g["availHeight"] + 16),
           expect_position=(g["availLeft"] - 8, g["availTop"] - 8))
+    r = maximized["resized"]["top"]["geometry"]
+    left, top, right, bottom = WINDOWS_NORMAL
+    check("Windows, maximized then resized", maximized["resized"], WINDOWS_NORMAL, failures,
+          expect_outer=(r["innerWidth"] + left + right, r["innerHeight"] + top + bottom),
+          expect_position=(r["availLeft"], r["availTop"]))
 
     results["macos"] = mac = probe(os="macos", config=SPOOFED)
     check("macOS", mac["first"], MACOS, failures)
@@ -210,7 +219,7 @@ def main() -> int:
     if failures:
         return 1
     print("PASS: the window frame, in the page and a cross-site iframe, measures as stock's "
-          "on the claimed OS: normal, scaled, maximized and macOS")
+          "on the claimed OS: normal, scaled, maximized, resized from maximized and macOS")
     return 0
 
 

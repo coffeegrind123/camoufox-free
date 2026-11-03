@@ -26,6 +26,8 @@
   { "property": "window.frameTop", "type": "uint" },
   { "property": "window.frameRight", "type": "uint" },
   { "property": "window.frameBottom", "type": "uint" },
+  { "property": "window.frameBorderTop", "type": "uint" },
+  { "property": "window.maximized", "type": "bool" },
   { "property": "window.devicePixelRatio", "type": "double" },
   { "property": "headers.User-Agent", "type": "str" },
   { "property": "headers.Accept-Language", "type": "str" },

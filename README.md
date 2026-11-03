@@ -4,13 +4,13 @@ A fork of [Camoufox](https://github.com/daijro/camoufox), the Firefox build
 that spoofs device fingerprints in C++. For what Camoufox is, its features and
 how to build it, read [upstream's README](https://github.com/daijro/camoufox#readme).
 
-This fork follows upstream `main` and pins Firefox `158.0.1` / Camoufox `beta.34`
+This fork follows upstream `main` and pins Firefox `159.0` / Camoufox `beta.35`
 in [`browser/upstream.sh`](browser/upstream.sh). The newest published build is
-[`v158.0.1-beta.34-cg.10`](https://github.com/coffeegrind123/camoufox-free/releases/tag/v158.0.1-beta.34-cg.10),
-built from [389d718](https://github.com/coffeegrind123/camoufox-free/commit/389d71845f1d9079df9949bfc440b75c92c31905).
+[`v158.0.1-beta.34-cg.12`](https://github.com/coffeegrind123/camoufox-free/releases/tag/v158.0.1-beta.34-cg.12),
+built from [7bcc78a](https://github.com/coffeegrind123/camoufox-free/commit/7bcc78a4dd4e442d84450879c7ef16a12a65fc89).
 The newest stable release remains
 [`v152.0.4-beta.31-cg.4`](https://github.com/coffeegrind123/camoufox-free/releases/tag/v152.0.4-beta.31-cg.4).
-Features below that landed after cg.10 require a newer build or a source
+Features below that landed after cg.12 require a newer build or a source
 checkout. Fixes are offered upstream when appropriate.
 
 > [!NOTE]
@@ -48,6 +48,17 @@ For an identity whose OS is not the host's. Offered upstream in
 
 ### Other browser fixes
 
+- **Windows WebGL2 lists `EXT_texture_norm16`.** Firefox 159 exposes it on
+  WebGL2 wherever the GL has 16-bit normalized textures. Upstream filtered it on
+  Windows because ANGLE decides per device, but ANGLE derives it from formats
+  that D3D11 feature level 10_0, WebGL2's minimum, requires; stock 159.0 on a
+  GeForce GTX 980 lists it. ([a255a43](https://github.com/coffeegrind123/camoufox-free/commit/a255a4350566990f464fa74236ea994eebcbe471))
+- **A repaired display scale keeps the display.** fpgen records some ratios
+  with a browser zoom folded in (1.0909 for 110%), which shrinks every CSS size.
+  The coherence repair moved the ratio to a real scaling step but kept the
+  shrunken sizes, so a 1920x1080 monitor was claimed as 1760x990 at 100%, and a
+  fullscreen window measured 1920x1080 against `screen.width` 1760. The geometry
+  is now rescaled with the ratio. ([357cd48](https://github.com/coffeegrind123/camoufox-free/commit/357cd487113dad9a858a8e4ff7773e9cc141817c))
 - **Large per-context values cross content processes.** Firefox does not sync a
   string pref over 4 KiB. Font and voice lists over 3 KiB are stored in chunks
   and reassembled from a generation header, so every content-process page and
@@ -169,8 +180,13 @@ For an identity whose OS is not the host's. Offered upstream in
   the claimed OS's frame at its display scale, in a cross-site iframe too, and
   no frame in fullscreen. A Windows identity drawn maximized gets stock's
   maximized geometry (outer the available area plus the borders, at minus the
-  border), and a window maximized later goes back to the identity's size.
-  ([patch](browser/patches/window-sizing-claimed-os.patch), guard
+  border), and a window maximized later goes back to the identity's size. The
+  frame follows the window's state: maximized while the real window is or its
+  content fills the available area, the normal frame once a resize leaves it
+  (it kept the maximized frame at -8,-8 at any size), and no frame at 0,0 in
+  fullscreen. ([patch](browser/patches/window-sizing-claimed-os.patch),
+  [zz-window-presentation.patch](browser/patches/zz-window-presentation.patch),
+  [3924094](https://github.com/coffeegrind123/camoufox-free/commit/39240942ecd1e20088209001414b64a1d621d4b5), guard
   [window-sizing-claimed-os.py](browser/tests/playwright/patches/window-sizing-claimed-os.py))
 - **Screen coordinates follow the spoofed window position.**
   `mozInnerScreenX/Y` and the `screenX/Y` of mouse and touch events came from
@@ -283,6 +299,15 @@ For an identity whose OS is not the host's. Offered upstream in
   `main` does not create a release. The release workflow fails before building
   unless the tag names the pinned browser and its commit is on `main` with a
   successful `All tests passed` check.
+- **Link Preview stays on, as stock ships it.** Upstream's #966 turned
+  `browser.ml.linkPreview.enabled` off. On stock 159.0 a long press on a link
+  fetches the link target anonymously with `x-firefox-ai: 1`; with the feature
+  off that request never happens, which the target's server can see. Page
+  events are the same either way. ([e449d72](https://github.com/coffeegrind123/camoufox-free/commit/e449d72970ee56e9a45474eb82520999c1a68505), guard
+  [long-press-link-preview-parity.py](browser/tests/playwright/patches/long-press-link-preview-parity.py))
+- **The Playwright suite's pip stays below 26.3**, which rejects the
+  `autobahn` that playwright-python pins, so the suite never installed.
+  ([7bcc78a](https://github.com/coffeegrind123/camoufox-free/commit/7bcc78a4dd4e442d84450879c7ef16a12a65fc89))
 - **`canvas_noise` defaults to `False`:** the canvas is never covered.
   `canvas_noise=None` gives upstream's automatic cover. ([38ef536](https://github.com/coffeegrind123/camoufox-free/commit/38ef536579a3b1284929dfaf544dfb6e124a217e))
 - **Stock-parity probe lab**
@@ -383,7 +408,7 @@ its `CamoufoxFree` pin and fetches the matching fork tag. The fork source is
 also available explicitly:
 
 ```bash
-camoufox fetch camoufoxfree/158.0.1-beta.34-cg.10
+camoufox fetch camoufoxfree/158.0.1-beta.34-cg.12
 ```
 
 The release zip can still be installed manually and passed through

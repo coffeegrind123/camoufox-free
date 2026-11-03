@@ -212,6 +212,10 @@ def test_a_normal_windows_window_keeps_its_place():
     fingerprints.present_window_frame(config, "win", own_geometry=True)
     assert frame_of(config) == (8, 85, 8, 8)
     assert (config["window.outerWidth"], config["window.screenX"]) == (1280, 100)
+    # The browser maximizes it with the top border the frame lacks here
+    # (zz-window-presentation.patch); it did not launch maximized.
+    assert config["window.frameBorderTop"] == 8
+    assert "window.maximized" not in config
 
 
 def test_a_windows_window_filling_the_available_area_is_maximized():
@@ -225,6 +229,10 @@ def test_a_windows_window_filling_the_available_area_is_maximized():
     assert frame_of(config) == (8, 93, 8, 8)
     content = (1936 - 8 - 8, 1048 - 93 - 8)
     assert content == (1920, 1032 - 85)
+    # The launch state, so the browser can show the normal frame once a user's
+    # resize leaves the available area (zz-window-presentation.patch).
+    assert config["window.maximized"] is True
+    assert config["window.frameBorderTop"] == 8
 
 
 @pytest.mark.parametrize("dpr, outer, frame", [
@@ -249,4 +257,6 @@ def test_a_macos_window_is_never_moved():
     config = _window((1440, 875), avail=(1440, 875), dpr=2)
     fingerprints.present_window_frame(config, "mac", own_geometry=True)
     assert frame_of(config) == (0, 84, 0, 0)
+    # macOS has no borders off the screen, so nothing moves when it zooms.
+    assert "window.frameBorderTop" not in config and "window.maximized" not in config
     assert (config["window.outerWidth"], config["window.screenX"]) == (1440, 0)

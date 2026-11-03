@@ -990,6 +990,7 @@ export function presentWindowFrame(
 		config["window.screenX"] = left - frame.left;
 		config["window.screenY"] = availTop - frame.borderTop;
 		top += frame.borderTop;
+		config["window.maximized"] = true;
 	}
 	for (const [side, inset] of [
 		["Left", frame.left],
@@ -1000,6 +1001,13 @@ export function presentWindowFrame(
 		if (!(`window.frame${side}` in config)) {
 			config[`window.frame${side}`] = inset;
 		}
+	}
+	// The browser presents the window from its current state, not this launch
+	// one (zz-window-presentation.patch): maximized, by the real window or by
+	// content filling the available area, it adds the top border and hangs the
+	// borders off the screen; otherwise it shows the normal frame.
+	if (frame.borderTop && !("window.frameBorderTop" in config)) {
+		config["window.frameBorderTop"] = frame.borderTop;
 	}
 }
 
