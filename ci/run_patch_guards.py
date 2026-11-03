@@ -81,6 +81,7 @@ GROUPS: Dict[str, Tuple[str, ...]] = {
         "humanize-pacing",
         "input-ack-backstop",
         "isolated-evaluate",
+        "long-press-no-link-preview",
         "main-world-eval",
         "main-world-init-script",
         "mouse-boundary-sweep",
