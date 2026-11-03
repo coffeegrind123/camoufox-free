@@ -878,9 +878,16 @@ def present_window_frame(config: Dict[str, Any], target_os: str, own_geometry: b
         config['window.screenX'] = left - frame['left']
         config['window.screenY'] = avail_top - frame['borderTop']
         top += frame['borderTop']
+        config['window.maximized'] = True
     for side, inset in (('Left', frame['left']), ('Top', top),
                         ('Right', frame['right']), ('Bottom', frame['bottom'])):
         config.setdefault(f'window.frame{side}', inset)
+    # The browser presents the window from its current state, not this launch
+    # one (zz-window-presentation.patch): maximized, by the real window or by
+    # content filling the available area, it adds the top border and hangs the
+    # borders off the screen; otherwise it shows the normal frame.
+    if frame['borderTop']:
+        config.setdefault('window.frameBorderTop', frame['borderTop'])
 
 
 def clamp_window_dimensions(config: Dict[str, Any]) -> None:

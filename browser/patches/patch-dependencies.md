@@ -61,6 +61,7 @@ be listed there.
 | `window-sizing-claimed-os.patch` | `window.frameLeft`, `window.frameTop`, `window.frameRight`, `window.frameBottom` (a page's `outerWidth/outerHeight` and screen points measure the content area inside that frame; none in fullscreen) |
 | `windows-keyboard.patch` | `input:windowsKeyboard` (launch-wide: the shortcut tables and GTK's key handling are process-level) |
 | `zz-stock-cost-parity.patch` | `navigator.hardwareConcurrency`, `navigator.maxTouchPoints`, `screen.*`, `window.screenX`, `window.screenY` (re-orders the getters above so stock's work runs first) |
+| `zz-window-presentation.patch` | `window.frameBorderTop`, `window.maximized`, `screen.availLeft/Top/Width/Height`, `window.screenX`, `window.screenY` (the claimed frame and position follow the window's state: maximized by the real window or by content filling the available area, normal after a resize, none in fullscreen at 0,0) |
 
 To regenerate the list: `grep -l 'MaskConfig::' patches/*.patch`.
 
@@ -88,6 +89,7 @@ already set up, and do not add the include or `LOCAL_INCLUDES` themselves:
 | `window-screen-origin.patch` | `fingerprint-injection.patch` for `MaskConfig.hpp` in `dom/base/nsGlobalWindowInner.cpp` |
 | `window-sizing-claimed-os.patch` | `window-screen-origin.patch` for `nsGlobalWindowInner::SpoofedScreenShift()`; `fingerprint-injection.patch` for `MaskConfig.hpp` in `dom/base/nsGlobalWindowInner.cpp` |
 | `zz-stock-cost-parity.patch` | `cross-process-storage.patch` for `RoverfoxStorageManager::Generation()`; `screen-spoofing.patch` for `ScreenDimensionManager` in `dom/base/nsScreen.cpp` |
+| `zz-window-presentation.patch` | `window-sizing-claimed-os.patch` for `ClaimedWindowFrame()`, `CamouContentRect` and `UpdateCamouContentRect()`; `zz-stock-cost-parity.patch` for the stock-first `GetScreenX/Y` it extends |
 
 `zzz-context-locale.patch` applies last and depends on `locale-spoofing.patch`
 for the default-locale hook, `navigator-spoofing.patch` for
