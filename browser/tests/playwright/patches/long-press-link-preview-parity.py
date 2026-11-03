@@ -1,20 +1,22 @@
 r"""
-Verify a long press on a link opens no Link Preview panel (#961).
+Verify a long press on a link opens Link Preview, as stock Firefox does.
 
-Firefox opens its AI Link Preview card after a primary-button press held on a
-link for browser.ml.linkPreview.longPressMs (1000 ms). Automation that holds the
-mouse down on a link -- a press-and-hold check, a slow drag -- opened the card
-over the page, where it stayed after the release, and when the preview fetch
-failed it read "Camoufox can't preview this link". The card is browser UI that
-no page can read, so camoufox.cfg turns the feature off.
+Stock Firefox 158 and 159 ship browser.ml.linkPreview.enabled = true with
+longPress = true (longPressMs 1000). Holding the primary button on a link opens
+the preview card and fetches the link target with an anonymous request that
+carries `x-firefox-ai: 1` (LinkPreviewChild.fetchHTML). Measured on stock 159.0
+on Windows 11: the page sees the same pointer, mouse, click and focus events
+with the feature on or off, but the target's server sees that request only
+with it on. Turning the feature off therefore makes a long press observable
+from the network, so camoufox keeps the stock default.
 
 The guard launches camoufox through Playwright, headed on a private Xvfb display,
 with Marionette also enabled so the chrome document can be inspected. It holds
-the mouse on a link for twice the long-press delay and asserts no
-#link-preview-panel exists. A second launch with the feature turned back on
-asserts the same press opens the panel, so the check is not vacuous.
+the mouse on a link for twice the long-press delay and asserts the
+#link-preview-panel is open. A second launch with the feature turned off
+asserts the same press opens no panel, so the check is not vacuous.
 
-    python browser/tests/playwright/patches/long-press-no-link-preview.py
+    python browser/tests/playwright/patches/long-press-link-preview-parity.py
 """
 
 import http.server
@@ -74,21 +76,21 @@ def main() -> int:
     try:
         with hidden_display():
             default = panel_after_long_press(binary, url, {})
-            enabled = panel_after_long_press(binary, url, {"browser.ml.linkPreview.enabled": True})
+            disabled = panel_after_long_press(binary, url, {"browser.ml.linkPreview.enabled": False})
     finally:
         server.shutdown()
 
-    print(f"  default: #link-preview-panel {default}; feature turned on: {enabled}")
+    print(f"  default: #link-preview-panel {default}; feature turned off: {disabled}")
     failures = []
-    if enabled != "open":
-        failures.append("with the feature on the press opened no panel -- the check is vacuous")
-    if default is not None:
-        failures.append(f"a long press on a link opened the Link Preview panel ({default})")
+    if disabled is not None:
+        failures.append(f"with the feature off the press still opened a panel ({disabled}) -- the check is vacuous")
+    if default != "open":
+        failures.append(f"a long press on a link opened no Link Preview panel ({default}); stock Firefox opens one")
     for failure in failures:
         print(f"FAIL: {failure}")
     if failures:
         return 1
-    print("PASS: a long press on a link opens no Link Preview panel.")
+    print("PASS: a long press on a link opens the Link Preview panel, as in stock Firefox.")
     return 0
 
 
