@@ -1698,6 +1698,8 @@ export interface LaunchWindow {
 	outer: [number, number];
 	inner: [number | null, number | null];
 	screen: [number | null, number | null];
+	/** The launch's navigator.hardwareConcurrency: one process, one core count. */
+	cores?: number | null;
 }
 
 function isLaunchWindow(value: unknown): value is LaunchWindow {
@@ -1762,6 +1764,13 @@ export function generateContextFingerprint({
 	// Only a well-formed record counts; a mock, a half-built object or
 	// non-numeric dimensions describes no real launch window.
 	const launchWindow = isLaunchWindow(launch_window) ? launch_window : null;
+	// A page can count the cores with workers whatever a context claims
+	// (fixHardwareConcurrency), so every context reports the launch's.
+	const cores = launchWindow?.cores;
+	const launchCores =
+		typeof cores === "number" && Number.isFinite(cores) && cores > 0
+			? cores
+			: null;
 	let config: Config;
 	let nav: Record<string, any>;
 	let screen: Record<string, any>;
@@ -1787,6 +1796,10 @@ export function generateContextFingerprint({
 		const p = preset as Preset;
 		config = fromPreset(p, ff_version);
 		nav = p.navigator ?? {};
+		if (launchCores) {
+			config["navigator.hardwareConcurrency"] = launchCores;
+			nav = { ...nav, hardwareConcurrency: launchCores };
+		}
 		screen = p.screen ?? {};
 		webgl = p.webgl ?? {};
 		resolvedPreset = p;
@@ -1820,6 +1833,8 @@ export function generateContextFingerprint({
 		// read from the platform, drew Windows fonts and voices as well.
 		if (pyStr(get(config, "navigator.userAgent", "")).includes("Linux"))
 			fixNavigatorArch(config, "lin");
+		// Before the seeded draws: the seed hashes the core count.
+		if (launchCores) config["navigator.hardwareConcurrency"] = launchCores;
 
 		// A fresh identity: every seeded draw below gets its own salt.
 		const salt = identitySalt();

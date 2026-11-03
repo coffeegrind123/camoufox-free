@@ -140,6 +140,29 @@ describe.skipIf(!MODEL.ok)("NewContext fits the launch window", () => {
 	});
 });
 
+describe.skipIf(!MODEL.ok)("a context reports the launch cores", () => {
+	// A page can count cores with workers, so a context reports the launch's
+	// (fixHardwareConcurrency) on both the preset and the synthetic path.
+	for (const os of ["windows", "macos", "linux"] as const) {
+		it(os, () => {
+			const launch: LaunchWindow = { ...LAUNCH_WINDOW, cores: 6 };
+			const preset = loadPresets()?.presets?.[os]?.[0];
+			expect(preset).toBeTruthy();
+			for (const p of [null, preset]) {
+				const fp = generateContextFingerprint({
+					os: p ? undefined : os,
+					preset: p ?? undefined,
+					launch_window: launch,
+				});
+				expect(fp.config["navigator.hardwareConcurrency"]).toBe(6);
+				expect(fp.init_script).toContain(
+					"w.setNavigatorHardwareConcurrency(6)",
+				);
+			}
+		});
+	}
+});
+
 describe("attachLaunchWindow", () => {
 	it("reads the launch config and defaults the outer window", () => {
 		const config = {
@@ -156,7 +179,18 @@ describe("attachLaunchWindow", () => {
 			outer: [1280, 1040],
 			inner: [1000, 600],
 			screen: [1920, 1080],
+			cores: null,
 		});
+	});
+
+	it("records the launch cores", () => {
+		const browser: Record<string, any> = {};
+		attachLaunchWindow(browser, {
+			env: {
+				CAMOU_CONFIG_1: JSON.stringify({ "navigator.hardwareConcurrency": 12 }),
+			},
+		});
+		expect(browser._camoufoxLaunchWindow.cores).toBe(12);
 	});
 
 	it("ignores a malformed launch config", () => {
