@@ -1078,6 +1078,7 @@ export function attachLaunchWindow(
 				config["window.innerHeight"] ?? null,
 			],
 			screen: [config["screen.width"] ?? null, config["screen.height"] ?? null],
+			cores: config["navigator.hardwareConcurrency"] ?? null,
 		};
 	} catch (error) {
 		if (!(error instanceof SyntaxError)) throw error;
