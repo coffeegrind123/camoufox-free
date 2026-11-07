@@ -16,16 +16,24 @@ event waits for the refused script, so each load's verdict is settled when it
 returns.
 
     active   uBO blocks the ad script within READY_S of launch
+    settled  once uBO blocks, a page load takes under SETTLED_S (uBO holds
+             requests until its filters are ready: a hold that never ends
+             hangs every page)
     control  the page's ordinary image host is requested (the proxy sees traffic)
     frozen   no host uBO fetches lists from (its assets.json) is contacted
              from launch until WAIT_S after uBO first blocks
 
     python browser/tests/playwright/patches/ubo-lists-frozen.py
+
+The release workflow also runs it on the packaged zip, unzipped by root and
+launched by another user, the way the Docker image runs it: a file in addons/UBO
+other users can't read means the launcher passes no addon and this fails.
 """
 
 import functools
 import http.server
 import json
+import os
 import shutil
 import socket
 import sys
@@ -42,6 +50,7 @@ from helpers import resolve_binary  # noqa: E402
 # between list fetches.
 WAIT_S = 50
 READY_S = 60
+SETTLED_S = 10
 AD_HOST = "pagead2.googlesyndication.com"
 CONTROL_HOST = "example.com"
 AD_PAGE = (f'<!doctype html><script src="https://{AD_HOST}/pagead/js/adsbygoogle.js"></script>'
@@ -97,7 +106,16 @@ def main() -> int:
 
     binary = resolve_binary()
     ubo = get_addon_path(DefaultAddons.UBO.name, binary)
-    if not Path(ubo, "manifest.json").is_file():
+    manifest = Path(ubo, "manifest.json")
+    try:
+        os.stat(manifest)
+        manifest.open("rb").close()
+    except PermissionError:
+        print(f"FAIL: this user can't read {manifest} -- the launcher loads no uBO")
+        return 1
+    except FileNotFoundError:
+        pass
+    if not manifest.is_file():
         print(f"FAIL: the build bundles no uBlock Origin at {ubo} -- check is vacuous")
         return 1
     ubo_hosts = list_hosts(ubo)
@@ -120,6 +138,9 @@ def main() -> int:
                     print(f"FAIL: uBO did not block {AD_HOST} within {READY_S}s -- check is vacuous")
                     return 1
                 time.sleep(1)
+            started = time.monotonic()
+            page.goto(f"{base}/ad.html")
+            settled = time.monotonic() - started
             time.sleep(WAIT_S)
     finally:
         proxy.close()
@@ -129,12 +150,15 @@ def main() -> int:
     contacted = sorted(set(hosts))
     fetched = sorted(set(contacted) & ubo_hosts)
     print(f"hosts contacted until {WAIT_S}s after uBO first blocked: {', '.join(contacted) or 'none'}")
+    print(f"a page load once uBO blocks: {settled:.1f}s")
     print()
     failures = []
     if CONTROL_HOST not in contacted:
         failures.append(f"{CONTROL_HOST} was never requested -- the proxy saw no traffic, check is vacuous")
     if fetched:
         failures.append(f"uBO downloaded filter lists from {', '.join(fetched)}")
+    if settled > SETTLED_S:
+        failures.append(f"a page load took {settled:.1f}s after uBO was ready (limit {SETTLED_S}s)")
     if failures:
         for f in failures:
             print(f"FAIL: {f}")
