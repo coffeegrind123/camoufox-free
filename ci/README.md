@@ -247,7 +247,10 @@ These releases carry no `manifest.json` and their tags are not upstream's
 `v<version>-<release>`, so `ci.release paired` finds none: a pull request that
 leaves the browser alone still builds it rather than fetching a release.
 The build resolves AMO's newest uBlock Origin once, passes that pin to
-packaging, and names the bundled version in the release notes. The test
+packaging, and names the bundled version in the release notes. Packaging fails
+if the zip has an entry other users can't read, and the release build then
+unzips the package as root and runs `ubo-lists-frozen.py` as a user that owns
+neither the browser nor the launcher, as the Docker image runs it. The test
 pipeline resolves its own pin once per run and stages it into both built and
 restored browsers.
 
