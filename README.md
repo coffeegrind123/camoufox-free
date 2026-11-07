@@ -287,13 +287,12 @@ For an identity whose OS is not the host's. Offered upstream in
 
 ### Build, releases and defaults
 
-- **uBlock Origin is resolved once per release and bundled verified.** The
-  release workflow passes AMO's newest uBO release to packaging as
-  `CAMOUFOX_UBO`; `browser/scripts/fetch-ubo.py` checks its SHA-256, add-on ID
-  and version, then stages it under `addons/UBO/`. Bundle updates stay disabled,
-  and the selected filter lists are pinned to the ten lists inside that bundle,
-  so a first run downloads no regional list before pages load.
-  ([`build.yml`](.github/workflows/build.yml), [`policies.json`](browser/settings/distribution/policies.json), [7ac4b21](https://github.com/coffeegrind123/camoufox-free/commit/7ac4b2132c3a6f7d3ee1a5e821d01da5d31f9586))
+- **uBlock Origin's selected filter lists are the ten in its bundle.** Upstream
+  bundles uBO and stops it updating lists, but uBO still selected regional lists
+  for the browser's locale on first run and downloaded them before pages
+  loaded. The policy now selects only the lists inside the bundle. Ported from
+  lang315.
+  ([`policies.json`](browser/settings/distribution/policies.json), [9ec4708](https://github.com/coffeegrind123/camoufox-free/commit/9ec47080a87288f1227945ccc71170df07b3ce94))
 - **Every user that runs the release can read all of it.** `addons/UBO` was
   staged in a 0700 directory and 64 Windows fonts shipped as 0600, so when root
   unzipped the release and another user ran it (the Docker image's app user),
