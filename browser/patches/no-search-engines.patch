@@ -42,8 +42,8 @@ index 3a42b383af..0a528ea491 100644
 +      // So the configuration has to carry one inert engine. Its search URL
 +      // points at the loopback address, so the "no engines" stance holds even
 +      // if something does try to submit a search -- the request cannot leave
-+      // the machine. settings/distribution/policies.json separately defines a
-+      // "None" engine and makes it the default; this simply agrees with it.
++      // the machine. settings/distribution/policies.json adds DuckDuckGo and
++      // makes it the default, so URL-bar searches go there instead.
 +      return [
 +        {
 +          "recordType": "engine",

@@ -70,22 +70,20 @@
       "PreventInstalls": true,
       "Remove": [
         "Google",
-        "DuckDuckGo",
         "Bing",
         "Amazon.com",
         "eBay",
         "Twitter",
         "Wikipedia (en)"
       ],
-      "Default": "None",
+      "Default": "DuckDuckGo",
       "Add": [
         {
-          "Name": "None",
-          "Description": "None",
+          "Name": "DuckDuckGo",
+          "Description": "DuckDuckGo",
           "Alias": "",
-          "Method": "POST",
-          "URLTemplate": "http://127.0.0.1",
-          "PostData": ""
+          "Method": "GET",
+          "URLTemplate": "https://duckduckgo.com/?q={searchTerms}"
         }
       ]
     }
