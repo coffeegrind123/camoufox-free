@@ -58,7 +58,8 @@ For an identity whose OS is not the host's. Offered upstream in
   The coherence repair moved the ratio to a real scaling step but kept the
   shrunken sizes, so a 1920x1080 monitor was claimed as 1760x990 at 100%, and a
   fullscreen window measured 1920x1080 against `screen.width` 1760. The geometry
-  is now rescaled with the ratio. ([357cd48](https://github.com/coffeegrind123/camoufox-free/commit/357cd487113dad9a858a8e4ff7773e9cc141817c))
+  is now rescaled with the ratio, including a ratio the launcher draws from
+  fpgen itself, which used to skip the repair. ([357cd48](https://github.com/coffeegrind123/camoufox-free/commit/357cd487113dad9a858a8e4ff7773e9cc141817c), [52b234f](https://github.com/coffeegrind123/camoufox-free/commit/52b234f29ba359dd7d2e2ae00743d3ee74f998d1), [#27](https://github.com/coffeegrind123/camoufox-free/pull/27))
 - **Large per-context values cross content processes.** Firefox does not sync a
   string pref over 4 KiB. Font and voice lists over 3 KiB are stored in chunks
   and reassembled from a generation header, so every content-process page and
@@ -293,6 +294,13 @@ For an identity whose OS is not the host's. Offered upstream in
   and the selected filter lists are pinned to the ten lists inside that bundle,
   so a first run downloads no regional list before pages load.
   ([`build.yml`](.github/workflows/build.yml), [`policies.json`](browser/settings/distribution/policies.json), [7ac4b21](https://github.com/coffeegrind123/camoufox-free/commit/7ac4b2132c3a6f7d3ee1a5e821d01da5d31f9586))
+- **Every user that runs the release can read all of it.** `addons/UBO` was
+  staged in a 0700 directory and 64 Windows fonts shipped as 0600, so when root
+  unzipped the release and another user ran it (the Docker image's app user),
+  there was no uBO and those fonts were missing. Staging and packaging now make
+  every file readable by all users. The build fails if the zip still has an
+  entry other users can't read. The release build then runs the uBO guard as a
+  user that owns neither the browser nor the launcher. ([8c39ce4](https://github.com/coffeegrind123/camoufox-free/commit/8c39ce46388a69c7909daea335b13007953a84d6), [432bd63](https://github.com/coffeegrind123/camoufox-free/commit/432bd6355a6a1965ca107526bcc28e485ffed3ae), [a494551](https://github.com/coffeegrind123/camoufox-free/commit/a494551287ec0585163f89607440fbb24aaa237d))
 - **Linux x86_64 releases built by this repo's CI**
   ([`build.yml`](.github/workflows/build.yml)), with sha256 digests. No PyPI or
   npm packages are published, and upstream's release train doesn't run. ([b70dc6c](https://github.com/coffeegrind123/camoufox-free/commit/b70dc6c52c1605ad8bcf7c7770cf99d2235dd8a0))
