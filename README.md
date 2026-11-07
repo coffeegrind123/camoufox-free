@@ -52,14 +52,17 @@ For an identity whose OS is not the host's. Offered upstream in
   WebGL2 wherever the GL has 16-bit normalized textures. Upstream filtered it on
   Windows because ANGLE decides per device, but ANGLE derives it from formats
   that D3D11 feature level 10_0, WebGL2's minimum, requires; stock 159.0 on a
-  GeForce GTX 980 lists it. ([a255a43](https://github.com/coffeegrind123/camoufox-free/commit/a255a4350566990f464fa74236ea994eebcbe471))
+  GeForce GTX 980 lists it. Offered upstream in [#1005](https://github.com/daijro/camoufox/pull/1005).
+  ([a255a43](https://github.com/coffeegrind123/camoufox-free/commit/a255a4350566990f464fa74236ea994eebcbe471))
 - **A repaired display scale keeps the display.** fpgen records some ratios
   with a browser zoom folded in (1.0909 for 110%), which shrinks every CSS size.
   The coherence repair moved the ratio to a real scaling step but kept the
   shrunken sizes, so a 1920x1080 monitor was claimed as 1760x990 at 100%, and a
   fullscreen window measured 1920x1080 against `screen.width` 1760. The geometry
   is now rescaled with the ratio, including a ratio the launcher draws from
-  fpgen itself, which used to skip the repair. ([357cd48](https://github.com/coffeegrind123/camoufox-free/commit/357cd487113dad9a858a8e4ff7773e9cc141817c), [52b234f](https://github.com/coffeegrind123/camoufox-free/commit/52b234f29ba359dd7d2e2ae00743d3ee74f998d1), [#27](https://github.com/coffeegrind123/camoufox-free/pull/27))
+  fpgen itself, which used to skip the repair. A screen the caller sets is
+  never rescaled. Offered upstream in [#1003](https://github.com/daijro/camoufox/pull/1003).
+  ([357cd48](https://github.com/coffeegrind123/camoufox-free/commit/357cd487113dad9a858a8e4ff7773e9cc141817c), [52b234f](https://github.com/coffeegrind123/camoufox-free/commit/52b234f29ba359dd7d2e2ae00743d3ee74f998d1), [1d1640b](https://github.com/coffeegrind123/camoufox-free/commit/1d1640bcc8de582f4ce49726258ee57c8fc9bff2), [#27](https://github.com/coffeegrind123/camoufox-free/pull/27))
 - **Large per-context values cross content processes.** Firefox does not sync a
   string pref over 4 KiB. Font and voice lists over 3 KiB are stored in chunks
   and reassembled from a generation header, so every content-process page and
@@ -299,7 +302,8 @@ For an identity whose OS is not the host's. Offered upstream in
   there was no uBO and those fonts were missing. Staging and packaging now make
   every file readable by all users. The build fails if the zip still has an
   entry other users can't read. The release build then runs the uBO guard as a
-  user that owns neither the browser nor the launcher. ([8c39ce4](https://github.com/coffeegrind123/camoufox-free/commit/8c39ce46388a69c7909daea335b13007953a84d6), [432bd63](https://github.com/coffeegrind123/camoufox-free/commit/432bd6355a6a1965ca107526bcc28e485ffed3ae), [a494551](https://github.com/coffeegrind123/camoufox-free/commit/a494551287ec0585163f89607440fbb24aaa237d))
+  user that owns neither the browser nor the launcher. The packaging fix is
+  offered upstream in [#1002](https://github.com/daijro/camoufox/pull/1002). ([8c39ce4](https://github.com/coffeegrind123/camoufox-free/commit/8c39ce46388a69c7909daea335b13007953a84d6), [432bd63](https://github.com/coffeegrind123/camoufox-free/commit/432bd6355a6a1965ca107526bcc28e485ffed3ae), [a494551](https://github.com/coffeegrind123/camoufox-free/commit/a494551287ec0585163f89607440fbb24aaa237d))
 - **Linux x86_64 releases built by this repo's CI**
   ([`build.yml`](.github/workflows/build.yml)), with sha256 digests. No PyPI or
   npm packages are published, and upstream's release train doesn't run. ([b70dc6c](https://github.com/coffeegrind123/camoufox-free/commit/b70dc6c52c1605ad8bcf7c7770cf99d2235dd8a0))
@@ -316,6 +320,7 @@ For an identity whose OS is not the host's. Offered upstream in
   [long-press-link-preview-parity.py](browser/tests/playwright/patches/long-press-link-preview-parity.py))
 - **The Playwright suite's pip stays below 26.3**, which rejects the
   `autobahn` that playwright-python pins, so the suite never installed.
+  Offered upstream in [#1001](https://github.com/daijro/camoufox/pull/1001).
   ([7bcc78a](https://github.com/coffeegrind123/camoufox-free/commit/7bcc78a4dd4e442d84450879c7ef16a12a65fc89))
 - **`canvas_noise` defaults to `False`:** the canvas is never covered.
   `canvas_noise=None` gives upstream's automatic cover. ([38ef536](https://github.com/coffeegrind123/camoufox-free/commit/38ef536579a3b1284929dfaf544dfb6e124a217e))
