@@ -161,3 +161,16 @@ def test_the_staged_addon_is_readable_by_every_user(tmp_path):
         mode = path.stat().st_mode & 0o777
         want = 0o755 if path.is_dir() else 0o644
         assert mode == want, f"{path.relative_to(tmp_path)} is {oct(mode)}, want {oct(want)}"
+
+
+def test_duckduckgo_is_the_default_search_engine():
+    """URL-bar searches go to DuckDuckGo. The build has no built-in engines
+    (no-search-engines.patch leaves only an inert "None"), so the policy must
+    add DuckDuckGo itself; a Default naming an engine nobody added is ignored."""
+    policies = json.loads((BROWSER_ROOT / "settings" / "distribution" / "policies.json").read_text())
+    search = policies["policies"]["SearchEngines"]
+    assert search["Default"] == "DuckDuckGo"
+    added = {e["Name"]: e for e in search.get("Add", [])}
+    assert added["DuckDuckGo"]["URLTemplate"] == "https://duckduckgo.com/?q={searchTerms}"
+    assert added["DuckDuckGo"]["Method"] == "GET"
+    assert not [e for e in added.values() if "127.0.0.1" in e.get("URLTemplate", "")]
