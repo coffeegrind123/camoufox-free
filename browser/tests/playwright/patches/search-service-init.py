@@ -1,7 +1,7 @@
 r"""
 Verify the search service still initializes (no-search-engines.patch).
 
-Camoufox ships no search engines: no-search-engines.patch short-circuits
+Camoufox ships no built-in search engines: no-search-engines.patch short-circuits
 SearchEngineSelector.#getConfiguration() with a hardcoded stub instead of
 fetching from Remote Settings, which is dead anyway because camoufox.cfg sets
 services.settings.server to "".
@@ -27,13 +27,15 @@ Note that "no engines" cannot be expressed as an empty configuration:
 getEngineConfiguration() rejects `[]` with "Failed to get engine data from
 Remote Settings", and SearchSettings refuses to write without an engine. So the
 stub carries one inert engine, and this test asserts both halves -- that init
-completes, AND that the only engine present is that inert one.
+completes, AND that the only engines present are that inert one and the ones
+settings/distribution/policies.json adds (DuckDuckGo, the default).
 
 Run from any venv (no playwright needed -- this drives the binary directly):
     python browser/tests/playwright/patches/search-service-init.py
     python browser/tests/playwright/patches/search-service-init.py --binary /path/to/camoufox-bin
 """
 
+import json
 import re
 import subprocess
 import sys
@@ -46,10 +48,15 @@ from helpers import resolve_binary
 # does not exit on its own with -headless about:blank, so it is killed after.
 LAUNCH_TIMEOUT_S = 60
 
-# Any of these appearing as an added engine means the "no search engines"
-# stance has been lost.
-REAL_ENGINES = ("Google", "Bing", "DuckDuckGo", "Perplexity", "Wikipedia",
-                "Yahoo", "Ecosia", "Qwant", "Baidu", "Yandex")
+# The stub's inert engine, plus every engine the policy adds. Anything else
+# (a built-in that came back, an engine from another source) fails.
+STUB_ENGINE = "None"
+POLICIES = Path(__file__).resolve().parents[3] / "settings" / "distribution" / "policies.json"
+
+
+def policy_engines() -> set:
+    search = json.loads(POLICIES.read_text())["policies"].get("SearchEngines", {})
+    return {e["Name"] for e in search.get("Add", [])}
 
 ADDED_ENGINE_RE = re.compile(r'"#addEngineToStore: Adding engine:" "([^"]*)"')
 
@@ -113,11 +120,15 @@ def main() -> int:
     if not settings_written:
         failures.append("search.json.mozlz4 was never written")
 
-    # 4. ...and the stance must still hold: nothing but the inert engine.
+    # 4. ...and only the expected engines: the inert stub and the policy's.
     engines = sorted(set(ADDED_ENGINE_RE.findall(log)))
-    leaked = [e for e in engines if any(r.lower() in e.lower() for r in REAL_ENGINES)]
-    if leaked:
-        failures.append(f"real search engines were added: {', '.join(leaked)}")
+    expected = {STUB_ENGINE} | policy_engines()
+    unexpected = [e for e in engines if e not in expected]
+    if unexpected:
+        failures.append(f"engines neither the stub nor policies.json adds: {', '.join(unexpected)}")
+    missing = sorted(policy_engines() - set(engines))
+    if missing:
+        failures.append(f"engines policies.json adds never loaded: {', '.join(missing)}")
     if not engines:
         failures.append("no engine was added at all (settings cannot be written)")
 
@@ -133,7 +144,7 @@ def main() -> int:
         for f in failures:
             print(f"FAIL: {f}")
         return 1
-    print("PASS: the search service initializes, and the only engine is the inert stub.")
+    print("PASS: the search service initializes, with only the inert stub and the policy's engines.")
     return 0
 
 

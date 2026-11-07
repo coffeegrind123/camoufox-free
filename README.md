@@ -304,6 +304,11 @@ For an identity whose OS is not the host's. Offered upstream in
   entry other users can't read. The release build then runs the uBO guard as a
   user that owns neither the browser nor the launcher. The packaging fix is
   offered upstream in [#1002](https://github.com/daijro/camoufox/pull/1002). ([8c39ce4](https://github.com/coffeegrind123/camoufox-free/commit/8c39ce46388a69c7909daea335b13007953a84d6), [432bd63](https://github.com/coffeegrind123/camoufox-free/commit/432bd6355a6a1965ca107526bcc28e485ffed3ae), [a494551](https://github.com/coffeegrind123/camoufox-free/commit/a494551287ec0585163f89607440fbb24aaa237d))
+- **DuckDuckGo is the default search engine.** Upstream's only engine is an
+  inert "None" at 127.0.0.1, so a search typed in the URL bar went nowhere. The
+  policy adds DuckDuckGo and makes it the default. Search suggestions stay off,
+  and a page can't read the browser's engine.
+  ([`policies.json`](browser/settings/distribution/policies.json), [6e24feb](https://github.com/coffeegrind123/camoufox-free/commit/6e24feb8b621bfdd794d1745105f08596a907040))
 - **Linux x86_64 releases built by this repo's CI**
   ([`build.yml`](.github/workflows/build.yml)), with sha256 digests. No PyPI or
   npm packages are published, and upstream's release train doesn't run. ([b70dc6c](https://github.com/coffeegrind123/camoufox-free/commit/b70dc6c52c1605ad8bcf7c7770cf99d2235dd8a0))
