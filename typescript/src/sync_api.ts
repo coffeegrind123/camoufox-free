@@ -17,14 +17,13 @@ import {
 	firefox,
 } from "playwright-core";
 import * as cpuAffinity from "./cpu_affinity.js";
-import { InvalidProxy } from "./exceptions.js";
+import { attachDriverDefaults } from "./driver_defaults.js";
 import { generateContextFingerprint } from "./fingerprints.js";
 import {
-	PROXY_CREDENTIALS_ENV,
 	type ProxyConfig,
 	ProxyHelper,
 	proxyExitGeo,
-	splitSocksCredentials,
+	validatedProxy,
 } from "./ip.js";
 import { SELECTOR } from "./locales.js";
 import {
@@ -32,6 +31,7 @@ import {
 	attachDesktopOnlyWarning,
 	attachLaunchWindow,
 	attachNoViewportDefault,
+	attachSocks5Auth,
 	attachStockMediaDefaults,
 	attachVirtualDisplay,
 	contextIdentity,
@@ -210,17 +210,20 @@ async function launchWith(
 			userDataDir ?? "",
 			options,
 		);
+		attachDriverDefaults(context);
 		return attachVirtualDisplay(context, virtualDisplay);
 	}
 
 	// Browser
 	const identity = await hostIdentity(fromOptions, canvasNoise, gpuPassthrough);
 	const browser = await playwright.launch(fromOptions);
+	attachSocks5Auth(browser);
 	if (noViewportDefault) {
 		attachNoViewportDefault(browser);
 	}
 	attachStockMediaDefaults(browser);
 	attachDesktopOnlyWarning(browser);
+	attachDriverDefaults(browser);
 	(browser as any)._camoufoxHostIdentity = identity;
 	attachLaunchWindow(browser, fromOptions);
 	return attachVirtualDisplay(browser, virtualDisplay);
@@ -276,15 +279,10 @@ export async function NewContext(
 		...contextOptions
 	}: NewContextOptions = {},
 ): Promise<BrowserContext> {
-	const [sanitizedProxy, socksCredentials] = splitSocksCredentials(proxy);
-	if (socksCredentials) {
-		throw new InvalidProxy(
-			"Per-context SOCKS5 credentials cannot be delivered after the browser " +
-				`has started. Declare the endpoint in ${PROXY_CREDENTIALS_ENV} in the ` +
-				"launch env, then pass the proxy without credentials to NewContext.",
-		);
-	}
-	proxy = sanitizedProxy;
+	// Validated and normalized (socks5h becomes socks5), SOCKS5 credentials
+	// kept: the exit lookup goes through the authenticated proxy, and
+	// newContext() hands them to Juggler (attachSocks5Auth).
+	proxy = validatedProxy(proxy);
 
 	// Python's fpgen loads its model on import; here it is fetched on first use.
 	// launchOptions() awaits it, but a browser from connect() or a custom
@@ -355,6 +353,8 @@ export async function NewContext(
 		opts.permissions ??= ["geolocation"];
 	}
 
+	// A browser launched elsewhere takes SOCKS5 credentials too.
+	attachSocks5Auth(browser);
 	const context = await browser.newContext(opts);
 	await context.addInitScript(fp.init_script);
 	return context;

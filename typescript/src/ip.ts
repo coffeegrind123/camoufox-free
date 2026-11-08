@@ -14,6 +14,11 @@ export interface ProxyConfig {
 	bypass?: string;
 }
 
+/**
+ * A caller-declared map of SOCKS5 credentials by "host:port", which Juggler
+ * still reads (NetworkObserver.js). The launchers themselves send a proxy's
+ * credentials through PROXY_AUTH_ENV and proxyAuthInitScript.
+ */
 export const PROXY_CREDENTIALS_ENV = "CAMOU_PROXY_CREDENTIALS";
 
 export interface ProxyCredentials {
@@ -220,6 +225,84 @@ export class ProxyHelper {
 		}
 		return result;
 	}
+}
+
+export interface ProxyAuth {
+	host: string;
+	port: number | null;
+	username: string;
+	password: string;
+}
+
+/**
+ * The launch-level or context credentials Juggler takes, from the
+ * endpoint-keyed map splitSocksCredentials returns (one endpoint).
+ */
+export function proxyAuthOf(credentials: ProxyCredentialsMap): ProxyAuth {
+	const [[endpoint, selected]] = Object.entries(credentials);
+	const at = endpoint.lastIndexOf(":");
+	return {
+		host: endpoint.slice(0, at),
+		port: Number(endpoint.slice(at + 1)),
+		username: selected.username,
+		password: selected.password,
+	};
+}
+
+/**
+ * Splits a SOCKS5 proxy's username and password from what Playwright is given.
+ *
+ * Playwright refuses a `socks5://` proxy that has a username ("Browser does
+ * not support socks5 proxy authentication"), but Juggler can send them
+ * (RFC 1929). Returns the proxy without its credentials (socks5h normalized
+ * to socks5), and the credentials with the proxy's host and port, for
+ * Juggler; or the proxy unchanged and null when it is not SOCKS5 or has no
+ * credentials. splitSocksCredentials does the parsing and validation.
+ */
+export function socks5Auth<T extends ProxyConfig | undefined | null>(
+	proxy: T,
+): [T, ProxyAuth | null] {
+	if (proxy == null) return [proxy, null];
+	const [bare, credentials] = splitSocksCredentials(proxy);
+	if (!credentials) return [bare as T, null];
+	return [bare as T, proxyAuthOf(credentials)];
+}
+
+/**
+ * The proxy as splitSocksCredentials validates and normalizes it, with a
+ * SOCKS5 proxy's selected credentials kept on it as username and password:
+ * the form a lookup through the proxy and a context's newContext() take
+ * (attachSocks5Auth moves them to Juggler there).
+ */
+export function validatedProxy(
+	proxy: ProxyConfig | null | undefined,
+): ProxyConfig | undefined {
+	const [bare, credentials] = splitSocksCredentials(proxy);
+	if (!bare || !credentials) return bare;
+	const [selected] = Object.values(credentials);
+	return { ...bare, username: selected.username, password: selected.password };
+}
+
+/**
+ * The environment variable that carries a launch-level SOCKS5 proxy's
+ * credentials to Juggler (TargetRegistry.js), which clears it once read.
+ */
+export const PROXY_AUTH_ENV = "CAMOU_PROXY_AUTH";
+
+/** The environment that hands a launch-level proxy's credentials to Juggler. */
+export function proxyAuthEnv(auth: ProxyAuth): Record<string, string> {
+	return { [PROXY_AUTH_ENV]: JSON.stringify(auth) };
+}
+
+/**
+ * The init script that hands a context's SOCKS5 credentials to Juggler.
+ *
+ * Juggler takes it out of the context's init scripts (TargetRegistry.js), so
+ * it never reaches a page or a content process. It is valid JavaScript that
+ * does nothing, should a browser without that support run it.
+ */
+export function proxyAuthInitScript(auth: ProxyAuth): string {
+	return `camoufoxProxyAuth: (${JSON.stringify(auth)});`;
 }
 
 export function validIPv4(ip: string | false): boolean {

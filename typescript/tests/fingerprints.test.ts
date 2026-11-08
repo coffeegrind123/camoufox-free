@@ -16,6 +16,7 @@ import {
 	clampWindowDimensions,
 	clampWindowPosition,
 	drawMediaDevices,
+	drawVoiceConfig,
 	fixHardwareConcurrency,
 	fixNavigatorArch,
 	followBaselineProtection,
@@ -34,8 +35,10 @@ import {
 	presentWindowFrame,
 	Screen,
 	setMediaDevicesDefaults,
+	speechdVoices,
 	versionlessUa,
 	voicePool,
+	voicePoolSpeechd,
 	WINDOWS_11_MARKER_FONTS,
 } from "../src/fingerprints.js";
 import { LOCAL_DATA } from "../src/paths.js";
@@ -575,15 +578,32 @@ const REQUIRED_VOICE_FIELDS = [
 
 describe("voices (test_voices.py)", () => {
 	for (const os of ["macos", "windows", "linux"]) {
-		it(`${os}: non-empty full objects, none marked default`, () => {
+		it(`${os}: non-empty full objects`, () => {
 			const voices = generateRandomVoiceSubset(os, "en-US");
 			expect(voices.length).toBeGreaterThan(0);
 			for (const v of voices) {
 				for (const f of REQUIRED_VOICE_FIELDS) expect(v).toHaveProperty(f);
 			}
-			expect(voices.some((v) => v.isDefault)).toBe(false);
+			// macOS marks its system voice default; SAPI and speech-dispatcher none.
+			expect(voices.filter((v) => v.isDefault).map((v) => v.name)).toEqual(
+				os === "macos" ? ["Samantha"] : [],
+			);
 		});
 	}
+
+	it("draws Linux voices for the font release (test_linux_voices_follow_the_font_release)", () => {
+		for (let seed = 0; seed < 20; seed++) {
+			const count = generateRandomVoiceSubset("linux", null, seed).length;
+			expect([13362, 14805]).toContain(count);
+			const grid = drawVoiceConfig("linux", null, seed)["voices:speechd"];
+			expect(speechdVoices(grid).length).toBe(count);
+		}
+		expect(
+			generateRandomVoiceSubset("linux", null, 1)
+				.slice(0, 3)
+				.map((v) => v.name),
+		).toEqual(["Afrikaans", "Afrikaans+Adam", "Afrikaans+Alex"]);
+	});
 
 	it("uses the Windows display language pack", () => {
 		expect(generateRandomVoiceSubset("windows", "de-DE", 1)[0].lang).toBe(
@@ -605,7 +625,7 @@ describe("voices (test_voices.py)", () => {
 		for (const v of lin) {
 			expect(v.voiceUri.startsWith("urn:moz-tts:speechd:")).toBe(true);
 			expect(v.voiceUri.endsWith(`?${v.lang}`)).toBe(true);
-			expect(v.isLocalService).toBe(true);
+			expect(v.isLocalService).toBe(false);
 		}
 		const gb = lin.find((v) => v.name === "English (Great Britain)");
 		expect(gb?.voiceUri).toBe(
@@ -1080,6 +1100,9 @@ describe.skipIf(!MODEL.ok)("fpgen generation (needs the model)", () => {
 		// with locale "de-DE" does. A context's list only selects among the
 		// voices the browser registered: the launch's and voices:pool.
 		const pool = new Set(voicePool().map((v) => v.voiceUri));
+		const pooledSpeechd = new Set(
+			speechdVoices(voicePoolSpeechd()).map(([name]) => name),
+		);
 		const german = generateContextFingerprint({
 			os: "windows",
 			locale: "de-DE",
@@ -1091,7 +1114,30 @@ describe.skipIf(!MODEL.ok)("fpgen generation (needs the model)", () => {
 			["linux", "en-GB"],
 		]) {
 			const { config } = generateContextFingerprint({ os, locale });
+			if (os === "linux") {
+				// A Linux context names its release's speech-dispatcher grid,
+				// which the browser registers from voices:pool:speechd.
+				expect(config.voices).toBeUndefined();
+				for (const [name] of speechdVoices(config["voices:speechd"]))
+					expect(pooledSpeechd.has(name)).toBe(true);
+				continue;
+			}
 			for (const v of config.voices) expect(pool).toContain(v.voiceUri);
+		}
+	}, 30_000);
+
+	it("a Linux context with a locale keeps its release grid, sent as JSON", () => {
+		// The locale redraw is for Windows' language packs; a Linux grid does
+		// not depend on the locale, and a redraw could name another Ubuntu
+		// release than the context's fonts.
+		for (const locale of ["de-DE", "ja-JP"]) {
+			const fp = generateContextFingerprint({ os: "linux", locale });
+			expect(fp.config.voices).toBeUndefined();
+			const grid = fp.config["voices:speechd"];
+			const call = /w\.setSpeechVoices\(("[^\n]*")\);/.exec(fp.init_script);
+			const sent = JSON.parse((call as RegExpExecArray)[1]);
+			expect(sent.startsWith("{")).toBe(true);
+			expect(JSON.parse(sent)).toEqual({ speechd: grid });
 		}
 	}, 30_000);
 

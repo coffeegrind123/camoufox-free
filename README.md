@@ -83,14 +83,13 @@ For an identity whose OS is not the host's. Offered upstream in
   [#990](https://github.com/daijro/camoufox/pull/990) and
   [#991](https://github.com/daijro/camoufox/pull/991).
   ([b84880a](https://github.com/coffeegrind123/camoufox-free/commit/b84880ae39c173aa8250d377b8e0679689c4cad2), [3777eaf](https://github.com/coffeegrind123/camoufox-free/commit/3777eaf09cc91a2eb1d7d1522a425785d8b23353))
-- **Authenticated SOCKS5 proxies.** Playwright rejects SOCKS5 credentials
-  before Juggler receives the proxy, so the launchers pass them through an
-  endpoint-scoped launch environment and Juggler builds the proxy with
-  `newProxyInfoWithAuth`. This applies to launch-level proxies. Credentials
-  passed to `NewContext` are rejected: put the endpoint in
-  `CAMOU_PROXY_CREDENTIALS` and pass the context proxy without credentials.
-  `socks5h` resolves names at the proxy. A setup error fails the request closed
-  instead of falling back to the host's direct connection. Ported from
+- **Authenticated SOCKS5 proxies fail closed.** Upstream passes SOCKS5
+  credentials to Juggler (`CAMOU_PROXY_AUTH`, and a per-context init script).
+  On top of that transport, `socks5h` and credentials in the proxy URL are
+  accepted, a port is required, a caller's `CAMOU_PROXY_CREDENTIALS` map
+  (`host:port` to credentials) is still honoured and cleared after reading,
+  and a setup error fails the request closed instead of falling back to the
+  host's direct connection. Ported from
   liasica's [2f0be40](https://github.com/liasica/camoufox/commit/2f0be400e53b88bb9b00b3faf2356503ae9dbfab).
   ([29b467f](https://github.com/coffeegrind123/camoufox-free/commit/29b467fd6fa2e7f82b85a3a2b43eb9eea183c4ce))
 - **EME on for Windows identities.** With EME off, Firefox's "EME has been

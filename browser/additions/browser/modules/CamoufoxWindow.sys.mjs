@@ -122,102 +122,116 @@ function claimedFrame() {
   return { left, top, right, bottom };
 }
 
+function applyWindowPosition(win) {
+  // Each window the browser opens is moved to the identity's position, so it
+  // really is there and reports it. Where the window manager puts it elsewhere
+  // anyway, the page still reads the identity's position
+  // (window-screen-origin.patch); a popup a page opened reports where it
+  // really is, as in stock. 0 is a position, so an absent key reads as a
+  // value no screen has (the WebIDL argument cannot be NaN).
+  const UNSET = -1e9;
+  const x = ChromeUtils.camouGetDouble("window.screenX", UNSET);
+  const y = ChromeUtils.camouGetDouble("window.screenY", UNSET);
+  if (x === UNSET && y === UNSET) {
+    return;
+  }
+  // The window manager places a window when it maps it, after load, so the
+  // position is held through startup as the size is. A move is only ever
+  // made to a normal window: moving a fullscreen or maximized one restores it.
+  const deadline = Date.now() + 5000;
+  const place = () => {
+    if (Date.now() > deadline) {
+      win.removeEventListener("MozAfterPaint", place);
+      return;
+    }
+    if (win.windowState !== win.STATE_NORMAL) {
+      return;
+    }
+    const tx = x === UNSET ? win.screenX : x;
+    const ty = y === UNSET ? win.screenY : y;
+    if (win.screenX !== tx || win.screenY !== ty) {
+      win.moveTo(tx, ty);
+    }
+  };
+  place();
+  win.addEventListener("MozAfterPaint", place);
+}
+
 function applyWindowSize(win) {
-  // outerWidth/outerHeight report the real window, so the real window is resized
-  // to the identity's size; pinning the document instead deadlocks Juggler's
-  // viewport handshake (daijro/camoufox#666). Without an identity size, stock's
-  // own startup sizing applies. So it does for a window a page opened: stock
-  // gives it the size its window.open() features ask for.
+  // The real window is resized to the identity's size; pinning the document
+  // instead deadlocks Juggler's viewport handshake (daijro/camoufox#666).
+  // Without an identity size, stock's own startup sizing applies. So it does
+  // for a window a page opened: stock gives it the size its window.open()
+  // features ask for.
   const appWindow = win.docShell.treeOwner
     .QueryInterface(Ci.nsIInterfaceRequestor)
     .getInterface(Ci.nsIAppWindow);
   if (appWindow.initialOpenWindowInfo) {
     return;
   }
+  applyWindowPosition(win);
   const outerWidth = ChromeUtils.camouGetInt("window.outerWidth");
   const outerHeight = ChromeUtils.camouGetInt("window.outerHeight");
-  if (outerWidth || outerHeight) {
-    win.resizeTo(outerWidth || win.outerWidth, outerHeight || win.outerHeight);
-    // Hold that size through startup. mutter auto-maximizes a new window
-    // covering >= 80% of the work area, and GTK adds its decoration margins to
-    // the outer size only once the window is mapped, which left a page reading
-    // the identity's size plus 10px. After the deadline a change is the user's.
-    // An X11 window manager's frame (_NET_FRAME_EXTENTS) can arrive after the
-    // window maps. It changes only the margins Firefox adds to the outer size,
-    // and with the content area unchanged no resize event fires, so the hold
-    // also checks on a timer.
-    //
-    // With a claimed frame, the outer size a page reads is the content area
-    // plus that frame, so the hold sizes the content area instead: to the
-    // identity's outer size less the frame. The real window ends up as much
-    // larger as its own chrome is larger than the claimed OS's.
-    // A viewport pins the content area, and then no window size moves it: a
-    // resize is never repeated for a content size it already tried, or the
-    // window would grow on every check.
-    const frame = claimedFrame();
-    let triedFor = null;
-    const sizeDelta = () => {
-      if (!frame) {
-        return [
-          outerWidth ? outerWidth - win.outerWidth : 0,
-          outerHeight ? outerHeight - win.outerHeight : 0,
-        ];
-      }
-      const content = win.gBrowser?.selectedBrowser?.getBoundingClientRect();
-      if (!content?.width || !content?.height) {
-        return [0, 0];
-      }
-      const size = Math.round(content.width) + "x" + Math.round(content.height);
-      if (size === triedFor) {
-        return [0, 0];
-      }
-      triedFor = size;
-      return [
-        outerWidth ? outerWidth - frame.left - frame.right - Math.round(content.width) : 0,
-        outerHeight ? outerHeight - frame.top - frame.bottom - Math.round(content.height) : 0,
-      ];
-    };
-    const deadline = Date.now() + 5000;
-    const holdStartupSize = () => {
-      if (Date.now() > deadline) {
-        win.removeEventListener("sizemodechange", holdStartupSize);
-        win.removeEventListener("resize", holdStartupSize);
-        win.clearInterval(holdTimer);
-        return;
-      }
-      if (win.windowState === win.STATE_MAXIMIZED) {
-        win.restore();
-      }
-      const [dw, dh] = sizeDelta();
-      if (dw || dh) {
-        win.resizeBy(dw, dh);
-      }
-    };
-    win.addEventListener("sizemodechange", holdStartupSize);
-    win.addEventListener("resize", holdStartupSize);
-    const holdTimer = win.setInterval(holdStartupSize, 100);
-
-    // After startup too, a maximized window would take the real display's
-    // size, larger than the identity's screen, and outerWidth/innerWidth
-    // follow the real window: a window bigger than its screen. It goes back to
-    // the identity's size. An identity drawn maximized already fills its
-    // screen, and a page reads it as maximized.
-    win.addEventListener("sizemodechange", () => {
-      if (Date.now() > deadline && win.windowState === win.STATE_MAXIMIZED) {
-        win.restore();
-      }
-    });
-  }
-
   const innerWidth = ChromeUtils.camouGetInt("window.innerWidth");
   const innerHeight = ChromeUtils.camouGetInt("window.innerHeight");
-  if (!innerWidth && !innerHeight) {
+  if (!(outerWidth || outerHeight || innerWidth || innerHeight)) {
     return;
   }
   const doc = win.document;
-  doc.getElementById("browser")?.style.setProperty("box-sizing", "content-box");
-  const style = doc.createElement("style");
-  style.textContent = `
+  const stack = win.gBrowser.selectedBrowser.closest(".browserStack");
+  // An inner size is met by sizing the content area, so the window manager
+  // adds its frame to it as it does for stock, and outerWidth/outerHeight and
+  // the window's placement follow. Sizing to the outer size instead runs before
+  // the frame exists, so the frame lands on top of it. Chrome reads the
+  // identity's innerWidth/innerHeight too, so the window is measured: the
+  // content area starts where the toolbars end and runs to the window's edge.
+  // The bookmarks toolbar shown only on a new tab takes its own room from the
+  // content area, as in stock; it is not part of the identity's outer chrome.
+  const newTabToolbar = () => {
+    const bar = doc.getElementById("PersonalToolbar");
+    if (!bar || bar.collapsed ||
+        Services.prefs.getCharPref("browser.toolbars.bookmarks.visibility", "newtab") !== "newtab") {
+      return 0;
+    }
+    return bar.getBoundingClientRect().height;
+  };
+  // With a claimed frame (window-sizing-claimed-os.patch) a page reads its
+  // content area plus that frame as the outer size, so an outer size alone is
+  // met by sizing the content area to it less the frame. The real window ends
+  // up as much larger as its own chrome is larger than the claimed OS's.
+  const frame = claimedFrame();
+  const contentWidth = innerWidth || (frame && outerWidth ? outerWidth - frame.left - frame.right : 0);
+  const contentHeight = innerHeight || (frame && outerHeight ? outerHeight - frame.top - frame.bottom : 0);
+  const misfit = () => {
+    const client = doc.documentElement.getBoundingClientRect();
+    const start = stack.getBoundingClientRect();
+    return [
+      contentWidth
+        ? Math.round(contentWidth + start.left - client.width)
+        : outerWidth ? outerWidth - win.outerWidth : 0,
+      contentHeight
+        ? Math.round(contentHeight + start.top - newTabToolbar() - client.height)
+        : outerHeight ? outerHeight - win.outerHeight : 0,
+    ];
+  };
+  // Hold that size through startup: mutter auto-maximizes a new window
+  // covering >= 80% of the work area. After the deadline a change is the user's.
+  // Where the window cannot grow to the identity's viewport, the content is
+  // pinned to that size and still lays out at it. The pin comes off once the
+  // real content area is the identity's: from then on the content area
+  // follows the window, as in stock (fullscreen, the find bar).
+  let pin = null;
+  const unpin = () => {
+    if (pin && !misfit().some(Boolean)) {
+      pin.remove();
+      pin = null;
+      doc.getElementById("browser")?.style.removeProperty("box-sizing");
+    }
+  };
+  if (innerWidth || innerHeight) {
+    doc.getElementById("browser")?.style.setProperty("box-sizing", "content-box");
+    pin = doc.createElement("style");
+    pin.textContent = `
     .browserStack {
       ${innerWidth ? `width: ${innerWidth}px !important;` : ""}
       ${innerHeight ? `height: ${innerHeight}px !important;` : ""}
@@ -227,15 +241,73 @@ function applyWindowSize(win) {
       scrollbar-width: none;
     }
   `;
-  doc.head.appendChild(style);
-  if (innerWidth && innerHeight && !(outerWidth || outerHeight)) {
-    // Grow the window so the pinned stack fits.
-    win.requestAnimationFrame(() => {
-      const stack = win.gBrowser?.selectedBrowser?.closest(".browserStack");
-      const top = stack ? stack.getBoundingClientRect().y : 0;
-      win.resizeBy(innerWidth - win.innerWidth, innerHeight + top - win.innerHeight);
-    });
+    doc.head.appendChild(pin);
   }
+
+  // Only the window manager's changes are undone: a page entering fullscreen
+  // or the find bar taking room from the content area leaves the outer size
+  // or the size mode to the page and the user, as in stock.
+  // An X11 window manager's frame (_NET_FRAME_EXTENTS) can arrive after the
+  // window maps. It changes only the margins Firefox adds to the outer size,
+  // and with the content area unchanged no resize event fires, so the hold
+  // also checks on a timer.
+  const deadline = Date.now() + 5000;
+  let held = null;
+  let holdTimer = null;
+  const stopHold = () => {
+    win.removeEventListener("sizemodechange", holdStartupSize);
+    win.removeEventListener("resize", holdStartupSize);
+    if (holdTimer !== null) {
+      win.clearInterval(holdTimer);
+      holdTimer = null;
+    }
+  };
+  const holdStartupSize = () => {
+    if (Date.now() > deadline || win.windowState === win.STATE_FULLSCREEN) {
+      stopHold();
+      return;
+    }
+    if (win.windowState === win.STATE_MAXIMIZED) {
+      win.restore();
+    } else if (held && held[0] === win.outerWidth && held[1] === win.outerHeight) {
+      unpin();
+      return;
+    }
+    const [dw, dh] = misfit();
+    if (dw || dh) {
+      win.resizeBy(dw, dh);
+    } else {
+      unpin();
+    }
+    held = [win.outerWidth + dw, win.outerHeight + dh];
+  };
+  win.addEventListener("sizemodechange", holdStartupSize);
+  win.addEventListener("resize", holdStartupSize);
+  holdTimer = win.setInterval(holdStartupSize, 100);
+  holdStartupSize();
+  // After startup too, a maximized window would take the real display's size,
+  // larger than the identity's screen, and outerWidth/innerWidth follow the
+  // real window: a window bigger than its screen. It goes back to the
+  // identity's size. An identity drawn maximized already fills its screen,
+  // and a page reads it as maximized (zz-window-presentation.patch).
+  win.addEventListener("sizemodechange", () => {
+    if (Date.now() > deadline && win.windowState === win.STATE_MAXIMIZED) {
+      win.restore();
+    }
+  });
+  // A driver's viewport takes over from the identity's startup size at once.
+  win.addEventListener(
+    "CamoufoxViewportSized",
+    () => {
+      stopHold();
+      if (pin) {
+        pin.remove();
+        pin = null;
+        doc.getElementById("browser")?.style.removeProperty("box-sizing");
+      }
+    },
+    { once: true }
+  );
 }
 
 function addDebugListeners(win) {

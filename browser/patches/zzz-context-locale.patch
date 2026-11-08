@@ -60,7 +60,7 @@ index 879a3baf89..83fd4d5b4e 100644
  }  // namespace dom
  }  // namespace mozilla
 diff --git a/dom/base/Navigator.cpp b/dom/base/Navigator.cpp
-index d2a4104189..fbb6bb3126 100644
+index 7bb5c0042f..f333d4161a 100644
 --- a/dom/base/Navigator.cpp
 +++ b/dom/base/Navigator.cpp
 @@ -376,7 +376,7 @@ void Navigator::GetAcceptLanguages(nsTArray<nsString>& aLanguages,
@@ -73,18 +73,10 @@ index d2a4104189..fbb6bb3126 100644
      intl::LocaleService::GetInstance()->GetAcceptLanguages(acceptLang);
    }
 diff --git a/netwerk/protocol/http/HttpBaseChannel.cpp b/netwerk/protocol/http/HttpBaseChannel.cpp
-index b2d86d03ea..b0f22b6759 100644
+index 65b731a68c..8617ec2e59 100644
 --- a/netwerk/protocol/http/HttpBaseChannel.cpp
 +++ b/netwerk/protocol/http/HttpBaseChannel.cpp
-@@ -41,6 +41,7 @@
- #include "mozilla/dom/Document.h"
- #include "mozilla/dom/FetchPriority.h"
- #include "mozilla/dom/LoadURIOptionsBinding.h"
-+#include "mozilla/dom/NavigatorManager.h"
- #include "mozilla/dom/ParentProcessChannelHandle.h"
- #include "mozilla/dom/Performance.h"
- #include "mozilla/dom/PerformanceStorage.h"
-@@ -400,9 +401,13 @@ nsresult HttpBaseChannel::Init(nsIURI* aURI, uint32_t aCaps,
+@@ -401,9 +401,13 @@ nsresult HttpBaseChannel::Init(nsIURI* aURI, uint32_t aCaps,
      mLoadInfo->GetAssociatedBrowsingContext(getter_AddRefs(browsingContext));
    }
  
@@ -101,24 +93,8 @@ index b2d86d03ea..b0f22b6759 100644
  
    rv = gHttpHandler->AddStandardRequestHeaders(
        &mRequestHead, aURI, isHTTPS, contentPolicyType,
-@@ -538,6 +543,15 @@ HttpBaseChannel::SetDocshellUserAgentOverride() {
-   RefPtr<dom::BrowsingContext> bc;
-   MOZ_ALWAYS_SUCCEEDS(mLoadInfo->GetBrowsingContext(getter_AddRefs(bc)));
-   if (!bc) {
-+    const uint32_t userContextId =
-+        mLoadInfo->GetOriginAttributes().mUserContextId;
-+    nsAutoString contextUserAgent;
-+    if (dom::NavigatorManager::GetUserAgent(userContextId, contextUserAgent) &&
-+        !contextUserAgent.IsEmpty()) {
-+      return SetRequestHeaderInternal(
-+          "User-Agent"_ns, NS_ConvertUTF16toUTF8(contextUserAgent), false,
-+          nsHttpHeaderArray::eVarietyRequestEnforceDefault);
-+    }
-     return NS_OK;
-   }
- 
 diff --git a/netwerk/protocol/http/nsHttpHandler.cpp b/netwerk/protocol/http/nsHttpHandler.cpp
-index 5d9568898b..3cd2942cde 100644
+index 4286a89d4f..b0452fe49e 100644
 --- a/netwerk/protocol/http/nsHttpHandler.cpp
 +++ b/netwerk/protocol/http/nsHttpHandler.cpp
 @@ -39,6 +39,7 @@
@@ -156,7 +132,7 @@ index 5d9568898b..3cd2942cde 100644
                              nsHttpHeaderArray::eVarietyRequestOverride);
      if (NS_FAILED(rv)) return rv;
 diff --git a/docshell/base/BrowsingContext.cpp b/docshell/base/BrowsingContext.cpp
-index 7a79874ee9..132c4b8fd2 100644
+index 6512d07403..49e1088590 100644
 --- a/docshell/base/BrowsingContext.cpp
 +++ b/docshell/base/BrowsingContext.cpp
 @@ -5,6 +5,8 @@
@@ -167,8 +143,8 @@ index 7a79874ee9..132c4b8fd2 100644
 +#include "js/LocaleSensitive.h"
  #include "mozilla/GfxMessageUtils.h"
  
- #ifdef ACCESSIBILITY
-@@ -39,6 +41,7 @@
+ #include "jsapi.h"
+@@ -40,6 +42,7 @@
  #include "mozilla/dom/Navigation.h"
  #include "mozilla/dom/NavigationUtils.h"
  #include "mozilla/dom/Navigator.h"
@@ -176,7 +152,7 @@ index 7a79874ee9..132c4b8fd2 100644
  #include "mozilla/dom/PopupBlocker.h"
  #include "mozilla/dom/ReferrerInfo.h"
  #include "mozilla/dom/ScriptSettings.h"
-@@ -62,6 +65,7 @@
+@@ -63,6 +66,7 @@
  #include "mozilla/ClearOnShutdown.h"
  #include "mozilla/Components.h"
  #include "mozilla/GeolocationService.h"
@@ -184,7 +160,7 @@ index 7a79874ee9..132c4b8fd2 100644
  #include "mozilla/Logging.h"
  #include "mozilla/MediaFeatureChange.h"
  #include "mozilla/Services.h"
-@@ -3594,6 +3598,24 @@ void BrowsingContext::DidSet(FieldIndex<IDX_LanguageOverride>,
+@@ -3584,6 +3588,24 @@ void BrowsingContext::DidSet(FieldIndex<IDX_LanguageOverride>,
  
    const nsCString& languageOverride = GetLanguageOverride();
  
@@ -210,7 +186,7 @@ index 7a79874ee9..132c4b8fd2 100644
        workerinternals::RuntimeService::GetService();
  
 diff --git a/dom/workers/remoteworkers/RemoteWorkerChild.cpp b/dom/workers/remoteworkers/RemoteWorkerChild.cpp
-index 9b702c81b9..578f07f5b6 100644
+index 43f0c24a2d..e0de1e4fc9 100644
 --- a/dom/workers/remoteworkers/RemoteWorkerChild.cpp
 +++ b/dom/workers/remoteworkers/RemoteWorkerChild.cpp
 @@ -21,6 +21,8 @@
@@ -236,7 +212,7 @@ index 9b702c81b9..578f07f5b6 100644
    info.mSecureContext = aData.isSecureContext()
                              ? WorkerLoadInfo::eSecureContext
 diff --git a/dom/ipc/ContentParent.cpp b/dom/ipc/ContentParent.cpp
-index 7d3c8f62dc..cfc12a0844 100644
+index 9ae2b615b4..445a2b1565 100644
 --- a/dom/ipc/ContentParent.cpp
 +++ b/dom/ipc/ContentParent.cpp
 @@ -111,6 +111,7 @@
@@ -247,7 +223,7 @@ index 7d3c8f62dc..cfc12a0844 100644
  #include "mozilla/dom/PContentPermissionRequestParent.h"
  #include "mozilla/dom/PCycleCollectWithLogsParent.h"
  #include "mozilla/dom/ParentProcessChannelHandle.h"
-@@ -193,6 +194,7 @@
+@@ -194,6 +195,7 @@
  #include "nsCExternalHandlerService.h"
  #include "nsCOMPtr.h"
  #include "nsCRT.h"
@@ -325,7 +301,7 @@ index 7d3c8f62dc..cfc12a0844 100644
      AutoTArray<StringBundleDescriptor, 1> array;
      array.AppendElement(StringBundleDescriptor(aBundle.bundleURL(),
                                                 aBundle.mapHandle().Clone()));
-@@ -2733,7 +2791,7 @@ bool ContentParent::InitInternal(ProcessPriority aInitialPriority) {
+@@ -2732,7 +2790,7 @@ bool ContentParent::InitInternal(ProcessPriority aInitialPriority) {
  
    OSPreferences::GetInstance()->GetSystemLocales(xpcomInit.sysLocales());
  
@@ -334,7 +310,7 @@ index 7d3c8f62dc..cfc12a0844 100644
    LocaleService::GetInstance()->GetRequestedLocales(
        xpcomInit.requestedLocales());
  
-@@ -2876,9 +2934,11 @@ bool ContentParent::InitInternal(ProcessPriority aInitialPriority) {
+@@ -2875,9 +2933,11 @@ bool ContentParent::InitInternal(ProcessPriority aInitialPriority) {
        static_cast<nsChromeRegistryChrome*>(registrySvc.get());
    chromeRegistry->SendRegisteredChrome(this);
  
@@ -350,7 +326,7 @@ index 7d3c8f62dc..cfc12a0844 100644
    if (gAppData) {
      nsCString version(gAppData->version);
 diff --git a/dom/ipc/ContentParent.h b/dom/ipc/ContentParent.h
-index 7b8bc180e8..b4f88d3830 100644
+index 48f147810f..27c1620da5 100644
 --- a/dom/ipc/ContentParent.h
 +++ b/dom/ipc/ContentParent.h
 @@ -296,6 +296,10 @@ class ContentParent final : public PContentParent,
@@ -365,7 +341,7 @@ index 7b8bc180e8..b4f88d3830 100644
  
    static void BroadcastThemeUpdate(widget::ThemeChangeKind);
 diff --git a/dom/ipc/ContentChild.cpp b/dom/ipc/ContentChild.cpp
-index 16520e2d35..e178e4f3e3 100644
+index 410561de92..52fdac3526 100644
 --- a/dom/ipc/ContentChild.cpp
 +++ b/dom/ipc/ContentChild.cpp
 @@ -101,7 +101,10 @@
@@ -379,7 +355,7 @@ index 16520e2d35..e178e4f3e3 100644
  #include "mozilla/intl/LocaleService.h"
  #include "mozilla/intl/OSPreferences.h"
  #include "mozilla/ipc/BackgroundChild.h"
-@@ -2478,6 +2481,12 @@ mozilla::ipc::IPCResult ContentChild::RecvFontListShmBlockAdded(
+@@ -2479,6 +2482,12 @@ mozilla::ipc::IPCResult ContentChild::RecvFontListShmBlockAdded(
  mozilla::ipc::IPCResult ContentChild::RecvUpdateAppLocales(
      nsTArray<nsCString>&& aAppLocales) {
    LocaleService::GetInstance()->AssignAppLocales(aAppLocales);
@@ -489,10 +465,10 @@ index 261566cdd3..aceceb219c 100644
    nsresult OverrideLocalePackage(const nsACString& aPackage,
                                   nsACString& aOverride);
 diff --git a/dom/base/nsContentUtils.cpp b/dom/base/nsContentUtils.cpp
-index a8f545f133..a73198a4a8 100644
+index 5c41420da8..47217807a2 100644
 --- a/dom/base/nsContentUtils.cpp
 +++ b/dom/base/nsContentUtils.cpp
-@@ -5768,6 +5768,22 @@ void nsContentUtils::AsyncPrecreateStringBundles() {
+@@ -5769,6 +5769,22 @@ void nsContentUtils::AsyncPrecreateStringBundles() {
    }
  }
  
@@ -516,10 +492,10 @@ index a8f545f133..a73198a4a8 100644
                                                      const char* aKey,
                                                      const Document* aDocument) {
 diff --git a/dom/base/nsContentUtils.h b/dom/base/nsContentUtils.h
-index 90c81f9b28..cc0cb27dec 100644
+index c2ca97c44c..5a14206f86 100644
 --- a/dom/base/nsContentUtils.h
 +++ b/dom/base/nsContentUtils.h
-@@ -3547,6 +3547,8 @@ class nsContentUtils {
+@@ -3554,6 +3554,8 @@ class nsContentUtils {
  
    static void AsyncPrecreateStringBundles();
  
@@ -529,7 +505,7 @@ index 90c81f9b28..cc0cb27dec 100644
  
    static already_AddRefed<mozilla::dom::ContentFrameMessageManager>
 diff --git a/js/src/jsapi.cpp b/js/src/jsapi.cpp
-index 7f1d10c44c..5a796b29c4 100644
+index 11a37ebfea..e0a3c2c3ec 100644
 --- a/js/src/jsapi.cpp
 +++ b/js/src/jsapi.cpp
 @@ -20,6 +20,7 @@
@@ -540,7 +516,7 @@ index 7f1d10c44c..5a796b29c4 100644
  
  #include "jsfriendapi.h"
  #include "jstypes.h"
-@@ -1815,7 +1816,12 @@ static RefCountedString* CopyStringZ(const char* str) {
+@@ -1826,7 +1827,12 @@ static RefCountedString* CopyStringZ(const char* str) {
  
  JS::RealmBehaviors& JS::RealmBehaviors::setLocaleOverride(const char* locale) {
    if (locale) {

@@ -1,8 +1,8 @@
 diff --git a/dom/media/webspeech/synth/moz.build b/dom/media/webspeech/synth/moz.build
-index ca6ffacb21..fb661fd69e 100644
+index bcec423f08..4387a2291a 100644
 --- a/dom/media/webspeech/synth/moz.build
 +++ b/dom/media/webspeech/synth/moz.build
-@@ -62,3 +62,6 @@ LOCAL_INCLUDES += [
+@@ -61,3 +61,6 @@ LOCAL_INCLUDES += [
      "/dom/base",
      "ipc",
  ]
@@ -10,82 +10,146 @@ index ca6ffacb21..fb661fd69e 100644
 +# DOM Mask
 +LOCAL_INCLUDES += ['/camoucfg']
 diff --git a/dom/media/webspeech/synth/nsSynthVoiceRegistry.cpp b/dom/media/webspeech/synth/nsSynthVoiceRegistry.cpp
-index 41ef9f96c9..cb4e46527e 100644
+index 41ef9f96c9..31fbcca8b7 100644
 --- a/dom/media/webspeech/synth/nsSynthVoiceRegistry.cpp
 +++ b/dom/media/webspeech/synth/nsSynthVoiceRegistry.cpp
-@@ -23,7 +23,9 @@
+@@ -23,7 +23,11 @@
  #include "nsServiceManagerUtils.h"
  #include "nsSpeechTask.h"
  #include "nsString.h"
 +#include "nsThreadUtils.h"
++#include "nsEscape.h"
++#include "nsRefPtrHashtable.h"
  
 +#include "MaskConfig.hpp"
  using mozilla::intl::LocaleService;
  
  #undef LOG
-@@ -166,6 +168,39 @@ nsSynthVoiceRegistry* nsSynthVoiceRegistry::GetInstance() {
+@@ -166,12 +170,108 @@ nsSynthVoiceRegistry* nsSynthVoiceRegistry::GetInstance() {
        // Start up all speech synth services.
        NS_CreateServicesFromCategory(NS_SPEECH_SYNTH_STARTED, nullptr,
                                      NS_SPEECH_SYNTH_STARTED);
-+      // Load voices from MaskConfig
-+      if (auto voices = MaskConfig::MVoices()) {
-+        nsTHashSet<nsString> names;
-+        for (const auto& [lang, name, uri, isDefault, isLocal] :
-+             voices.value()) {
-+          gSynthVoiceRegistry->AddVoiceImpl(
-+              nullptr, NS_ConvertUTF8toUTF16(uri), NS_ConvertUTF8toUTF16(name),
-+              NS_ConvertUTF8toUTF16(lang), isLocal,
-+              false);  // queuesUtterances set to false
-+          if (isDefault) {
-+            gSynthVoiceRegistry->SetDefaultVoice(NS_ConvertUTF8toUTF16(uri),
-+                                                 true);
-+          }
-+          names.Insert(NS_ConvertUTF8toUTF16(name));
-+        }
-+        // Then every voice a context's list may name, which only that
-+        // context sees (SpeechVoicesManager). Context lists name voices, so a
-+        // name the launch or an earlier pool voice holds is not added again.
-+        if (auto pool = MaskConfig::MVoices("voices:pool")) {
-+          for (const auto& [lang, name, uri, isDefault, isLocal] :
-+               pool.value()) {
-+            if (gSynthVoiceRegistry->mUriVoiceMap.Contains(
-+                    NS_ConvertUTF8toUTF16(uri)) ||
-+                !names.EnsureInserted(NS_ConvertUTF8toUTF16(name))) {
-+              continue;
-+            }
-+            gSynthVoiceRegistry->AddVoiceImpl(
-+                nullptr, NS_ConvertUTF8toUTF16(uri),
-+                NS_ConvertUTF8toUTF16(name), NS_ConvertUTF8toUTF16(lang),
-+                isLocal, false);
-+          }
-+        }
-+      }
++      gSynthVoiceRegistry->AddSpoofedVoices();
      }
    }
  
-@@ -302,6 +337,21 @@ nsSynthVoiceRegistry::AddVoice(nsISpeechService* aService,
+   return gSynthVoiceRegistry;
+ }
+ 
++namespace {
++// SpeechDispatcherService's voice record, so the table below has its layout.
++class SpoofedSpeechdVoice {
++ public:
++  SpoofedSpeechdVoice(const nsAString& aName, const nsAString& aLanguage)
++      : mName(aName), mLanguage(aLanguage) {}
++  NS_INLINE_DECL_THREADSAFE_REFCOUNTING(SpoofedSpeechdVoice)
++  nsString mName;
++  nsString mLanguage;
++
++ private:
++  ~SpoofedSpeechdVoice() = default;
++};
++
++// SAPI voices queue their utterances and macOS's do not, as each backend
++// registers them.
++bool QueuesUtterances(const nsAString& aUri) {
++  return StringBeginsWith(aUri, u"urn:moz-tts:sapi:"_ns);
++}
++}  // namespace
++
++// The identity's voices, registered as the OS backend it claims would register
++// them. A spoofed voice has no service (SpeakImpl speaks it silently).
++void nsSynthVoiceRegistry::AddSpoofedVoices() {
++  nsTHashSet<nsString> names;
++  // A speech-dispatcher grid, registered as SpeechDispatcherService::Setup
++  // does: it builds this table in speech-dispatcher's order and RegisterVoices
++  // adds the voices in the table's iteration order, which is the order
++  // getVoices() reports. Same table, same insertions, same order. A voice
++  // already registered (the launch grid, for a pool grid) is not added again.
++  auto addSpeechd =
++      [&](const std::vector<std::pair<std::string, std::string>>& grid) {
++        nsRefPtrHashtable<nsStringHashKey, SpoofedSpeechdVoice> table;
++        for (const auto& [name, lang] : grid) {
++          nsAutoString uri;
++          uri.AssignLiteral("urn:moz-tts:speechd:");
++          nsAutoCString escaped;
++          NS_EscapeURL(name.c_str(), -1,
++                       esc_OnlyNonASCII | esc_Spaces | esc_AlwaysCopy, escaped);
++          uri.Append(NS_ConvertUTF8toUTF16(escaped));
++          uri.AppendLiteral("?");
++          uri.Append(NS_ConvertUTF8toUTF16(lang));
++          table.InsertOrUpdate(uri, MakeRefPtr<SpoofedSpeechdVoice>(
++                                        NS_ConvertUTF8toUTF16(name),
++                                        NS_ConvertUTF8toUTF16(lang)));
++        }
++        for (const auto& entry : table) {
++          const RefPtr<SpoofedSpeechdVoice>& voice = entry.GetData();
++          if (mUriVoiceMap.Contains(entry.GetKey())) {
++            continue;
++          }
++          // As RegisterVoices does: local only for a voice named "default".
++          AddVoiceImpl(nullptr, entry.GetKey(), voice->mName, voice->mLanguage,
++                       voice->mName.EqualsLiteral("default"), true);
++          names.Insert(voice->mName);
++        }
++      };
++
++  if (auto speechd = MaskConfig::MSpeechdVoices()) {
++    addSpeechd(speechd.value());
++  } else if (auto voices = MaskConfig::MVoices()) {
++    for (const auto& [lang, name, uri, isDefault, isLocal] : voices.value()) {
++      const NS_ConvertUTF8toUTF16 voiceUri(uri);
++      AddVoiceImpl(nullptr, voiceUri, NS_ConvertUTF8toUTF16(name),
++                   NS_ConvertUTF8toUTF16(lang), isLocal,
++                   QueuesUtterances(voiceUri));
++      if (isDefault) {
++        SetDefaultVoice(voiceUri, true);
++      }
++      names.Insert(NS_ConvertUTF8toUTF16(name));
++    }
++  }
++  // Then every voice a context's list may name, which only that context sees
++  // (SpeechVoicesManager), whatever form the launch's own list took. Context
++  // lists name voices, so a name the launch or an earlier pool voice holds is
++  // not added again.
++  if (auto pool = MaskConfig::MVoices("voices:pool")) {
++    for (const auto& [lang, name, uri, isDefault, isLocal] : pool.value()) {
++      const NS_ConvertUTF8toUTF16 voiceUri(uri);
++      if (mUriVoiceMap.Contains(voiceUri) ||
++          !names.EnsureInserted(NS_ConvertUTF8toUTF16(name))) {
++        continue;
++      }
++      AddVoiceImpl(nullptr, voiceUri, NS_ConvertUTF8toUTF16(name),
++                   NS_ConvertUTF8toUTF16(lang), isLocal,
++                   QueuesUtterances(voiceUri));
++    }
++  }
++  // The Linux voices a context may claim, as one grid of every release's
++  // languages and variants (a context lists only its release's).
++  if (auto poolGrid = MaskConfig::MSpeechdVoices("voices:pool:speechd")) {
++    addSpeechd(poolGrid.value());
++  }
++}
++
+ already_AddRefed<nsSynthVoiceRegistry>
+ nsSynthVoiceRegistry::GetInstanceForService() {
+   RefPtr<nsSynthVoiceRegistry> registry = GetInstance();
+@@ -302,6 +402,14 @@ nsSynthVoiceRegistry::AddVoice(nsISpeechService* aService,
      return NS_ERROR_NOT_AVAILABLE;
    }
  
-+  // Fail closed whenever Camoufox is managing the voice list.
-+  //
-+  // MVoices() returns a value as soon as the config carries a `voices` array,
-+  // even an empty one or one whose entries were all rejected as malformed.
-+  // Gating only on the explicit `voices:blockIfNotDefined` flag let an empty or
-+  // unusable list fall through to the host's speech-dispatcher backend, which
-+  // registers every native voice -- 14805 espeak-ng entries on a stock Linux
-+  // box -- under a fingerprint claiming macOS or Windows
-+  // (daijro/camoufox#731). An empty spoofed list must mean "no voices", never
-+  // "all of the host's".
-+  if (MaskConfig::GetBool("voices:blockIfNotDefined") ||
-+      MaskConfig::MVoices().has_value()) {
++  // Fail closed whenever Camoufox manages the voice list (SpoofsVoices), even
++  // an empty or malformed one: otherwise the host's speech-dispatcher registers every
++  // native voice under a fingerprint claiming macOS or Windows
++  // (daijro/camoufox#731).
++  if (MaskConfig::SpoofsVoices()) {
 +    return NS_OK;
 +  }
 +
    return AddVoiceImpl(aService, aUri, aName, aLang, aLocalService,
                        aQueuesUtterances);
  }
-@@ -374,6 +424,16 @@ nsSynthVoiceRegistry::NotifyVoicesChanged() {
+@@ -374,6 +482,16 @@ nsSynthVoiceRegistry::NotifyVoicesChanged() {
  
  NS_IMETHODIMP
  nsSynthVoiceRegistry::NotifyVoicesError(const nsAString& aError) {
@@ -93,7 +157,7 @@ index 41ef9f96c9..cb4e46527e 100644
 +  // start (no speech-dispatcher on a Linux host) says nothing about the
 +  // spoofed voices. Forwarding it would make every page error its queued
 +  // utterances, which a Windows or macOS identity never does.
-+  if (MaskConfig::MVoices()) {
++  if (MaskConfig::SpoofsVoices()) {
 +    LOG(LogLevel::Debug, ("nsSynthVoiceRegistry::NotifyVoicesError ignored: "
 +                          "the voice list is spoofed"));
 +    return NS_OK;
@@ -102,7 +166,7 @@ index 41ef9f96c9..cb4e46527e 100644
    if (XRE_IsParentProcess()) {
      nsTArray<SpeechSynthesisParent*> ssplist;
      GetAllSpeechSynthActors(ssplist);
-@@ -802,6 +862,25 @@ void nsSynthVoiceRegistry::SpeakImpl(VoiceData* aVoice, nsSpeechTask* aTask,
+@@ -802,6 +920,25 @@ void nsSynthVoiceRegistry::SpeakImpl(VoiceData* aVoice, nsSpeechTask* aTask,
         NS_ConvertUTF16toUTF8(aText).get(),
         NS_ConvertUTF16toUTF8(aVoice->mUri).get(), aRate, aPitch));
  
@@ -128,3 +192,16 @@ index 41ef9f96c9..cb4e46527e 100644
    aTask->Init();
  
    if (NS_FAILED(aVoice->mService->Speak(aText, aVoice->mUri, aVolume, aRate,
+diff --git a/dom/media/webspeech/synth/nsSynthVoiceRegistry.h b/dom/media/webspeech/synth/nsSynthVoiceRegistry.h
+index 89c0ceea00..c665b064e6 100644
+--- a/dom/media/webspeech/synth/nsSynthVoiceRegistry.h
++++ b/dom/media/webspeech/synth/nsSynthVoiceRegistry.h
+@@ -77,6 +77,8 @@ class nsSynthVoiceRegistry final : public nsISynthVoiceRegistry {
+   bool FindVoiceByLang(const nsAString& aLang, VoiceData** aRetval,
+                        const nsTHashSet<nsString>* aOnly = nullptr);
+ 
++  void AddSpoofedVoices();
++
+   nsresult AddVoiceImpl(nsISpeechService* aService, const nsAString& aUri,
+                         const nsAString& aName, const nsAString& aLang,
+                         bool aLocalService, bool aQueuesUtterances);

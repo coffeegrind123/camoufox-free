@@ -21,42 +21,23 @@ index 42f58899c1..7b5123ac34 100644
    FIELD(IPAddressSpace, nsILoadInfo::IPAddressSpace,                           \
          {.mCanSet = CanSet::ParentOnly})                                       \
 diff --git a/dom/base/nsGlobalWindowInner.cpp b/dom/base/nsGlobalWindowInner.cpp
-index c9edc2ac27..f7b97af24a 100644
+index 8492c63ccf..f6032debf7 100644
 --- a/dom/base/nsGlobalWindowInner.cpp
 +++ b/dom/base/nsGlobalWindowInner.cpp
-@@ -3835,7 +3835,8 @@ float nsGlobalWindowInner::GetMozInnerScreenY(CallerType aCallerType,
+@@ -3891,7 +3891,45 @@ CSSIntPoint nsGlobalWindowInner::SpoofedWindowShift(nsIGlobalObject* aGlobal) {
+ 
+ /* static */
  CSSIntPoint nsGlobalWindowInner::SpoofedScreenShift(nsIGlobalObject* aGlobal) {
-   const auto x = MaskConfig::GetInt32("window.screenX");
-   const auto y = MaskConfig::GetInt32("window.screenY");
--  if (!x && !y) {
-+  const Maybe<CSSIntMargin>& frame = ClaimedWindowFrame();
-+  if (!x && !y && !frame) {
-     return {};
-   }
-   nsPIDOMWindowInner* inner = aGlobal ? aGlobal->GetAsInnerWindow() : nullptr;
-@@ -3844,12 +3845,51 @@ CSSIntPoint nsGlobalWindowInner::SpoofedScreenShift(nsIGlobalObject* aGlobal) {
-   if (!outer) {
-     return {};
-   }
--  IgnoredErrorResult rv;
--  const CSSIntPoint real = outer->GetScreenXY(CallerType::System, rv);
--  if (rv.Failed()) {
--    return {};
-+  CSSIntPoint shift;
-+  if (x || y) {
-+    IgnoredErrorResult rv;
-+    const CSSIntPoint real = outer->GetScreenXY(CallerType::System, rv);
-+    if (rv.Failed()) {
-+      return {};
-+    }
-+    shift = CSSIntPoint(x ? *x - real.x : 0, y ? *y - real.y : 0);
-+  }
+-  return SpoofedWindowShift(aGlobal);
++  CSSIntPoint shift = SpoofedWindowShift(aGlobal);
 +  // With the claimed OS's frame, the top page's content sits at the frame's
 +  // top-left inset from the window's position, not where the real window's
 +  // chrome put it. One shift for the whole window: an iframe's screen points
 +  // keep their offset inside the top page.
 +  // A fullscreen window has no frame.
-+  if (frame) {
++  const Maybe<CSSIntMargin>& frame = ClaimedWindowFrame();
++  nsPIDOMWindowInner* inner = aGlobal ? aGlobal->GetAsInnerWindow() : nullptr;
++  if (frame && inner) {
 +    if (BrowsingContext* bc = inner->GetBrowsingContext()) {
 +      BrowsingContext* top = bc->Top();
 +      const CSSIntRect content = top->GetCamouContentRect();
@@ -66,8 +47,7 @@ index c9edc2ac27..f7b97af24a 100644
 +                             (fullscreen ? 0 : frame->top.value) - content.y);
 +      }
 +    }
-   }
--  return CSSIntPoint(x ? *x - real.x : 0, y ? *y - real.y : 0);
++  }
 +  return shift;
 +}
 +
@@ -92,13 +72,13 @@ index c9edc2ac27..f7b97af24a 100644
  
  static nsPresContext* GetPresContextForRatio(Document* aDoc) {
 diff --git a/dom/base/nsGlobalWindowInner.h b/dom/base/nsGlobalWindowInner.h
-index 1edc467fb4..fae24ca86c 100644
+index 15b6d909c7..3a07f414fc 100644
 --- a/dom/base/nsGlobalWindowInner.h
 +++ b/dom/base/nsGlobalWindowInner.h
-@@ -922,6 +922,11 @@ class nsGlobalWindowInner final : public mozilla::dom::EventTarget,
-   // coordinate a page reads moves by it, so all of them agree with
-   // window.screenX/Y.
+@@ -926,6 +926,11 @@ class nsGlobalWindowInner final : public mozilla::dom::EventTarget,
+   // them agree with window.screenX/Y.
    static mozilla::CSSIntPoint SpoofedScreenShift(nsIGlobalObject* aGlobal);
+   static bool IsPagePopup(nsPIDOMWindowInner* aInner);
 +
 +  // Camoufox: the claimed OS's window frame, as insets of the content area in
 +  // the window (window.frameLeft/Top/Right/Bottom), or Nothing() when the

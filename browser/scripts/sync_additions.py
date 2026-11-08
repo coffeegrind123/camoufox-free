@@ -21,7 +21,6 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[1]
 SETTINGS = {
     "settings/camoufox.cfg": "lw/camoufox.cfg",
-    "settings/distribution/policies.json": "lw/policies.json",
     "settings/defaults/pref/local-settings.js": "lw/local-settings.js",
     "settings/properties.json": "lw/properties.json",
 }

@@ -74,7 +74,7 @@ fonts actually available. What differs is how they are gated:
   OS's faces on the search path. The browser holds the same line:
   `gfxFcPlatformFontList::ActivateBundledFonts` adds only the files directly in
   `fonts/` (Firefox's own), never the directory
-  (`linux-bundled-fonts-toplevel.patch`). Firefox added the directory, which made
+  (`font-hijacker.patch`). Firefox added the directory, which made
   a Linux identity's `Helvetica` draw Apple's face from `fonts/M/`
   (`bundled-font-groups.py`).
 - **macOS and Windows packages** flatten the groups into one directory: CoreText
@@ -169,6 +169,16 @@ Deliberate choices:
   metric alias, a base carries one when it has the target: `Calibri` and
   `Cambria` are not essential there, because no Ubuntu base has Carlito or
   Caladea.
+- **An alias name is essential only where its target is in every base.** A
+  name fonts.conf rewrites renders only through its target, so it joins a base
+  only with it. On Linux, `Calibri` and `Cambria` resolve to Carlito and
+  Caladea, which come with LibreOffice (the `libreoffice` addition) and are in
+  neither Ubuntu base: a draw without that bundle does not have them, as a
+  stock Ubuntu without it does not. Every Linux identity used to claim both,
+  and they rendered only because the bundled-font activation leaked Windows'
+  own Calibri and Cambria to every OS. macOS's `Noto Sans Canadian Aboriginal
+  Regular` left the floor for the same reason (its family is not in every
+  macOS base).
 - **`Twemoji Mozilla` is reportable on Linux** (a CreepJS Linux marker, and
   Firefox exposes its bundled font to content). Not reported on macOS.
 - One name renders for every Linux identity but is not always reported

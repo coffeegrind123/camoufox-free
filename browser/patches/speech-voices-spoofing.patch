@@ -1,9 +1,9 @@
 diff --git a/dom/base/SpeechVoicesManager.cpp b/dom/base/SpeechVoicesManager.cpp
 new file mode 100644
-index 0000000000..2356b7ca17
+index 0000000000..9e918380d8
 --- /dev/null
 +++ b/dom/base/SpeechVoicesManager.cpp
-@@ -0,0 +1,110 @@
+@@ -0,0 +1,139 @@
 +/* Camoufox: Per-context speech voices manager */
 +#include "SpeechVoicesManager.h"
 +
@@ -16,8 +16,16 @@ index 0000000000..2356b7ca17
 +// The list itself lives in RoverfoxStorageManager, which every process reads:
 +// a context's documents land in any content process, and only the first one
 +// calls the setter. This is each process's parsed copy.
++// A list is either ordered (one name per line: the context's pages see the
++// voices in its order) or a Linux identity's speech-dispatcher grid, whose
++// voices keep the registry's order, as speech-dispatcher's do in stock.
++struct ContextVoices {
++  bool mOrdered = true;
++  nsTArray<nsString> mList;   // mOrdered
++  nsTHashSet<nsString> mSet;  // !mOrdered: ~15000 names, looked up per voice
++};
 +static mozilla::Mutex sVoicesMutex("SpeechVoicesManager");
-+static nsTHashMap<nsUint32HashKey, nsTArray<nsString>> sVoicesMap;
++static nsTHashMap<nsUint32HashKey, ContextVoices> sVoicesMap;
 +
 +static nsString VoiceListKey(uint32_t aId) {
 +  nsAutoString key;
@@ -25,8 +33,25 @@ index 0000000000..2356b7ca17
 +  return key;
 +}
 +
-+static nsTArray<nsString> ParseVoices(const nsAString& aVoiceList) {
-+  nsTArray<nsString> voices;
++static ContextVoices ParseVoices(const nsAString& aVoiceList) {
++  ContextVoices result;
++  // A Linux identity's list is its speech-dispatcher grid, as JSON
++  // ({"speechd": {"languages": ..., "variants": ...}}). No voice name starts
++  // with "{".
++  if (StringBeginsWith(aVoiceList, u"{"_ns)) {
++    result.mOrdered = false;
++    const auto grid = nlohmann::json::parse(
++        NS_ConvertUTF16toUTF8(aVoiceList).get(), nullptr, false);
++    if (auto voices = MaskConfig::ExpandSpeechdGrid(
++            grid.is_object() ? grid.value("speechd", nlohmann::json())
++                             : nlohmann::json())) {
++      for (const auto& [name, lang] : voices.value()) {
++        result.mSet.Insert(NS_ConvertUTF8toUTF16(name));
++      }
++    }
++    return result;
++  }
++  nsTArray<nsString>& voices = result.mList;
 +  // One name per line: Windows voice names hold commas ("Microsoft Hanhan -
 +  // Chinese (Traditional, Taiwan)").
 +  nsAutoString remaining(aVoiceList);
@@ -45,7 +70,7 @@ index 0000000000..2356b7ca17
 +      voices.AppendElement(name);
 +    }
 +  }
-+  return voices;
++  return result;
 +}
 +
 +void SpeechVoicesManager::SetVoices(uint32_t aUserContextId,
@@ -98,8 +123,12 @@ index 0000000000..2356b7ca17
 +    return !launch || launch->Contains(aVoiceUri) ? INT32_MAX : -1;
 +  }
 +  MutexAutoLock lock(sVoicesMutex);
-+  const size_t index =
-+      sVoicesMap.Lookup(aUserContextId).Data().IndexOf(aVoiceName);
++  const ContextVoices& voices = sVoicesMap.Lookup(aUserContextId).Data();
++  if (!voices.mOrdered) {
++    // Every listed voice at one index: the stable sort keeps registry order.
++    return voices.mSet.Contains(nsString(aVoiceName)) ? 0 : -1;
++  }
++  const size_t index = voices.mList.IndexOf(aVoiceName);
 +  return index == nsTArray<nsString>::NoIndex ? -1 : int32_t(index);
 +}
 +
@@ -156,10 +185,10 @@ index 0000000000..4e0ac4fa39
 +
 +#endif  // mozilla_dom_SpeechVoicesManager_h
 diff --git a/dom/base/moz.build b/dom/base/moz.build
-index 704f103e9c..d5a7f1e0df 100644
+index d5c896fa40..fe38984065 100644
 --- a/dom/base/moz.build
 +++ b/dom/base/moz.build
-@@ -572,6 +572,14 @@ EXPORTS.mozilla.dom += [
+@@ -574,6 +574,14 @@ EXPORTS.mozilla.dom += [
      "FontListManager.h",
  ]
  
@@ -175,7 +204,7 @@ index 704f103e9c..d5a7f1e0df 100644
  # CharacterDataBuffer.cpp
  if CONFIG["INTEL_ARCHITECTURE"]:
 diff --git a/dom/base/nsGlobalWindowInner.cpp b/dom/base/nsGlobalWindowInner.cpp
-index ead9b34ff9..33d540a0a8 100644
+index f8c63f8d76..647a5ee086 100644
 --- a/dom/base/nsGlobalWindowInner.cpp
 +++ b/dom/base/nsGlobalWindowInner.cpp
 @@ -19,6 +19,7 @@
@@ -186,7 +215,7 @@ index ead9b34ff9..33d540a0a8 100644
  #include "MainThreadUtils.h"
  #include "Navigator.h"
  #include "PaintWorkletImpl.h"
-@@ -7857,6 +7858,14 @@ void nsGlobalWindowInner::SetScreenColorDepth(uint32_t depth,
+@@ -7903,6 +7904,14 @@ void nsGlobalWindowInner::SetScreenColorDepth(uint32_t depth,
    RoverfoxStorageManager::RemoveSetter("setScreenColorDepth");
  }
  
@@ -202,10 +231,10 @@ index ead9b34ff9..33d540a0a8 100644
      bool aGranted) {
    // Invalidate cached StorageAllowed field so that calls to GetLocalStorage
 diff --git a/dom/base/nsGlobalWindowInner.h b/dom/base/nsGlobalWindowInner.h
-index b82745159b..99a2454ae2 100644
+index 83dd727bf6..3f20ec188b 100644
 --- a/dom/base/nsGlobalWindowInner.h
 +++ b/dom/base/nsGlobalWindowInner.h
-@@ -710,6 +710,9 @@ class nsGlobalWindowInner final : public mozilla::dom::EventTarget,
+@@ -718,6 +718,9 @@ class nsGlobalWindowInner final : public mozilla::dom::EventTarget,
                             mozilla::ErrorResult& aRv);
    void SetScreenColorDepth(uint32_t depth, mozilla::ErrorResult& aRv);
  
@@ -515,7 +544,7 @@ index 6605d69e96..89c0ceea00 100644
    nsresult AddVoiceImpl(nsISpeechService* aService, const nsAString& aUri,
                          const nsAString& aName, const nsAString& aLang,
 diff --git a/dom/webidl/Window.webidl b/dom/webidl/Window.webidl
-index 243a69f40b..2c19f5899b 100644
+index 00057534de..462b228c38 100644
 --- a/dom/webidl/Window.webidl
 +++ b/dom/webidl/Window.webidl
 @@ -947,6 +947,12 @@ partial interface Window {

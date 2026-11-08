@@ -27,7 +27,6 @@ const StorageStream = CC('@mozilla.org/storagestream;1', 'nsIStorageStream', 'in
 const MAX_RESPONSE_STORAGE_SIZE = 100 * 1024 * 1024;
 
 const PROXY_CREDENTIALS_ENV = 'CAMOU_PROXY_CREDENTIALS';
-let proxyCredentialsFromEnv;
 
 function loadProxyCredentialsFromEnv() {
   const credentials = new Map();
@@ -60,6 +59,20 @@ function loadProxyCredentialsFromEnv() {
   return credentials;
 }
 
+// Read once, when Juggler loads, then cleared: processes the browser starts
+// later (content, GPU, socket) would otherwise inherit the credentials. A
+// malformed map is kept as its error, so every SOCKS request fails closed
+// instead of Juggler failing to start.
+let proxyCredentialsFromEnv = new Map();
+let proxyCredentialsError = null;
+try {
+  proxyCredentialsFromEnv = loadProxyCredentialsFromEnv();
+} catch (e) {
+  proxyCredentialsError = e;
+}
+if (Services.env.exists(PROXY_CREDENTIALS_ENV))
+  Services.env.set(PROXY_CREDENTIALS_ENV, '');
+
 // Playwright rejects SOCKS5 credentials before sending Browser.setContextProxy.
 // The launchers move them into this endpoint-keyed environment map instead.
 function socksProxyCredentials(proxy) {
@@ -76,8 +89,8 @@ function socksProxyCredentials(proxy) {
   if (username)
     return {username, password};
 
-  if (!proxyCredentialsFromEnv)
-    proxyCredentialsFromEnv = loadProxyCredentialsFromEnv();
+  if (proxyCredentialsError)
+    throw proxyCredentialsError;
   return proxyCredentialsFromEnv.get(`${proxy.host}:${proxy.port}`.toLowerCase()) || null;
 }
 
@@ -426,6 +439,11 @@ class NetworkRequest {
       // Not our channel? Just in case this happens, don't do anything.
       return false;
     }
+    // Necko has laid out the headers by now, "connection" and a re-evaluated referer included (an
+    // <img> sends "connection, referer", fetch() "referer, connection"), so this is the order a
+    // resumed request has to reproduce. It replaces the order read at http-on-modify-request,
+    // which a redirect's overridden headers were already laid out by.
+    this._originalHeaderOrder = requestHeaders(this.httpChannel).map(header => header.name.toLowerCase());
 
     const shouldIntercept = this._shouldIntercept();
     if (!shouldIntercept) {
@@ -629,6 +647,13 @@ class NetworkRequest {
       requestStart: this.httpChannel.requestStartTime,
       responseStart: this.httpChannel.responseStartTime,
     };
+    // Camoufox: Page.navigate pre-connects as a typed load does, so a page's
+    // connection can predate its channel. Report those phases as a reused
+    // connection's (0, which the client reads as -1), not as negative times.
+    for (const phase of ['domainLookupStart', 'domainLookupEnd', 'connectStart', 'secureConnectionStart', 'connectEnd']) {
+      if (timing[phase] && timing[phase] < timing.startTime)
+        timing[phase] = 0;
+    }
 
     const { status, statusText, headers } = responseHead(this.httpChannel, opt_statusCode, opt_statusText);
     if (redirectStatus.includes(status) && this._overriddenHeadersForRedirect)

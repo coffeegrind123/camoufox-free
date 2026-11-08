@@ -2,16 +2,20 @@
 Verify authenticated SOCKS5 proxies use RFC 1929 and fail closed.
 
 Playwright's Firefox driver rejects SOCKS5 username/password before Juggler sees
-the proxy. The launchers therefore move credentials into
-CAMOU_PROXY_CREDENTIALS, and Juggler constructs an nsIProxyInfo with
+the proxy. The launchers therefore take credentials out of what Playwright sees
+and hand them to Juggler: a launch-level proxy's through CAMOU_PROXY_AUTH, a
+context's (NewContext, or new_context on a Camoufox browser) through an init
+script Juggler removes. Juggler also still reads a caller-declared
+CAMOU_PROXY_CREDENTIALS map. It constructs an nsIProxyInfo with
 newProxyInfoWithAuth. This guard uses an in-process SOCKS5 server to prove the
 browser negotiates method 0x02, carries the configured credentials, and sends a
-domain target (socks5h resolves at the proxy).
+domain target (socks5h resolves at the proxy), at launch and per context.
 
-Two negative cases make the fail-closed requirement testable. With a wrong
-password, and with malformed credential JSON, a local HTTP target remains
-reachable directly; the page must still fail to fetch it. A fallback to
-defaultProxyInfo would return the direct markdown.
+The negative cases make the fail-closed requirement testable: a wrong password
+at launch, in a context, and in CAMOU_PROXY_CREDENTIALS, and malformed
+CAMOU_PROXY_CREDENTIALS JSON. A local HTTP target stays reachable directly; the
+page must still fail to fetch it. A fallback to defaultProxyInfo would return
+the direct marker.
 
     python browser/tests/playwright/patches/socks5-auth.py
 """
@@ -221,6 +225,55 @@ def authenticated_fetch(proxy: AuthenticatedSocks5) -> Dict[str, object]:
         return page_fetch(page, f"http://{TARGET_HOST}:{proxy.target_port}/")
 
 
+def launch_wrong_password_fetch(proxy: AuthenticatedSocks5, target_host: str) -> Dict[str, object]:
+    """A launch-level proxy whose password the proxy refuses (CAMOU_PROXY_AUTH)."""
+    from camoufox.sync_api import Camoufox
+
+    try:
+        with Camoufox(
+            headless=True,
+            executable_path=str(resolve_binary()),
+            geoip=False,
+            proxy={"server": f"socks5://127.0.0.1:{proxy.port}",
+                   "username": USERNAME, "password": "wrong-password"},
+            firefox_user_prefs={"network.proxy.no_proxies_on": ""},
+            i_know_what_im_doing=True,
+        ) as browser:
+            page = browser.new_page()
+            page.goto("about:blank")
+            return page_fetch(page, f"http://{target_host}:{proxy.target_port}/")
+    except Exception as e:  # noqa: BLE001 - refusing to launch is failing closed
+        return {"error": "launch: " + str(e).splitlines()[0][:160]}
+
+
+def context_fetches(proxy: AuthenticatedSocks5, direct_host: str) -> Dict[str, Dict[str, object]]:
+    """Per-context SOCKS5 proxies on a launch with none: the right credentials
+    reach the target through the proxy, a wrong password reaches nothing."""
+    from camoufox.sync_api import Camoufox
+
+    server = f"socks5h://127.0.0.1:{proxy.port}"
+    results: Dict[str, Dict[str, object]] = {}
+    with Camoufox(
+        headless=True,
+        executable_path=str(resolve_binary()),
+        firefox_user_prefs={"network.proxy.no_proxies_on": ""},
+        i_know_what_im_doing=True,
+    ) as browser:
+        for name, password, host in (("right", PASSWORD, TARGET_HOST),
+                                     ("wrong", "wrong-password", direct_host)):
+            try:
+                context = browser.new_context(
+                    proxy={"server": server, "username": USERNAME, "password": password})
+            except Exception as e:  # noqa: BLE001 - a refused context fails closed too
+                results[name] = {"error": "context: " + str(e).splitlines()[0][:160]}
+                continue
+            page = context.new_page()
+            page.goto("about:blank")
+            results[name] = page_fetch(page, f"http://{host}:{proxy.target_port}/")
+            context.close()
+    return results
+
+
 def fetch_with_overridden_credentials(
     proxy: AuthenticatedSocks5, credentials_value: str, target_host: str
 ) -> Dict[str, object]:
@@ -279,6 +332,21 @@ def main() -> int:
         print(f"malformed-env result: {malformed}")
         if "error" not in malformed:
             failures.append("malformed credentials fell back to a direct connection")
+
+        launch_wrong = launch_wrong_password_fetch(proxy, direct_host)
+        print(f"launch wrong-password result: {launch_wrong}")
+        if "error" not in launch_wrong:
+            failures.append("a launch-level proxy's rejected password fell back to a direct connection")
+
+        before = len(proxy.requests)
+        contexts = context_fetches(proxy, direct_host)
+        print(f"per-context results: {contexts}")
+        if contexts["right"].get("body") != MARKER:
+            failures.append(f"a context's authenticated SOCKS5 proxy failed: {contexts['right']}")
+        if expected_request not in proxy.requests[before:]:
+            failures.append(f"the proxy did not see the context's request for {expected_request}")
+        if "error" not in contexts["wrong"]:
+            failures.append("a context's rejected password fell back to a direct connection")
     finally:
         proxy.close()
         target.shutdown()
@@ -287,7 +355,7 @@ def main() -> int:
         print(f"FAIL: {failure}")
     if failures:
         return 1
-    print("PASS: authenticated socks5h works and proxy setup errors fail closed.")
+    print("PASS: authenticated socks5h works at launch and per context, and proxy setup errors fail closed.")
     return 0
 
 

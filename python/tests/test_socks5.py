@@ -1,4 +1,9 @@
-"""SOCKS5 launch credentials are split from Playwright's public proxy options."""
+"""SOCKS5 credentials are split from Playwright's public proxy options.
+
+A launch proxy's go to Juggler in CAMOU_PROXY_AUTH, a context's in an init
+script (test_socks5_auth.py); a caller's own CAMOU_PROXY_CREDENTIALS map
+passes through the launch environment unchanged.
+"""
 
 import asyncio
 import json
@@ -15,6 +20,7 @@ from test_launch_environment import isolated_launch_dependencies  # noqa: F401
 
 
 PROXY_CREDENTIALS_ENV = "CAMOU_PROXY_CREDENTIALS"
+PROXY_AUTH_ENV = "CAMOU_PROXY_AUTH"
 
 
 def _launch(proxy, env):
@@ -141,7 +147,7 @@ def test_proxy_url_uses_selected_credentials_without_a_second_at_sign(server, ex
     assert proxy.as_string() == expected
 
 
-def test_launch_removes_credentials_and_injects_the_endpoint_map(
+def test_launch_removes_credentials_and_hands_them_to_juggler(
     isolated_launch_dependencies,  # noqa: F811
 ):
     options = _launch(
@@ -154,12 +160,13 @@ def test_launch_removes_credentials_and_injects_the_endpoint_map(
     )
 
     assert options["proxy"] == {"server": "socks5://proxy.example.com:1080"}
-    assert json.loads(options["env"][PROXY_CREDENTIALS_ENV]) == {
-        "proxy.example.com:1080": {
-            "username": "launch-user",
-            "password": "launch-pass",
-        }
+    assert json.loads(options["env"][PROXY_AUTH_ENV]) == {
+        "host": "proxy.example.com",
+        "port": 1080,
+        "username": "launch-user",
+        "password": "launch-pass",
     }
+    assert PROXY_CREDENTIALS_ENV not in options["env"]
 
 
 def test_launch_rejects_socks_without_an_explicit_port(
@@ -192,6 +199,12 @@ def test_launch_keeps_an_explicit_credentials_env(
 
     assert options["proxy"] == {"server": "socks5://proxy-c.example.com:1080"}
     assert options["env"][PROXY_CREDENTIALS_ENV] == declared_json
+    assert json.loads(options["env"][PROXY_AUTH_ENV]) == {
+        "host": "proxy-c.example.com",
+        "port": 1080,
+        "username": "user-c",
+        "password": "pass-c",
+    }
     assert options["env"]["UNCHANGED"] == "value"
 
 
@@ -202,6 +215,7 @@ def test_launch_does_not_inject_credentials_for_an_unauthenticated_proxy(
 
     assert options["proxy"] == {"server": "socks5://proxy.example.com:1080"}
     assert PROXY_CREDENTIALS_ENV not in options["env"]
+    assert PROXY_AUTH_ENV not in options["env"]
 
 
 def test_geo_lookup_uses_the_sanitized_server_and_selected_credentials(
@@ -248,14 +262,12 @@ def test_geo_lookup_uses_the_sanitized_server_and_selected_credentials(
     assert options["proxy"] == {"server": "socks5://proxy.example.com:1080"}
 
 
-def test_only_an_explicit_caller_env_overrides_the_generated_mapping(
+def test_an_inherited_credentials_map_passes_through_beside_the_launch_proxy(
     monkeypatch,
     isolated_launch_dependencies,  # noqa: F811
 ):
-    monkeypatch.setenv(
-        PROXY_CREDENTIALS_ENV,
-        '{"inherited.example.com:1080":{"username":"inherited","password":"old"}}',
-    )
+    inherited = '{"inherited.example.com:1080":{"username":"inherited","password":"old"}}'
+    monkeypatch.setenv(PROXY_CREDENTIALS_ENV, inherited)
 
     options = _launch(
         {
@@ -266,12 +278,13 @@ def test_only_an_explicit_caller_env_overrides_the_generated_mapping(
         None,
     )
 
-    assert json.loads(options["env"][PROXY_CREDENTIALS_ENV]) == {
-        "proxy.example.com:1080": {
-            "username": "current",
-            "password": "new",
-        }
+    assert json.loads(options["env"][PROXY_AUTH_ENV]) == {
+        "host": "proxy.example.com",
+        "port": 1080,
+        "username": "current",
+        "password": "new",
     }
+    assert options["env"].get(PROXY_CREDENTIALS_ENV) in (None, inherited)
 
 
 @pytest.mark.parametrize("api", ["sync", "async"])
@@ -288,30 +301,57 @@ def test_only_an_explicit_caller_env_overrides_the_generated_mapping(
         },
     ],
 )
-def test_new_context_rejects_socks_credentials_before_geo_lookup(
+def test_new_context_keeps_socks_credentials_for_the_lookup_and_juggler(
     api, proxy, monkeypatch
 ):
+    """The exit lookup goes through the authenticated proxy, and new_context()
+    gets the credentials, which attach_socks5_auth hands to Juggler."""
     module = sync_api if api == "sync" else async_api
-    resolve = mock.Mock(side_effect=AssertionError("geo lookup ran"))
-    monkeypatch.setattr(module, "_resolve_proxy_geo", resolve)
+    fingerprint = {"context_options": {}, "init_script": ""}
+    monkeypatch.setattr(
+        module,
+        "generate_context_fingerprint",
+        mock.Mock(return_value=fingerprint),
+    )
+    resolve = mock.Mock(side_effect=RuntimeError("stop after the lookup"))
+    if api == "async":
+        async def resolve_async(proxy):
+            return resolve(proxy)
+        monkeypatch.setattr(module, "_resolve_proxy_geo", resolve_async)
+    else:
+        monkeypatch.setattr(module, "_resolve_proxy_geo", resolve)
 
+    expected = {
+        "server": "socks5://proxy.example.com:1080",
+        "username": "user",
+        "password": "pass",
+    }
     browser = mock.MagicMock()
     browser.version = "152.0.4"
-    if api == "async":
-        browser.new_context = mock.AsyncMock()
-        operation = async_api.AsyncNewContext(
-            browser,
-            os="linux",
-            proxy=proxy,
-        )
-        with pytest.raises(InvalidProxy, match="CAMOU_PROXY_CREDENTIALS"):
-            asyncio.run(operation)
-    else:
-        with pytest.raises(InvalidProxy, match="CAMOU_PROXY_CREDENTIALS"):
+    with pytest.raises(RuntimeError, match="stop after the lookup"):
+        if api == "async":
+            asyncio.run(async_api.AsyncNewContext(browser, os="linux", proxy=proxy))
+        else:
             sync_api.NewContext(browser, os="linux", proxy=proxy)
+    assert resolve.call_args.args[0] == expected
 
-    resolve.assert_not_called()
-    browser.new_context.assert_not_called()
+    context = mock.MagicMock()
+    if api == "async":
+        context.add_init_script = mock.AsyncMock()
+        browser.new_context = mock.AsyncMock(return_value=context)
+    else:
+        browser.new_context = mock.Mock(return_value=context)
+    located = {
+        "webrtc_ip": "198.51.100.1",
+        "geolocation": {"latitude": 1.0, "longitude": 2.0},
+        "timezone_id": "UTC",
+        "locale": "en-US",
+    }
+    if api == "async":
+        asyncio.run(async_api.AsyncNewContext(browser, os="linux", proxy=proxy, **located))
+    else:
+        sync_api.NewContext(browser, os="linux", proxy=proxy, **located)
+    assert browser.new_context.call_args.kwargs["proxy"] == expected
 
 
 @pytest.mark.parametrize("api", ["sync", "async"])

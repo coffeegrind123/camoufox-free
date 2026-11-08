@@ -10,19 +10,19 @@ from typing_extensions import Literal
 
 from camoufox.virtdisplay import VirtualDisplay
 
-from .exceptions import InvalidProxy
+from . import driver_defaults
 from .fingerprints import generate_context_fingerprint
 from .ip import (
     ExitGeo,
-    PROXY_CREDENTIALS_ENV,
     Proxy,
     proxy_exit_geo,
-    split_socks_credentials,
+    validated_proxy,
 )
 from .utils import (
     DEFAULT_CANVAS_NOISE,
     attach_context_defaults,
     attach_launch_window,
+    attach_socks5_auth,
     context_identity,
     host_identity,
     launch_options,
@@ -173,6 +173,7 @@ def _launch(
             context = playwright.firefox.launch_persistent_context(
                 **persistent_context_options(from_options, no_viewport_default)
             )
+            driver_defaults.mark(context)
             return sync_attach_vd(context, virtual_display)
 
         identity = host_identity(from_options, canvas_noise, gpu_passthrough)
@@ -218,20 +219,18 @@ def NewContext(
         ff_version: Firefox major version to claim in the UA. Defaults to the browser's own.
         webrtc_ip: IPv4 or IPv6 address to spoof for WebRTC ICE candidates.
         proxy: Per-context proxy (Playwright format: {"server": "...", "username": "...", "password": "..."}).
-            SOCKS5 credentials are rejected; declare them in CAMOU_PROXY_CREDENTIALS at launch.
+            A socks5:// or socks5h:// proxy can carry a username and password, which go to
+            Juggler rather than Playwright (attach_socks5_auth).
             The context is placed where the proxy exits: webrtc_ip, timezone_id, locale and
             geolocation each default to the exit IP's, looked up through the proxy unless all
             four are given; InvalidIP is raised if that lookup fails.
         geolocation: Per-context geolocation ({"latitude": float, "longitude": float}).
         **context_kwargs: Additional Playwright new_context() options.
     """
-    proxy, socks_credentials = split_socks_credentials(proxy)
-    if socks_credentials:
-        raise InvalidProxy(
-            "Per-context SOCKS5 credentials cannot be delivered after the browser "
-            f"has started. Declare the endpoint in {PROXY_CREDENTIALS_ENV} in the "
-            "launch env, then pass the proxy without credentials to NewContext."
-        )
+    # Validated and normalized (socks5h becomes socks5), SOCKS5 credentials
+    # kept: the exit lookup goes through the authenticated proxy, and
+    # new_context() hands them to Juggler.
+    proxy = validated_proxy(proxy)
 
     # The drawn UA carries fpgen's Firefox version, which must not disagree with
     # the browser the page is actually talking to.
@@ -253,6 +252,8 @@ def NewContext(
         locale=context_kwargs.get('locale'),
     )
 
+    # A browser launched elsewhere takes SOCKS5 credentials too.
+    attach_socks5_auth(browser)
     context = browser.new_context(**new_context_options(fp, context_kwargs, proxy, geolocation))
     context.add_init_script(fp['init_script'])
     return context
