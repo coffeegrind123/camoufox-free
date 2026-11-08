@@ -237,7 +237,9 @@ This fork releases from [`build.yml`](../.github/workflows/build.yml) and
 publishes nothing to PyPI or npm. Pushing a tag
 `v<version>-<release>-cg.<n>` (`v156.0.1-beta.32-cg.8`), where `<version>` and
 `<release>` are `browser/upstream.sh`'s, builds the Linux x86_64 browser with
-LTO and PGO and publishes its zip as a GitHub prerelease. The build refuses a
+LTO and PGO and publishes its zip as a GitHub prerelease. Once the zip's digest,
+launch and the Docker image are checked, the release is marked stable and
+Latest by hand, and older releases are deleted. The build refuses a
 tag that names another browser, and `make dir` refuses to build without the
 PGO profile Mozilla trained for this Firefox, pinned in
 `browser/scripts/data/pgo-profiles.json` (see `browser/scripts/pgo.py`). Tags

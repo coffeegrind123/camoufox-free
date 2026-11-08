@@ -5,13 +5,11 @@ that spoofs device fingerprints in C++. For what Camoufox is, its features and
 how to build it, read [upstream's README](https://github.com/daijro/camoufox#readme).
 
 This fork follows upstream `main` and pins Firefox `159.0.1` / Camoufox `beta.35`
-in [`browser/upstream.sh`](browser/upstream.sh). The newest published build is
-[`v159.0-beta.35-cg.13`](https://github.com/coffeegrind123/camoufox-free/releases/tag/v159.0-beta.35-cg.13),
-built from [85f7c28](https://github.com/coffeegrind123/camoufox-free/commit/85f7c28696afb030f0af03a2d3f3969c8a72495e).
-The newest stable release remains
-[`v152.0.4-beta.31-cg.4`](https://github.com/coffeegrind123/camoufox-free/releases/tag/v152.0.4-beta.31-cg.4).
-Features below that landed after cg.12 require a newer build or a source
-checkout. Fixes are offered upstream when appropriate.
+in [`browser/upstream.sh`](browser/upstream.sh). The current release, and the
+only one published, is
+[`v159.0.1-beta.35-cg.14`](https://github.com/coffeegrind123/camoufox-free/releases/tag/v159.0.1-beta.35-cg.14),
+built from [70dbf55](https://github.com/coffeegrind123/camoufox-free/commit/70dbf558040eb9204dd77409490fd20df8c34aa9).
+Everything listed below is in it. Fixes are offered upstream when appropriate.
 
 > [!NOTE]
 > Under development. Test a release against your own targets before relying on it.
