@@ -103,12 +103,10 @@ For an identity whose OS is not the host's. Offered upstream in
 - **Network and automation protocol fixes.** Routed requests keep Firefox's
   original header order; UA, Accept-Language and per-scheme Accept-Encoding
   stay coherent; DNT and context locale are stable across navigation.
-  WebSocket close arguments follow Firefox 158, and a failed promise-reaction
-  attach rejects immediately instead of leaving Juggler hanging. The header
-  order and WebSocket fixes are offered upstream in
-  [#989](https://github.com/daijro/camoufox/pull/989) and
-  [#988](https://github.com/daijro/camoufox/pull/988).
-  ([a645377](https://github.com/coffeegrind123/camoufox-free/commit/a645377641887a9443c5e6be0d0f7e1e209eed39), [bf238e4](https://github.com/coffeegrind123/camoufox-free/commit/bf238e4a9f41f026674a0e6361f4ec496f5f542a), [3cebf99](https://github.com/coffeegrind123/camoufox-free/commit/3cebf99c8f486c211a5502099c9ecfdc91164813))
+  A failed promise-reaction attach rejects immediately instead of leaving
+  Juggler hanging. The header order fix is offered upstream in
+  [#989](https://github.com/daijro/camoufox/pull/989).
+  ([a645377](https://github.com/coffeegrind123/camoufox-free/commit/a645377641887a9443c5e6be0d0f7e1e209eed39), [3cebf99](https://github.com/coffeegrind123/camoufox-free/commit/3cebf99c8f486c211a5502099c9ecfdc91164813))
 - **The spoofed user agent is read once.** Firefox's HTTP handler rewrote
   its shared user-agent string on every `UserAgent()` call, and that also runs
   on proxy CONNECT threads, racing the main thread. The configured value is now
@@ -195,8 +193,9 @@ For an identity whose OS is not the host's. Offered upstream in
   the real window while `window.screenX/Y` reported the identity's, so wherever
   the window manager placed the window elsewhere (any X11 desktop), a page could
   read the real position. They now move with the spoofed position; browser code
-  still gets the real one. Offered upstream in
-  [#975](https://github.com/daijro/camoufox/pull/975).
+  still gets the real one. Upstream's #997 instead stops spoofing
+  `screenX/Y` and moves the real window to the identity's position, so
+  [#975](https://github.com/daijro/camoufox/pull/975) was closed.
   ([031108e](https://github.com/coffeegrind123/camoufox-free/commit/031108e0ed85469d834a9847bb5edcc17a4fcd84), guard
   [window-screen-origin.py](browser/tests/playwright/patches/window-screen-origin.py))
 - **Humanized moves reach the page one per refresh frame.** Firefox
@@ -206,8 +205,10 @@ For an identity whose OS is not the host's. Offered upstream in
   most of them mid-frame. Each point now waits for the window's refresh and a
   frame sends the newest point due, as stock delivers a real mouse. It
   replaces the trajectory-clock pacing upstream merged from our
-  [#808](https://github.com/daijro/camoufox/pull/808). Offered upstream in
-  [#978](https://github.com/daijro/camoufox/pull/978).
+  [#808](https://github.com/daijro/camoufox/pull/808). Upstream's #997 does
+  the same through the renderer's own coalescing (measured: 92-94% of moves at
+  a tick); [#978](https://github.com/daijro/camoufox/pull/978) now offers only
+  the check.
   ([MouseDispatch.js](browser/additions/juggler/input/MouseDispatch.js), guard
   [humanize-mouse-trajectory.py](browser/tests/playwright/patches/humanize-mouse-trajectory.py))
 - **A humanized curve leaves the page as a real pointer does.** A point
@@ -321,10 +322,6 @@ For an identity whose OS is not the host's. Offered upstream in
   off that request never happens, which the target's server can see. Page
   events are the same either way. ([e449d72](https://github.com/coffeegrind123/camoufox-free/commit/e449d72970ee56e9a45474eb82520999c1a68505), guard
   [long-press-link-preview-parity.py](browser/tests/playwright/patches/long-press-link-preview-parity.py))
-- **The Playwright suite's pip stays below 26.3**, which rejects the
-  `autobahn` that playwright-python pins, so the suite never installed.
-  Offered upstream in [#1001](https://github.com/daijro/camoufox/pull/1001).
-  ([7bcc78a](https://github.com/coffeegrind123/camoufox-free/commit/7bcc78a4dd4e442d84450879c7ef16a12a65fc89))
 - **`canvas_noise` defaults to `False`:** the canvas is never covered.
   `canvas_noise=None` gives upstream's automatic cover. ([38ef536](https://github.com/coffeegrind123/camoufox-free/commit/38ef536579a3b1284929dfaf544dfb6e124a217e))
 - **Stock-parity probe lab**
