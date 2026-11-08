@@ -21,10 +21,10 @@ index 42f58899c1..7b5123ac34 100644
    FIELD(IPAddressSpace, nsILoadInfo::IPAddressSpace,                           \
          {.mCanSet = CanSet::ParentOnly})                                       \
 diff --git a/dom/base/nsGlobalWindowInner.cpp b/dom/base/nsGlobalWindowInner.cpp
-index 8492c63ccf..f6032debf7 100644
+index 1636d5d0ce..972580931b 100644
 --- a/dom/base/nsGlobalWindowInner.cpp
 +++ b/dom/base/nsGlobalWindowInner.cpp
-@@ -3891,7 +3891,45 @@ CSSIntPoint nsGlobalWindowInner::SpoofedWindowShift(nsIGlobalObject* aGlobal) {
+@@ -3911,7 +3911,45 @@ CSSIntPoint nsGlobalWindowInner::SpoofedWindowShift(nsIGlobalObject* aGlobal) {
  
  /* static */
  CSSIntPoint nsGlobalWindowInner::SpoofedScreenShift(nsIGlobalObject* aGlobal) {
@@ -72,10 +72,10 @@ index 8492c63ccf..f6032debf7 100644
  
  static nsPresContext* GetPresContextForRatio(Document* aDoc) {
 diff --git a/dom/base/nsGlobalWindowInner.h b/dom/base/nsGlobalWindowInner.h
-index 15b6d909c7..3a07f414fc 100644
+index aaa8df1ac9..8249d31860 100644
 --- a/dom/base/nsGlobalWindowInner.h
 +++ b/dom/base/nsGlobalWindowInner.h
-@@ -926,6 +926,11 @@ class nsGlobalWindowInner final : public mozilla::dom::EventTarget,
+@@ -935,6 +935,11 @@ class nsGlobalWindowInner final : public mozilla::dom::EventTarget,
    // them agree with window.screenX/Y.
    static mozilla::CSSIntPoint SpoofedScreenShift(nsIGlobalObject* aGlobal);
    static bool IsPagePopup(nsPIDOMWindowInner* aInner);

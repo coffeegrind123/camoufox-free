@@ -1,8 +1,8 @@
 diff --git a/dom/base/nsGlobalWindowInner.cpp b/dom/base/nsGlobalWindowInner.cpp
-index 8e4fb1910e..8492c63ccf 100644
+index 8e4fb1910e..1636d5d0ce 100644
 --- a/dom/base/nsGlobalWindowInner.cpp
 +++ b/dom/base/nsGlobalWindowInner.cpp
-@@ -3787,28 +3787,111 @@ double nsGlobalWindowInner::ScreenEdgeSlopY() const {
+@@ -3787,28 +3787,131 @@ double nsGlobalWindowInner::ScreenEdgeSlopY() const {
  
  int32_t nsGlobalWindowInner::GetScreenX(CallerType aCallerType,
                                          ErrorResult& aError) {
@@ -13,10 +13,10 @@ index 8e4fb1910e..8492c63ccf 100644
 +  // Camoufox: CamoufoxWindow.sys.mjs moves each window the browser opens to
 +  // the identity's position, so where the window manager honours the move this
 +  // reads the real position. Where it placed the window elsewhere, the page
-+  // still reads the identity's (SpoofedWindowShift). A popup a page opened
-+  // reports where it is, as in stock. Stock's work first (timing parity; see
-+  // nsScreen::PixelDepth); stock throws on an inactive window, and so does
-+  // this.
++  // still reads the identity's (SpoofedWindowPosition). A popup a page opened
++  // reports where it is, as in stock. Stock's work first, and only once
++  // (timing parity; see nsScreen::PixelDepth); stock throws on an inactive
++  // window, and so does this.
 +  const int32_t stock = [&]() -> int32_t {
 +    FORWARD_TO_OUTER_OR_THROW(GetScreenXOuter, (aCallerType, aError), aError,
 +                              0);
@@ -26,7 +26,8 @@ index 8e4fb1910e..8492c63ccf 100644
 +          aCallerType, RFPTarget::WindowScreenXY)) {
 +    return stock;
 +  }
-+  return stock + SpoofedWindowShift(this).x.value;
++  const Maybe<WindowPosition> position = SpoofedWindowPosition(this);
++  return position && position->mX ? *position->mX : stock;
  }
  
  int32_t nsGlobalWindowInner::GetScreenY(CallerType aCallerType,
@@ -38,10 +39,10 @@ index 8e4fb1910e..8492c63ccf 100644
 +  // Camoufox: CamoufoxWindow.sys.mjs moves each window the browser opens to
 +  // the identity's position, so where the window manager honours the move this
 +  // reads the real position. Where it placed the window elsewhere, the page
-+  // still reads the identity's (SpoofedWindowShift). A popup a page opened
-+  // reports where it is, as in stock. Stock's work first (timing parity; see
-+  // nsScreen::PixelDepth); stock throws on an inactive window, and so does
-+  // this.
++  // still reads the identity's (SpoofedWindowPosition). A popup a page opened
++  // reports where it is, as in stock. Stock's work first, and only once
++  // (timing parity; see nsScreen::PixelDepth); stock throws on an inactive
++  // window, and so does this.
 +  const int32_t stock = [&]() -> int32_t {
 +    FORWARD_TO_OUTER_OR_THROW(GetScreenYOuter, (aCallerType, aError), aError,
 +                              0);
@@ -51,7 +52,8 @@ index 8e4fb1910e..8492c63ccf 100644
 +          aCallerType, RFPTarget::WindowScreenXY)) {
 +    return stock;
 +  }
-+  return stock + SpoofedWindowShift(this).y.value;
++  const Maybe<WindowPosition> position = SpoofedWindowPosition(this);
++  return position && position->mY ? *position->mY : stock;
  }
  
  float nsGlobalWindowInner::GetMozInnerScreenX(CallerType aCallerType,
@@ -98,16 +100,33 @@ index 8e4fb1910e..8492c63ccf 100644
 +}
 +
 +/* static */
++Maybe<nsGlobalWindowInner::WindowPosition>
++nsGlobalWindowInner::SpoofedWindowPosition(nsPIDOMWindowInner* aInner) {
++  // Launch-level keys, read once: the config never changes in a process, and
++  // no context sets its own position. A JSON lookup per call made screenX
++  // cost twice stock's (getter-cost-parity.py).
++  const auto read = [](const char* aKey) -> Maybe<int32_t> {
++    const auto value = MaskConfig::GetInt32(aKey);
++    return value ? Some(*value) : Nothing();
++  };
++  static const Maybe<int32_t> sX = read("window.screenX");
++  static const Maybe<int32_t> sY = read("window.screenY");
++  if ((!sX && !sY) || IsPagePopup(aInner)) {
++    return Nothing();
++  }
++  return Some(WindowPosition{sX, sY});
++}
++
++/* static */
 +CSSIntPoint nsGlobalWindowInner::SpoofedWindowShift(nsIGlobalObject* aGlobal) {
-+  const auto x = MaskConfig::GetInt32("window.screenX");
-+  const auto y = MaskConfig::GetInt32("window.screenY");
-+  if (!x && !y) {
++  nsPIDOMWindowInner* inner = aGlobal ? aGlobal->GetAsInnerWindow() : nullptr;
++  const Maybe<WindowPosition> position =
++      inner ? SpoofedWindowPosition(inner) : Nothing();
++  if (!position) {
 +    return {};
 +  }
-+  nsPIDOMWindowInner* inner = aGlobal ? aGlobal->GetAsInnerWindow() : nullptr;
-+  nsGlobalWindowOuter* outer =
-+      inner ? Cast(inner)->GetOuterWindowInternal() : nullptr;
-+  if (!outer || IsPagePopup(inner)) {
++  nsGlobalWindowOuter* outer = Cast(inner)->GetOuterWindowInternal();
++  if (!outer) {
 +    return {};
 +  }
 +  IgnoredErrorResult rv;
@@ -115,7 +134,8 @@ index 8e4fb1910e..8492c63ccf 100644
 +  if (rv.Failed()) {
 +    return {};
 +  }
-+  return CSSIntPoint(x ? *x - real.x : 0, y ? *y - real.y : 0);
++  return CSSIntPoint(position->mX ? *position->mX - real.x : 0,
++                     position->mY ? *position->mY - real.y : 0);
 +}
 +
 +/* static */
@@ -125,10 +145,10 @@ index 8e4fb1910e..8492c63ccf 100644
  
  static nsPresContext* GetPresContextForRatio(Document* aDoc) {
 diff --git a/dom/base/nsGlobalWindowInner.h b/dom/base/nsGlobalWindowInner.h
-index 5fb08d354b..8e446a7e03 100644
+index 5fb08d354b..72429f2a83 100644
 --- a/dom/base/nsGlobalWindowInner.h
 +++ b/dom/base/nsGlobalWindowInner.h
-@@ -906,6 +906,15 @@ class nsGlobalWindowInner final : public mozilla::dom::EventTarget,
+@@ -906,6 +906,24 @@ class nsGlobalWindowInner final : public mozilla::dom::EventTarget,
                             mozilla::ErrorResult& aError);
    float GetMozInnerScreenY(mozilla::dom::CallerType aCallerType,
                             mozilla::ErrorResult& aError);
@@ -137,6 +157,15 @@ index 5fb08d354b..8e446a7e03 100644
 +  // manager put the window where CamoufoxWindow.sys.mjs moved it, and for a
 +  // popup a page opened (IsPagePopup), which reports its real position.
 +  static mozilla::CSSIntPoint SpoofedWindowShift(nsIGlobalObject* aGlobal);
++  // Camoufox: where a page reads the window, when that is not where it really
++  // is: the identity's window.screenX/Y, each axis Nothing() when unset.
++  // Nothing() without a spoofed position and for a popup a page opened.
++  struct WindowPosition {
++    mozilla::Maybe<int32_t> mX;
++    mozilla::Maybe<int32_t> mY;
++  };
++  static mozilla::Maybe<WindowPosition> SpoofedWindowPosition(
++      nsPIDOMWindowInner* aInner);
 +  // Camoufox: what every screen coordinate a page reads moves by, so all of
 +  // them agree with window.screenX/Y.
 +  static mozilla::CSSIntPoint SpoofedScreenShift(nsIGlobalObject* aGlobal);

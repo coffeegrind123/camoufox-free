@@ -3,12 +3,13 @@ new file mode 100644
 index 0000000000..9e918380d8
 --- /dev/null
 +++ b/dom/base/SpeechVoicesManager.cpp
-@@ -0,0 +1,139 @@
+@@ -0,0 +1,160 @@
 +/* Camoufox: Per-context speech voices manager */
 +#include "SpeechVoicesManager.h"
 +
 +#include "mozilla/Mutex.h"
 +#include "MaskConfig.hpp"
++#include "nsEscape.h"
 +
 +namespace mozilla {
 +namespace dom {
@@ -95,16 +96,36 @@ index 0000000000..9e918380d8
 +}
 +
 +// The URIs of the launch's own voices while the registry also holds the
-+// voices of "voices:pool" (voice-spoofing.patch), which only a context that
-+// lists them sees. Nothing without a pool.
++// voices of "voices:pool" or "voices:pool:speechd" (voice-spoofing.patch),
++// which only a context that lists them sees. Nothing without a pool. A
++// speech-dispatcher grid's URIs are built as voice-spoofing.patch registers
++// them.
 +static const std::optional<nsTHashSet<nsString>>& LaunchVoices() {
 +  static const std::optional<nsTHashSet<nsString>> sLaunch =
 +      []() -> std::optional<nsTHashSet<nsString>> {
-+    auto voices = MaskConfig::MVoices();
-+    if (!voices || !MaskConfig::MVoices("voices:pool")) return std::nullopt;
++    if (!MaskConfig::Find("voices:pool") &&
++        !MaskConfig::Find("voices:pool:speechd")) {
++      return std::nullopt;
++    }
 +    nsTHashSet<nsString> uris;
-+    for (const auto& voice : *voices) {
-+      uris.Insert(NS_ConvertUTF8toUTF16(std::get<2>(voice)));
++    if (auto grid = MaskConfig::MSpeechdVoices()) {
++      for (const auto& [name, lang] : *grid) {
++        nsAutoString uri;
++        uri.AssignLiteral("urn:moz-tts:speechd:");
++        nsAutoCString escaped;
++        NS_EscapeURL(name.c_str(), -1,
++                     esc_OnlyNonASCII | esc_Spaces | esc_AlwaysCopy, escaped);
++        uri.Append(NS_ConvertUTF8toUTF16(escaped));
++        uri.AppendLiteral("?");
++        uri.Append(NS_ConvertUTF8toUTF16(lang));
++        uris.Insert(uri);
++      }
++    } else if (auto voices = MaskConfig::MVoices()) {
++      for (const auto& voice : *voices) {
++        uris.Insert(NS_ConvertUTF8toUTF16(std::get<2>(voice)));
++      }
++    } else {
++      return std::nullopt;
 +    }
 +    return uris;
 +  }();

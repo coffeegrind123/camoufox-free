@@ -14,41 +14,31 @@ index 7b5123ac34..4a9dadf43f 100644
    FIELD(IPAddressSpace, nsILoadInfo::IPAddressSpace,                           \
          {.mCanSet = CanSet::ParentOnly})                                       \
 diff --git a/dom/base/nsGlobalWindowInner.cpp b/dom/base/nsGlobalWindowInner.cpp
-index f6032debf7..9cef128ed6 100644
+index 972580931b..723d8bfa5b 100644
 --- a/dom/base/nsGlobalWindowInner.cpp
 +++ b/dom/base/nsGlobalWindowInner.cpp
-@@ -3870,17 +3870,25 @@ bool nsGlobalWindowInner::IsPagePopup(nsPIDOMWindowInner* aInner) {
- 
- /* static */
- CSSIntPoint nsGlobalWindowInner::SpoofedWindowShift(nsIGlobalObject* aGlobal) {
--  const auto x = MaskConfig::GetInt32("window.screenX");
--  const auto y = MaskConfig::GetInt32("window.screenY");
--  if (!x && !y) {
--    return {};
--  }
-   nsPIDOMWindowInner* inner = aGlobal ? aGlobal->GetAsInnerWindow() : nullptr;
-   nsGlobalWindowOuter* outer =
-       inner ? Cast(inner)->GetOuterWindowInternal() : nullptr;
-   if (!outer || IsPagePopup(inner)) {
-     return {};
-   }
+@@ -3882,7 +3882,19 @@ nsGlobalWindowInner::SpoofedWindowPosition(nsPIDOMWindowInner* aInner) {
+   };
+   static const Maybe<int32_t> sX = read("window.screenX");
+   static const Maybe<int32_t> sY = read("window.screenY");
+-  if ((!sX && !sY) || IsPagePopup(aInner)) {
++  if (IsPagePopup(aInner)) {
++    return Nothing();
++  }
 +  // Where the claimed OS presents the window (maximized, fullscreen;
-+  // PresentWindow), else the identity's position.
-+  std::optional<int32_t> x = MaskConfig::GetInt32("window.screenX");
-+  std::optional<int32_t> y = MaskConfig::GetInt32("window.screenY");
++  // PresentWindow, which reads only cached config and synced fields), else
++  // the identity's position.
 +  if (const Maybe<PresentedWindow> presented =
-+          PresentWindow(inner->GetBrowsingContext());
++          PresentWindow(aInner->GetBrowsingContext());
 +      presented && presented->mPosition) {
-+    x = presented->mPosition->x;
-+    y = presented->mPosition->y;
++    return Some(WindowPosition{Some(presented->mPosition->x),
++                               Some(presented->mPosition->y)});
 +  }
-+  if (!x && !y) {
-+    return {};
-+  }
-   IgnoredErrorResult rv;
-   const CSSIntPoint real = outer->GetScreenXY(CallerType::System, rv);
-   if (rv.Failed()) {
-@@ -3896,23 +3904,96 @@ CSSIntPoint nsGlobalWindowInner::SpoofedScreenShift(nsIGlobalObject* aGlobal) {
++  if (!sX && !sY) {
+     return Nothing();
+   }
+   return Some(WindowPosition{sX, sY});
+@@ -3916,23 +3928,96 @@ CSSIntPoint nsGlobalWindowInner::SpoofedScreenShift(nsIGlobalObject* aGlobal) {
    // top-left inset from the window's position, not where the real window's
    // chrome put it. One shift for the whole window: an iframe's screen points
    // keep their offset inside the top page.
@@ -158,10 +148,10 @@ index f6032debf7..9cef128ed6 100644
  const Maybe<CSSIntMargin>& nsGlobalWindowInner::ClaimedWindowFrame() {
    // Read once: the config never changes in a process.
 diff --git a/dom/base/nsGlobalWindowInner.h b/dom/base/nsGlobalWindowInner.h
-index 3a07f414fc..95d5cf292a 100644
+index 8249d31860..e7909216e8 100644
 --- a/dom/base/nsGlobalWindowInner.h
 +++ b/dom/base/nsGlobalWindowInner.h
-@@ -931,6 +931,19 @@ class nsGlobalWindowInner final : public mozilla::dom::EventTarget,
+@@ -940,6 +940,19 @@ class nsGlobalWindowInner final : public mozilla::dom::EventTarget,
    // the window (window.frameLeft/Top/Right/Bottom), or Nothing() when the
    // real window's frame is reported. Main thread only.
    static const mozilla::Maybe<mozilla::CSSIntMargin>& ClaimedWindowFrame();

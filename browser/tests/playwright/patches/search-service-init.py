@@ -18,7 +18,7 @@ engines in the same order.
 The default engine is the one deliberate difference: this fork makes
 DuckDuckGo, one of stock's own US engines, the default where stock picks
 Google (ci/tribal-rules.yml, duckduckgo-default-over-stock-engines). It is
-read over Marionette from Services.search, in both browsers, so a stock
+read over Marionette from the SearchService module, in both browsers, so a stock
 default that is already DuckDuckGo shows the check proves nothing.
 
     python browser/tests/playwright/patches/search-service-init.py
@@ -71,7 +71,7 @@ def launch_and_capture(binary: Path, profile: Path) -> str:
 
 
 def default_engine(binary: Path) -> str:
-    """Services.search's default engine on a fresh profile, region US."""
+    """SearchService's default engine on a fresh profile, region US."""
     port = free_port()
     with tempfile.TemporaryDirectory(prefix="search-default-") as tmp:
         Path(tmp, "user.js").write_text(
@@ -84,7 +84,12 @@ def default_engine(binary: Path) -> str:
         )
         try:
             m = Marionette(port)
-            name = m.js("return Services.search.getDefault().then(e => e ? e.name : null);")
+            # Firefox 159 has no Services.search; the service is a moz-src module.
+            name = m.js(
+                'const { SearchService } = ChromeUtils.importESModule('
+                '"moz-src:///toolkit/components/search/SearchService.sys.mjs");'
+                "return SearchService.getDefault().then(e => e ? e.name : null);"
+            )
             m.close()
         finally:
             proc.kill()
