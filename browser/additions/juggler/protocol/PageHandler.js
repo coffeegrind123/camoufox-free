@@ -147,6 +147,8 @@ export class PageHandler {
 
     this._pendingEventWatchers = new Set();
     this._moveDelivery = null;
+    // When the page last got a move (its mousemove ack, at the refresh tick).
+    this._moveArrivedAt = undefined;
     // Arrival order of mouse commands (beforeDispatch).
     this._mouseTurn = Promise.resolve();
     this._mouseDispatched = Promise.resolve();
@@ -154,6 +156,7 @@ export class PageHandler {
     this._lastMoveAt = 0;
     this._humanizeAbort = new AbortController();
     this._eventListeners = [
+      helper.on(this._pageEventSink, 'mousemove', () => { this._moveArrivedAt = ChromeUtils.now(); }),
       helper.on(this._pageTarget, PageTarget.Events.DialogOpened, this._onDialogOpened.bind(this)),
       helper.on(this._pageTarget, PageTarget.Events.DialogClosed, this._onDialogClosed.bind(this)),
       helper.on(this._pageTarget, PageTarget.Events.Crashed, () => {
@@ -969,7 +972,14 @@ export class PageHandler {
     } else if (this._movedAt !== undefined) {
       // A press comes a person's dwell after the move that brought the pointer
       // to its target: a page read under 10 ms where stock reads under 250.
-      wait = this._movedAt + hoverDwell() - ChromeUtils.now();
+      // The dwell counts from when the page got that move, at the refresh tick
+      // after the renderer queued it. The move hands on its turn before then,
+      // so beforeDispatch had nothing to wait for, and counted from the queue
+      // ack the page read the press up to a frame early (48 ms against the
+      // 60 ms floor, driven-dblclick-gap.py on a CI runner).
+      await this._moveDelivered();
+      const from = Math.max(this._movedAt, this._moveArrivedAt ?? -Infinity);
+      wait = from + hoverDwell() - ChromeUtils.now();
     }
     if (type === 'mousedown') {
       this._buttonUpAt = undefined;
