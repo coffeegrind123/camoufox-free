@@ -230,6 +230,15 @@ For an identity whose OS is not the host's. Offered upstream in
   [4e1dde8](https://github.com/introvert/camoufox/commit/4e1dde86f5cfd8eb24afedef189ac976fed8df75).
   ([patch](browser/patches/zzz-context-locale.patch), guard
   [context-locale-follows.py](browser/tests/playwright/patches/context-locale-follows.py))
+- **Webcompat interventions follow the claimed OS.** Firefox's webcompat
+  add-on picked its per-site fixes by the host's OS, so a Windows identity on
+  Linux sent some sites a macOS UA, `sec-ch-ua-platform: "Linux"` or a Chrome
+  UA stock Windows never sends. The launcher sets its platform override to the
+  claimed OS. ([09b5fc6](https://github.com/coffeegrind123/camoufox-free/commit/09b5fc6bf897143eedd57d73b8b8e0a936d2ad1d))
+- **The search region follows the locale's region.** Stock learns it from a
+  network lookup the launch turns off; unset, every identity got the
+  region-less engine list and the DoH rollout never decided. ([2723224](https://github.com/coffeegrind123/camoufox-free/commit/2723224cbc9bcee2e156042f203a7a8154450d95))
+
 ### Kept here after upstream declined
 
 - **`gpu_passthrough=True`.** A Linux container on Windows can render on the
