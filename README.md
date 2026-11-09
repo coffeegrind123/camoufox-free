@@ -310,6 +310,11 @@ For an identity whose OS is not the host's. Offered upstream in
   [long-press-link-preview-parity.py](browser/tests/playwright/patches/long-press-link-preview-parity.py))
 - **`canvas_noise` defaults to `False`:** the canvas is never covered.
   `canvas_noise=None` gives upstream's automatic cover. ([38ef536](https://github.com/coffeegrind123/camoufox-free/commit/38ef536579a3b1284929dfaf544dfb6e124a217e))
+- **`low_bandwidth=1..3` for proxies billed per byte.** Level 1 is a 2 GiB
+  disk cache, which a page cannot see; level 2 adds Firefox's cellular media
+  preload, no link prefetch and no web fonts, and warns; level 3 also blocks
+  images. It needs `enable_cache` and intercepts no request, since a route
+  turns the context's cache off. Python and TypeScript. ([252d706](https://github.com/coffeegrind123/camoufox-free/commit/252d706d0ad5b6f3e92f1320d2fc8460b2b2f552))
 - **Stock-parity probe lab**
   ([`browser/tests/parity/`](browser/tests/parity)). It's a manual harness that
   diffs what a page sees in stock Firefox and in Camoufox, and it checks for
