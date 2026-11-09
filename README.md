@@ -83,23 +83,32 @@ For an identity whose OS is not the host's. Offered upstream in
   [#990](https://github.com/daijro/camoufox/pull/990) and
   [#991](https://github.com/daijro/camoufox/pull/991).
   ([b84880a](https://github.com/coffeegrind123/camoufox-free/commit/b84880ae39c173aa8250d377b8e0679689c4cad2), [3777eaf](https://github.com/coffeegrind123/camoufox-free/commit/3777eaf09cc91a2eb1d7d1522a425785d8b23353))
-- **Authenticated SOCKS5 proxies.** Playwright rejects SOCKS5 credentials
-  before Juggler receives the proxy, so the launchers pass them through an
-  endpoint-scoped launch environment and Juggler builds the proxy with
-  `newProxyInfoWithAuth`. This applies to launch-level proxies. Credentials
-  passed to `NewContext` are rejected: put the endpoint in
-  `CAMOU_PROXY_CREDENTIALS` and pass the context proxy without credentials.
-  `socks5h` resolves names at the proxy. A setup error fails the request closed
-  instead of falling back to the host's direct connection. Ported from
+- **Authenticated SOCKS5 proxies fail closed.** Upstream passes SOCKS5
+  credentials to Juggler (`CAMOU_PROXY_AUTH`, and a per-context init script).
+  On top of that transport, `socks5h` and credentials in the proxy URL are
+  accepted, a port is required, a caller's `CAMOU_PROXY_CREDENTIALS` map
+  (`host:port` to credentials) is still honoured and cleared after reading,
+  and a setup error fails the request closed instead of falling back to the
+  host's direct connection. Ported from
   liasica's [2f0be40](https://github.com/liasica/camoufox/commit/2f0be400e53b88bb9b00b3faf2356503ae9dbfab).
   ([29b467f](https://github.com/coffeegrind123/camoufox-free/commit/29b467fd6fa2e7f82b85a3a2b43eb9eea183c4ce))
+- **A proxy set through prefs resolves names at the proxy.** Upstream's #997
+  removed `network.proxy.socks_remote_dns`, so a SOCKS proxy given in
+  `firefox_user_prefs` (or a system proxy) would resolve DNS on the host.
+  ([camoufox.cfg](browser/settings/camoufox.cfg), [2a48d607](https://github.com/coffeegrind123/camoufox-free/commit/2a48d6072738d8ac47d428e34bbac130ae0735e2))
+- **A GPU-less Linux host still claims a drawn GPU.** Upstream's #1006 makes a
+  Linux identity on a host that renders in software report `llvmpipe`. Not
+  taken until the public detectors are compared on both.
+  ([2a48d607](https://github.com/coffeegrind123/camoufox-free/commit/2a48d6072738d8ac47d428e34bbac130ae0735e2))
 - **EME on for Windows identities.** With EME off, Firefox's "EME has been
   preffed off" error is one only Linux Firefox gives. Upstream's
   [#894](https://github.com/daijro/camoufox/pull/894) leaves EME off, on the
   grounds that a Linux build cannot deliver Windows' PlayReady key system. ([1a43e61](https://github.com/coffeegrind123/camoufox-free/commit/1a43e61878b66ffa66334ee30c38a846842a0f19))
 - **uBlock Origin doesn't hold requests** while it compiles its lists on a
   fresh profile (1–45 s). Requests in the first seconds go unfiltered.
-  Upstream keeps the hold. ([41a9903](https://github.com/coffeegrind123/camoufox-free/commit/41a9903048c011b9fc9aa38aa9786d72d922a94d))
+  Upstream keeps the hold. With no `policies.json`, `fetch-ubo.py` sets
+  `suspendUntilListsAreLoaded` false in the bundled uBO's own defaults.
+  ([fetch-ubo.py](browser/scripts/fetch-ubo.py), [41a9903](https://github.com/coffeegrind123/camoufox-free/commit/41a9903048c011b9fc9aa38aa9786d72d922a94d), [2a48d607](https://github.com/coffeegrind123/camoufox-free/commit/2a48d6072738d8ac47d428e34bbac130ae0735e2))
 - **Network and automation protocol fixes.** Routed requests keep Firefox's
   original header order; UA, Accept-Language and per-scheme Accept-Encoding
   stay coherent; DNT and context locale are stable across navigation.
@@ -118,7 +127,7 @@ For an identity whose OS is not the host's. Offered upstream in
   dedicated/shared/service workers, AudioWorklets, requests without a browsing
   context, and built-in strings. Changing one context does not overwrite the
   launch locale or another context. ([1bd1dc3](https://github.com/coffeegrind123/camoufox-free/commit/1bd1dc3c2d263bff41abcbb07d50f965129d3e5c), [a173ea1](https://github.com/coffeegrind123/camoufox-free/commit/a173ea1673b0f9af17ab645b337f687c1ea79c4f))
-- **A context lists and speaks with its own voices.** A context's voices only
+- **A context lists and speaks with its own voices** (a Linux context its speech-dispatcher grid, inside any launch). A context's voices only
   filtered the voices the launch registered, so a de-DE context in an en-US
   Windows launch listed no German voice, where a German Windows lists its
   language pack's. Contexts now draw their voices for their locale, the
@@ -188,37 +197,25 @@ For an identity whose OS is not the host's. Offered upstream in
   [zz-window-presentation.patch](browser/patches/zz-window-presentation.patch),
   [3924094](https://github.com/coffeegrind123/camoufox-free/commit/39240942ecd1e20088209001414b64a1d621d4b5), guard
   [window-sizing-claimed-os.py](browser/tests/playwright/patches/window-sizing-claimed-os.py))
-- **Screen coordinates follow the spoofed window position.**
-  `mozInnerScreenX/Y` and the `screenX/Y` of mouse and touch events came from
-  the real window while `window.screenX/Y` reported the identity's, so wherever
-  the window manager placed the window elsewhere (any X11 desktop), a page could
-  read the real position. They now move with the spoofed position; browser code
-  still gets the real one. Upstream's #997 instead stops spoofing
-  `screenX/Y` and moves the real window to the identity's position, so
-  [#975](https://github.com/daijro/camoufox/pull/975) was closed.
-  ([031108e](https://github.com/coffeegrind123/camoufox-free/commit/031108e0ed85469d834a9847bb5edcc17a4fcd84), guard
+- **Screen coordinates hold where the window manager won't move the window.**
+  Upstream's #997 moves the real window to the identity's position and reports
+  the real one. Where the window manager places the launch's window elsewhere,
+  `window.screenX/Y`, `mozInnerScreenX/Y` and event `screenX/Y` still report
+  the identity's position, consistently; a popup a page opened reports where it
+  really is. The getter costs what stock's does (getter-cost-parity.py).
+  ([031108e](https://github.com/coffeegrind123/camoufox-free/commit/031108e0ed85469d834a9847bb5edcc17a4fcd84), [2a48d607](https://github.com/coffeegrind123/camoufox-free/commit/2a48d6072738d8ac47d428e34bbac130ae0735e2), [96e66d86](https://github.com/coffeegrind123/camoufox-free/commit/96e66d86794e3652134a30eec73e9bc164aebfbd), guard
   [window-screen-origin.py](browser/tests/playwright/patches/window-screen-origin.py))
-- **Humanized moves reach the page one per refresh frame.** Firefox
-  coalesces a real mouse's motion into at most one `mousemove` per refresh
-  tick, but Juggler's synthesized moves played on the trajectory's own clock:
-  pages saw gaps of 5-13ms from Cursory and a steady ~22ms beat from mousecrack,
-  most of them mid-frame. Each point now waits for the window's refresh and a
-  frame sends the newest point due, as stock delivers a real mouse. It
-  replaces the trajectory-clock pacing upstream merged from our
-  [#808](https://github.com/daijro/camoufox/pull/808). Upstream's #997 does
-  the same through the renderer's own coalescing (measured: 92-94% of moves at
-  a tick); [#978](https://github.com/daijro/camoufox/pull/978) now offers only
-  the check.
-  ([MouseDispatch.js](browser/additions/juggler/input/MouseDispatch.js), guard
-  [humanize-mouse-trajectory.py](browser/tests/playwright/patches/humanize-mouse-trajectory.py))
 - **A humanized curve leaves the page as a real pointer does.** A point
   outside the viewport was skipped with no event, so a curve that strayed off
   the page left the cursor frozen at the edge with no `mouseout`, then
   reappearing elsewhere, mid-page when a slow frame coalesced the re-entry.
   The pointer now moves off the content (over the toolbar when it left through
   the top) and re-enters with `mouseover`, and a page's first move redraws a
-  path that climbs out of the page. The page exit is offered upstream in
-  [#987](https://github.com/daijro/camoufox/pull/987).
+  path that climbs out of the page. Ported onto upstream's #997 input design;
+  the page exit is offered upstream in
+  [#987](https://github.com/daijro/camoufox/pull/987), and the guard's check
+  that moves arrive at refresh ticks in
+  [#978](https://github.com/daijro/camoufox/pull/978).
   ([MouseDispatch.js](browser/additions/juggler/input/MouseDispatch.js), guard
   [humanize-mouse-trajectory.py](browser/tests/playwright/patches/humanize-mouse-trajectory.py))
 - **A context reports the launch's core count.** NewContext drew a fresh
@@ -239,16 +236,6 @@ For an identity whose OS is not the host's. Offered upstream in
   [4e1dde8](https://github.com/introvert/camoufox/commit/4e1dde86f5cfd8eb24afedef189ac976fed8df75).
   ([patch](browser/patches/zzz-context-locale.patch), guard
   [context-locale-follows.py](browser/tests/playwright/patches/context-locale-follows.py))
-- **A Linux host activates only the bundled fonts of the claimed OS.** Firefox
-  added `fonts/` as an application font directory, which fontconfig scans
-  recursively, so every OS's group sat on the search path and a Linux
-  identity's `Helvetica`, `Times` and `Courier` drew Apple's faces instead of
-  their Nimbus aliases. Only the files directly in `fonts/` are added now.
-  Ported from lang315's
-  [1b130b3](https://github.com/lang315/camoufox/commit/1b130b31ffa4196219faa1cd9abeffa147ead5db).
-  ([patch](browser/patches/linux-bundled-fonts-toplevel.patch), guard
-  [bundled-font-groups.py](browser/tests/playwright/patches/bundled-font-groups.py))
-
 ### Kept here after upstream declined
 
 - **`gpu_passthrough=True`.** A Linux container on Windows can render on the
@@ -292,9 +279,14 @@ For an identity whose OS is not the host's. Offered upstream in
 - **uBlock Origin's selected filter lists are the ten in its bundle.** Upstream
   bundles uBO and stops it updating lists, but uBO still selected regional lists
   for the browser's locale on first run and downloaded them before pages
-  loaded. The policy now selects only the lists inside the bundle. Ported from
-  lang315.
-  ([`policies.json`](browser/settings/distribution/policies.json), [9ec4708](https://github.com/coffeegrind123/camoufox-free/commit/9ec47080a87288f1227945ccc71170df07b3ce94))
+  loaded. `fetch-ubo.py` turns off that regional selection in the bundled
+  uBO. Ported from lang315.
+  ([fetch-ubo.py](browser/scripts/fetch-ubo.py), [9ec4708](https://github.com/coffeegrind123/camoufox-free/commit/9ec47080a87288f1227945ccc71170df07b3ce94), [2a48d607](https://github.com/coffeegrind123/camoufox-free/commit/2a48d6072738d8ac47d428e34bbac130ae0735e2))
+- **The bundled uBlock Origin is a committed release.** Upstream bundles AMO's
+  newest at build time. uBO 1.76.0 changed the global order of every page
+  after the first (`RegExp`), where stock and 1.75.4 do not, so
+  [`data/ubo.json`](browser/scripts/data/ubo.json) pins the release by
+  sha256 and a bump is a reviewed commit. ([73921940](https://github.com/coffeegrind123/camoufox-free/commit/739219402277874bec6326ad80bce4c5c9587327))
 - **Every user that runs the release can read all of it.** `addons/UBO` was
   staged in a 0700 directory and 64 Windows fonts shipped as 0600, so when root
   unzipped the release and another user ran it (the Docker image's app user),
@@ -303,11 +295,11 @@ For an identity whose OS is not the host's. Offered upstream in
   entry other users can't read. The release build then runs the uBO guard as a
   user that owns neither the browser nor the launcher. The packaging fix is
   offered upstream in [#1002](https://github.com/daijro/camoufox/pull/1002). ([8c39ce4](https://github.com/coffeegrind123/camoufox-free/commit/8c39ce46388a69c7909daea335b13007953a84d6), [432bd63](https://github.com/coffeegrind123/camoufox-free/commit/432bd6355a6a1965ca107526bcc28e485ffed3ae), [a494551](https://github.com/coffeegrind123/camoufox-free/commit/a494551287ec0585163f89607440fbb24aaa237d))
-- **DuckDuckGo is the default search engine.** Upstream's only engine is an
-  inert "None" at 127.0.0.1, so a search typed in the URL bar went nowhere. The
-  policy adds DuckDuckGo and makes it the default. Search suggestions stay off,
-  and a page can't read the browser's engine.
-  ([`policies.json`](browser/settings/distribution/policies.json), [6e24feb](https://github.com/coffeegrind123/camoufox-free/commit/6e24feb8b621bfdd794d1745105f08596a907040))
+- **DuckDuckGo is the default search engine.** Upstream's #997 restored
+  stock's engines and default. This fork keeps stock's engine list and makes
+  DuckDuckGo the default, in the search service's own engine selection, where a
+  page can't read it.
+  ([search-default-duckduckgo.patch](browser/patches/search-default-duckduckgo.patch), [6e24feb](https://github.com/coffeegrind123/camoufox-free/commit/6e24feb8b621bfdd794d1745105f08596a907040), [2a48d607](https://github.com/coffeegrind123/camoufox-free/commit/2a48d6072738d8ac47d428e34bbac130ae0735e2))
 - **Linux x86_64 releases built by this repo's CI**
   ([`build.yml`](.github/workflows/build.yml)), with sha256 digests. No PyPI or
   npm packages are published, and upstream's release train doesn't run. ([b70dc6c](https://github.com/coffeegrind123/camoufox-free/commit/b70dc6c52c1605ad8bcf7c7770cf99d2235dd8a0))

@@ -231,7 +231,6 @@ def test_sync_leaves_unchanged_files_and_patched_moz_build_alone(tmp_path):
     for path, content in {
         "additions/example.txt": "example\n",
         "settings/camoufox.cfg": "pref\n",
-        "settings/distribution/policies.json": "{}\n",
         "settings/defaults/pref/local-settings.js": "// pref\n",
         "settings/properties.json": "[]\n",
         "additions/browser/branding/camoufox/Assets.car": "asset\n",
@@ -248,7 +247,7 @@ def test_sync_leaves_unchanged_files_and_patched_moz_build_alone(tmp_path):
 
     command = [sys.executable, str(fake / "scripts/sync_additions.py"), str(tree)]
     first = subprocess.run(command, capture_output=True, text=True, check=True)
-    assert "6 file(s) changed" in first.stdout
+    assert "5 file(s) changed" in first.stdout
     source_mtime = (tree / "example.txt").stat().st_mtime_ns
     mozbuild = (tree / "lw/moz.build").read_text()
 

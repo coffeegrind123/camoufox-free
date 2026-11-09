@@ -312,11 +312,11 @@ persist a change there as a patch, never as an edit to that tree.
 | Path | What it is |
 |---|---|
 | `browser/` | The browser build: `Makefile`, `upstream.sh`, `multibuild.py`, `Dockerfile`, and the directories below. |
-| `browser/patches/` | Diffs applied to Firefox, including `playwright/`, `librewolf/` and `ghostery/`. Browser behaviour changes here. |
+| `browser/patches/` | Diffs applied to Firefox: one per behaviour at the top level, plus `playwright/`, `librewolf/` and `ghostery/`. Browser behaviour changes here. |
 | `browser/additions/camoucfg/` | The C++ config layer. `MaskConfig.hpp` reads `CAMOU_CONFIG`, which the patches consult. |
 | `browser/additions/juggler/` | Camoufox's Juggler, Playwright's Firefox protocol. The page agent runs in an isolated world. `input/` holds the cursor trajectory generators: Cursory (default) and mousecrack. |
-| `browser/settings/` | `camoufox.cfg` (prefs), `properties.json` (every config key and its type; a key the browser stops reading is marked `removed`, never deleted), policies. |
-| `browser/scripts/` | `patch.py` applies patches and writes the mozconfig; `sync_additions.py`, `patchstack.py`, `package.py`, `install-deps.sh`, font tooling. |
+| `browser/settings/` | `camoufox.cfg` (prefs), `properties.json` (every config key and its type; a key the browser stops reading is marked `removed`, never deleted). |
+| `browser/scripts/` | `patch.py` applies patches and writes the mozconfig; `sync_additions.py`, `patchstack.py`, `remote_settings.py`, `package.py`, `install-deps.sh`, font tooling. |
 | `browser/assets/` | Mozconfigs, README images. |
 | `browser/bundle/` | The per-OS `fontconfig/` files and `FONTS-README.txt`. The fonts are a release asset (`make fonts-extract`), pinned by `browser/scripts/data/font-bundle.json`. |
 | `browser/tests/` | Browser test suites (below): `build-tester/`, `native/`, `service/`, `playwright/`. |
@@ -348,7 +348,8 @@ x86_64 Linux and Windows, thin elsewhere) and Rust SIMD, from
 `browser/assets/base.mozconfig`. `make dir` installs the Rust release Mozilla
 builds the tree with and fetches the profile pinned in
 `browser/scripts/data/pgo-profiles.json`; after bumping `upstream.sh`, run
-`python3 scripts/pgo.py pin`. Install `ccache`. It caches compiles but not the
+`python3 scripts/pgo.py pin` and `python3 scripts/remote_settings.py pin` (the
+page-visible lists, bundled so the browser never polls for them). Install `ccache`. It caches compiles but not the
 LTO link, so an incremental build still relinks libxul across C++ and Rust.
 After editing Juggler, prefs or copied resources, run `make build-js`; after
 editing C++, run `make build-cpp`. `make sync` copies changed additions without
@@ -441,9 +442,13 @@ this section in step with the launcher options.
 - **`geoip` in Python needs the extra**: `pip install "camoufox[geoip]"`, else `NotInstalledGeoIPExtra`.
 - **`InvalidIP`** is raised when the public-IP or proxy exit-IP lookup fails, or when `webrtc_ip` is not a valid IPv4/IPv6 address. Pass `webrtc_ip`, `timezone_id`, `locale` and `geolocation` to `NewContext` to skip the lookup.
 - **`InvalidProxy`** means the proxy could not be parsed or configured. SOCKS5
-  credentials at launch are moved out of Playwright through
-  `CAMOU_PROXY_CREDENTIALS`; a credential-bearing SOCKS5 proxy passed to
-  `NewContext` raises because Playwright rejects it before Juggler.
+  credentials are taken out of what Playwright sees, which rejects them, and
+  handed to Juggler: a launch-level proxy's through `CAMOU_PROXY_AUTH`, a
+  context's (`NewContext`, or `new_context()` on a Camoufox browser) through an
+  init script Juggler removes before any page runs. Juggler also reads a
+  caller-declared `CAMOU_PROXY_CREDENTIALS` map. A proxy that refuses the
+  credentials, or credentials that cannot be parsed, fail the connection; it
+  never goes direct.
 - **`UnknownIPLocation`**: the IP is not in the GeoIP database; pass `locale` and set coordinates another way.
 - **Version ceilings:** Playwright below 1.63; Node.js 22.15 or newer.
 - **Each package release is paired with one browser build.** `camoufox set` overrides it (with a warning at launch), the `browser` option overrides it for one launch, and `camoufox set --release` restores it.

@@ -24,6 +24,7 @@ import {
 	clampScreenToDisplay,
 	clampWindowDimensions,
 	clampWindowPosition,
+	drawVoiceConfig,
 	dropAudioSeed,
 	fixHardwareConcurrency,
 	fixNavigatorArch,
@@ -43,6 +44,7 @@ import {
 	setMediaDevicesDefaults,
 	targetOsFromPlatform,
 	voicePool,
+	voicePoolSpeechd,
 	WINDOWS_11_MARKER_FONTS,
 } from "./fingerprints.js";
 import { geoipAllowed, getGeolocation } from "./geolocation.js";
@@ -58,11 +60,14 @@ import {
 	WINDOWS_WEBGPU_LIMITS,
 } from "./host_rendering.js";
 import {
-	PROXY_CREDENTIALS_ENV,
 	type ProxyConfig,
 	ProxyHelper,
+	proxyAuthEnv,
+	proxyAuthInitScript,
+	proxyAuthOf,
 	publicIP,
 	publicIPv6,
+	socks5Auth,
 	splitSocksCredentials,
 	validIPv4,
 	validIPv6,
@@ -110,6 +115,44 @@ import {
 import { firefoxGpus, sampleWebglForScreen, webglForGpu } from "./webgl.js";
 
 type ListOrString = string | string[];
+export function savedPref(
+	profileDir: string | undefined,
+	pref: string,
+): unknown {
+	if (!profileDir) return undefined;
+	let text: string;
+	try {
+		text = fs.readFileSync(path.join(profileDir, "prefs.js"), "utf-8");
+	} catch {
+		return undefined;
+	}
+	const escaped = pref.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+	const m = new RegExp(`user_pref\\("${escaped}",\\s*(.+?)\\);`).exec(text);
+	if (!m) return undefined;
+	try {
+		return JSON.parse(m[1]);
+	} catch {
+		return m[1];
+	}
+}
+
+/** Write a toggle only when on, or to clear a persistent non-stock value. */
+export function setTogglePref(
+	prefs: Record<string, unknown>,
+	pref: string,
+	on: boolean,
+	stock: unknown,
+	toggled: unknown,
+	profileDir: string | undefined,
+): void {
+	if (on) {
+		prefs[pref] ??= toggled;
+		return;
+	}
+	const saved = savedPref(profileDir, pref);
+	if (saved !== undefined && saved !== stock) prefs[pref] ??= stock;
+}
+
 export type TargetOS = "mac" | "win" | "lin";
 type EnvVars = Record<string, string | number | boolean>;
 
@@ -292,6 +335,7 @@ export const utilsDeps = {
 	raiseScreenToModernFloor,
 	generateRandomFontSubset,
 	generateRandomVoiceSubset,
+	drawVoiceConfig,
 	setMediaDevicesDefaults,
 	hostGpu,
 	selectGpu,
@@ -629,6 +673,9 @@ export function validateConfig(
 	for (const [key, value] of Object.entries(configMap)) {
 		const entry = properties[key];
 		if (!entry) {
+			if (key === "voices:speechd") {
+				LeakWarning.warn("voices_unread");
+			}
 			utilsDeps.print(`Skipping unknown patch ${key} : ${pyStr(value)}`);
 			continue; // Property not supported by this browser version; skip silently
 		}
@@ -646,6 +693,9 @@ export function validateConfig(
 			);
 		}
 
+		if (key === "voices:speechd" || key === "voices:pool:speechd") {
+			validateSpeechdVoices(value);
+		}
 		if (key === "voices") {
 			validateVoices(value);
 		}
@@ -728,6 +778,29 @@ export function validateVoices(voices: any): void {
 			);
 		}
 	});
+}
+
+/**
+ * Validates a `voices:speechd` grid: {"languages": [[name, lang], ...],
+ * "variants": [name, ...]}, the shape MaskConfig::MSpeechdVoices() expands.
+ */
+export function validateSpeechdVoices(grid: any): void {
+	const { languages, variants } = grid ?? {};
+	const ok =
+		Array.isArray(languages) &&
+		languages.every(
+			(e: unknown) =>
+				Array.isArray(e) &&
+				e.length === 2 &&
+				e.every((x) => typeof x === "string"),
+		) &&
+		Array.isArray(variants) &&
+		variants.every((v: unknown) => typeof v === "string");
+	if (!ok) {
+		throw new InvalidPropertyType(
+			'Invalid voices:speechd: expected {"languages": [[name, lang], ...], "variants": [name, ...]}',
+		);
+	}
 }
 
 /**
@@ -1127,6 +1200,38 @@ export function attachStockMediaDefaults<T>(target: T): T {
 	return target;
 }
 
+const CAMOUFOX_SOCKS5_AUTH = Symbol.for("camoufox.socks5Auth");
+
+/**
+ * Let newContext()/newPage() of `target` take a SOCKS5 proxy with a username
+ * and password (python/src/camoufox/utils.py attach_socks5_auth).
+ *
+ * Playwright refuses one ("Browser does not support socks5 proxy
+ * authentication"). The context is made with the proxy alone, and an init
+ * script hands Juggler the credentials before newContext() resolves
+ * (socks5Auth, proxyAuthInitScript). Playwright's newPage() makes its context
+ * through newContext(), so it is covered too.
+ */
+export function attachSocks5Auth<T>(target: T): T {
+	const owner = target as any;
+	const original = owner?.newContext;
+	if (typeof original !== "function" || original[CAMOUFOX_SOCKS5_AUTH])
+		return target;
+	const newContext = async (options?: Record<string, any>, ...rest: any[]) => {
+		const [proxy, auth] = socks5Auth(options?.proxy);
+		const context = await original.call(
+			target,
+			options && auth ? { ...options, proxy } : options,
+			...rest,
+		);
+		if (auth) await context.addInitScript(proxyAuthInitScript(auth));
+		return context;
+	};
+	(newContext as any)[CAMOUFOX_SOCKS5_AUTH] = true;
+	owner.newContext = newContext;
+	return target;
+}
+
 /**
  * Warn when newPage()/newContext() asks for isMobile: Camoufox only has desktop
  * identities, and Juggler ignores the option (TargetRegistry.js).
@@ -1519,7 +1624,9 @@ export interface LaunchOptions {
 	fingerprint_preset?: boolean | Record<string, any>;
 	/** Firefox version to use. Defaults to the current Camoufox version. */
 	ff_version?: number;
-	/** Whether to run the browser in headless mode. Defaults to false. */
+	/** Whether to run the browser in headless mode. Defaults to false.
+	 * NewBrowser and launchServer run headless: true on Linux on Xvfb when available;
+	 * launchOptions() alone starts no display. */
 	headless?: boolean;
 	/** Whether to enable running scripts in the main world ("mw:" prefix). */
 	main_world_eval?: boolean;
@@ -1617,7 +1724,6 @@ export async function launchOptions({
 	gpu_passthrough,
 	...passthrough
 }: LaunchOptions = {}): Promise<Record<string, any>> {
-	const callerEnv = env;
 	const proxyForLookup = proxy;
 	const [playwrightProxy, proxyCredentials] = splitSocksCredentials(proxy);
 	proxy = playwrightProxy;
@@ -1689,7 +1795,7 @@ export async function launchOptions({
 	const userSetScreenWindow = isDomainSet(config, "screen.", "window.");
 	const userSetMediaDevices = isDomainSet(config, "mediaDevices:");
 	const userSetFonts = Boolean(fonts?.length) || isDomainSet(config, "fonts");
-	const userSetVoices = isDomainSet(config, "voices");
+	const userSetVoices = isDomainSet(config, "voices", "voices:speechd");
 	const userSetDnt = "navigator.doNotTrack" in config;
 	const userSetGpc = "navigator.globalPrivacyControl" in config;
 	const userSetAcceptEncoding = "headers.Accept-Encoding" in config;
@@ -1939,6 +2045,14 @@ export async function launchOptions({
 		setInto(firefox_user_prefs, "ui.useOverlayScrollbars", 1);
 	}
 
+	// Stock doubles a wheel's lines on Windows and Linux and never on macOS, and
+	// a page reads the result in deltaY (docs/input-dispatch.md).
+	setInto(
+		firefox_user_prefs,
+		"mousewheel.system_scroll_override.enabled",
+		targetOs !== "mac",
+	);
+
 	// A Windows identity on another host: answers that come from the host
 	// build's platform code are set to what stock Windows Firefox gives.
 	if (targetOs === "win" && utilsDeps.hostOsKey() !== "win") {
@@ -2144,7 +2258,10 @@ export async function launchOptions({
 	// `voices` unset exposes every native voice on the box (#731). Drawn after
 	// the locale is resolved: the Windows voice list is the display language's
 	// pack.
-	if (!userSetVoices || !("voices" in config)) {
+	if (
+		!userSetVoices ||
+		(!("voices" in config) && !("voices:speechd" in config))
+	) {
 		const osNameV = OS_NAMES[targetOs] ?? "macos";
 		let voiceLocale = config["navigator.language"];
 		if (pyTruthy(config["locale:language"])) {
@@ -2153,10 +2270,13 @@ export async function launchOptions({
 				.join("-");
 		}
 		try {
-			config.voices = utilsDeps.generateRandomVoiceSubset(
-				osNameV,
-				voiceLocale ?? null,
-				utilsDeps.identitySeed(config, salt),
+			Object.assign(
+				config,
+				utilsDeps.drawVoiceConfig(
+					osNameV,
+					voiceLocale ?? null,
+					utilsDeps.identitySeed(config, salt),
+				),
 			);
 		} catch (e) {
 			if (!isPyError(e, "OSError", "ValueError", "KeyError")) throw e;
@@ -2180,6 +2300,9 @@ export async function launchOptions({
 	// registers every voice such a draw can take, and shows each context only
 	// the ones it lists.
 	setInto(config, "voices:pool", voicePool());
+	// Linux's speech-dispatcher voices, as one grid of every release: a Linux
+	// context's list names them, and they are too many to list in voices:pool.
+	setInto(config, "voices:pool:speechd", voicePoolSpeechd());
 
 	// Pass the humanize option
 	if (humanize_engine !== undefined && humanize_engine !== null) {
@@ -2214,19 +2337,36 @@ export async function launchOptions({
 		setInto(config, "allowAddonNewtab", true);
 	}
 
-	// Set Firefox user preferences. Each toggle writes its pref on or off: a
-	// persistent profile keeps a user.js pref in prefs.js after the launch that
-	// set it, so a flag that only wrote when on stayed on for good.
+	// Fresh profiles get a toggle's pref only when on. A persistent profile
+	// may need the stock value written once to clear an earlier toggled value.
 	if (block_images) {
 		LeakWarning.warn("block_images", i_know_what_im_doing);
 	}
 	if (disable_coop) {
 		LeakWarning.warn("disable_coop", i_know_what_im_doing);
 	}
-	firefox_user_prefs["permissions.default.image"] ??= block_images ? 2 : 1;
-	firefox_user_prefs["media.peerconnection.enabled"] ??= !block_webrtc;
-	firefox_user_prefs["browser.tabs.remote.useCrossOriginOpenerPolicy"] ??=
-		!disable_coop;
+	const profileDir = (passthrough.user_data_dir ?? passthrough.userDataDir) as
+		| string
+		| undefined;
+	for (const [on, pref, stock, toggled] of [
+		[block_images, "permissions.default.image", 1, 2],
+		[block_webrtc, "media.peerconnection.enabled", true, false],
+		[
+			disable_coop,
+			"browser.tabs.remote.useCrossOriginOpenerPolicy",
+			true,
+			false,
+		],
+	] as [unknown, string, unknown, unknown][]) {
+		setTogglePref(
+			firefox_user_prefs,
+			pref,
+			Boolean(on),
+			stock,
+			toggled,
+			profileDir,
+		);
+	}
 	// A persistent context takes its context options here.
 	if (passthrough.is_mobile || passthrough.isMobile) {
 		LeakWarning.warn("is_mobile", i_know_what_im_doing);
@@ -2441,18 +2581,17 @@ export async function launchOptions({
 	warnIfExecutablePredatesPlaywright(executable_path);
 	utilsDeps.validateConfig(config, executable_path);
 
-	// Prepare environment variables to pass to Camoufox
+	// Prepare environment variables to pass to Camoufox. A SOCKS5 proxy's
+	// credentials go to Juggler, not through Playwright, which refuses them;
+	// splitSocksCredentials took them off `proxy` above. Juggler reads
+	// CAMOU_PROXY_AUTH once and clears it. A caller's own
+	// CAMOU_PROXY_CREDENTIALS map (more endpoints) passes through env.
 	const envVars: EnvVars = {
 		...utilsDeps.getEnvVars(config, targetOs, executable_path),
 		...getPrefEnvVars(firefox_user_prefs),
+		...(proxyCredentials ? proxyAuthEnv(proxyAuthOf(proxyCredentials)) : {}),
 		...env,
 	};
-	if (
-		proxyCredentials &&
-		!(callerEnv != null && Object.hasOwn(callerEnv, PROXY_CREDENTIALS_ENV))
-	) {
-		envVars[PROXY_CREDENTIALS_ENV] = JSON.stringify(proxyCredentials);
-	}
 
 	const result: Record<string, any> = {
 		executablePath: resolvedExecutable,

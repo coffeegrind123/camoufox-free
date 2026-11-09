@@ -256,6 +256,12 @@ def main():
             for tag, data in (('union', sorted(union)), ('unreported', unreported), ('unbundled', unbundled)):
                 with open(os.path.join(args.dump_union, f'{os_key}-{tag}.txt'), 'w', encoding='utf-8') as fh:
                     fh.write('\n'.join(data) + '\n')
+        # A base "has" an alias name fonts.conf rewrites only where that OS
+        # version resolves it (base_has_alias): the alias renders only through
+        # its target. Calibri and Cambria (Carlito, Caladea) are LibreOffice's
+        # on Linux, not a stock Ubuntu's; every Linux identity claimed them,
+        # and only Windows' own files, which the bundled-font activation leaked
+        # to every OS, rendered them.
         bases_out[os_key] = {
             key: sorted(
                 (set(base['fonts']) & reportable)

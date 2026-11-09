@@ -1,15 +1,25 @@
 /**
- * SOCKS5 credentials travel through the launch environment because Playwright's
- * driver rejects them in the public proxy options.
+ * SOCKS5 credentials go to Juggler, not Playwright, whose driver rejects them
+ * in the public proxy options: a launch proxy's in CAMOU_PROXY_AUTH, a
+ * context's in an init script (socks5-auth.test.ts). A caller's own
+ * CAMOU_PROXY_CREDENTIALS map passes through the launch environment.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { isolateLaunch, restoreDeps, utils } from "./launch-host.js";
 
-const impit = vi.hoisted(() => ({ requests: 0 }));
+const impit = vi.hoisted(() => ({
+	requests: 0,
+	proxies: [] as Array<string | undefined>,
+}));
 
 vi.mock("impit", () => ({
 	Impit: class {
+		proxyUrl?: string;
+		constructor(options: { proxyUrl?: string } = {}) {
+			this.proxyUrl = options.proxyUrl;
+		}
 		async fetch(): Promise<never> {
+			impit.proxies.push(this.proxyUrl);
 			impit.requests++;
 			throw new Error("geo lookup must not run");
 		}
@@ -17,9 +27,8 @@ vi.mock("impit", () => ({
 }));
 
 const { InvalidProxy } = await import("../src/exceptions.js");
-const { PROXY_CREDENTIALS_ENV, splitSocksCredentials } = await import(
-	"../src/ip.js"
-);
+const { PROXY_AUTH_ENV, PROXY_CREDENTIALS_ENV, splitSocksCredentials } =
+	await import("../src/ip.js");
 const { NewContext } = await import("../src/sync_api.js");
 
 function launch(
@@ -40,18 +49,24 @@ function launch(
 function fakeBrowser() {
 	let contexts = 0;
 	let options: Record<string, any> | undefined;
+	const scripts: string[] = [];
 	const browser = {
 		version: () => "152.0.4",
 		newContext: async (value: Record<string, any>) => {
 			contexts++;
 			options = value;
-			return { addInitScript: async () => undefined };
+			return {
+				addInitScript: async (script: string) => {
+					scripts.push(script);
+				},
+			};
 		},
 	};
 	return {
 		browser: browser as any,
 		contexts: () => contexts,
 		options: () => options,
+		scripts: () => scripts,
 	};
 }
 
@@ -59,6 +74,7 @@ beforeEach(() => {
 	restoreDeps();
 	isolateLaunch();
 	impit.requests = 0;
+	impit.proxies = [];
 });
 
 afterEach(() => {
@@ -165,7 +181,7 @@ describe("splitSocksCredentials", () => {
 });
 
 describe("launchOptions SOCKS5 credentials", () => {
-	it("sanitizes the proxy and injects the endpoint map", async () => {
+	it("sanitizes the proxy and hands the credentials to Juggler", async () => {
 		const options = await launch(
 			{
 				server: "socks5h://embedded-user:embedded-pass@Proxy.Example.com:1080",
@@ -178,12 +194,13 @@ describe("launchOptions SOCKS5 credentials", () => {
 		expect(options.proxy).toEqual({
 			server: "socks5://proxy.example.com:1080",
 		});
-		expect(JSON.parse(options.env[PROXY_CREDENTIALS_ENV])).toEqual({
-			"proxy.example.com:1080": {
-				username: "launch-user",
-				password: "launch-pass",
-			},
+		expect(JSON.parse(options.env[PROXY_AUTH_ENV])).toEqual({
+			host: "proxy.example.com",
+			port: 1080,
+			username: "launch-user",
+			password: "launch-pass",
 		});
+		expect(options.env).not.toHaveProperty(PROXY_CREDENTIALS_ENV);
 	});
 
 	it("keeps an explicitly supplied credentials environment", async () => {
@@ -213,6 +230,12 @@ describe("launchOptions SOCKS5 credentials", () => {
 			server: "socks5://proxy-c.example.com:1080",
 		});
 		expect(options.env[PROXY_CREDENTIALS_ENV]).toBe(declared);
+		expect(JSON.parse(options.env[PROXY_AUTH_ENV])).toEqual({
+			host: "proxy-c.example.com",
+			port: 1080,
+			username: "user-c",
+			password: "pass-c",
+		});
 		expect(options.env.UNCHANGED).toBe("value");
 	});
 
@@ -255,6 +278,7 @@ describe("launchOptions SOCKS5 credentials", () => {
 			server: "socks5://proxy.example.com:1080",
 		});
 		expect(options.env).not.toHaveProperty(PROXY_CREDENTIALS_ENV);
+		expect(options.env).not.toHaveProperty(PROXY_AUTH_ENV);
 	});
 
 	it("rejects a SOCKS5 proxy without an explicit port before launch assembly", async () => {
@@ -276,15 +300,46 @@ describe("NewContext SOCKS5 credentials", () => {
 			username: "user",
 			password: "pass",
 		},
-	])("fails closed before the geo lookup for %o", async (proxy) => {
+	])("looks the exit up through the authenticated proxy for %o", async (proxy) => {
 		const { browser, contexts } = fakeBrowser();
 
-		const created = NewContext(browser, { os: "linux", proxy });
-
-		await expect(created).rejects.toThrow(InvalidProxy);
-		await expect(created).rejects.toThrow(/CAMOU_PROXY_CREDENTIALS/);
-		expect(impit.requests).toBe(0);
+		await expect(NewContext(browser, { os: "linux", proxy })).rejects.toThrow(
+			/geo lookup must not run/,
+		);
+		expect(impit.requests).toBe(1);
+		expect(impit.proxies).toEqual([
+			"socks5://user:pass@proxy.example.com:1080",
+		]);
 		expect(contexts()).toBe(0);
+	});
+
+	it.each([
+		{ server: "socks5://user:pass@proxy.example.com:1080" },
+		{
+			server: "socks5h://proxy.example.com:1080",
+			username: "user",
+			password: "pass",
+		},
+	])("hands the credentials to Juggler, not Playwright, for %o", async (proxy) => {
+		const { browser, contexts, options, scripts } = fakeBrowser();
+
+		await NewContext(browser, {
+			os: "linux",
+			proxy,
+			webrtc_ip: "198.51.100.1",
+			timezoneId: "UTC",
+			locale: "en-US",
+			geolocation: { latitude: 40.7128, longitude: -74.006 },
+		} as any);
+
+		expect(impit.requests).toBe(0);
+		expect(contexts()).toBe(1);
+		expect(options()?.proxy).toEqual({
+			server: "socks5://proxy.example.com:1080",
+		});
+		expect(scripts()[0]).toBe(
+			'camoufoxProxyAuth: ({"host":"proxy.example.com","port":1080,"username":"user","password":"pass"});',
+		);
 	});
 
 	it("skips the lookup when the caller supplies all four geo values", async () => {

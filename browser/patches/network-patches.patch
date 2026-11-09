@@ -1,8 +1,8 @@
 diff --git a/netwerk/base/nsSocketTransport2.cpp b/netwerk/base/nsSocketTransport2.cpp
-index d617846df3..022d1a5427 100644
+index 440e4b8dfd..12c77533a5 100644
 --- a/netwerk/base/nsSocketTransport2.cpp
 +++ b/netwerk/base/nsSocketTransport2.cpp
-@@ -1622,7 +1622,13 @@ nsresult nsSocketTransport::InitiateSocket() {
+@@ -1677,7 +1677,13 @@ nsresult nsSocketTransport::InitiateSocket() {
    }
  #endif
  
@@ -62,10 +62,10 @@ index 4077f003ab..44335fa1d7 100644
    bool ToStringBuffer(char* buf, uint32_t bufSize) const;
    bool ToString(nsACString& aOutput) const;
 diff --git a/netwerk/dns/moz.build b/netwerk/dns/moz.build
-index 2369794f24..8e80ebeaa4 100644
+index 513f9476b1..ce64681552 100644
 --- a/netwerk/dns/moz.build
 +++ b/netwerk/dns/moz.build
-@@ -107,6 +107,7 @@ GeneratedFile(
+@@ -109,6 +109,7 @@ GeneratedFile(
  
  # need to include etld_data.inc
  LOCAL_INCLUDES += [
@@ -74,7 +74,7 @@ index 2369794f24..8e80ebeaa4 100644
      "/netwerk/ipc",
      "/netwerk/protocol/http",
 diff --git a/netwerk/dns/nsDNSService2.cpp b/netwerk/dns/nsDNSService2.cpp
-index 11d0b319d6..5e79cea81d 100644
+index b3d05f1bb2..5c980f0b3a 100644
 --- a/netwerk/dns/nsDNSService2.cpp
 +++ b/netwerk/dns/nsDNSService2.cpp
 @@ -4,6 +4,8 @@
@@ -86,7 +86,7 @@ index 11d0b319d6..5e79cea81d 100644
  #include "DNSAdditionalInfo.h"
  #include "TRRService.h"
  #include "mozilla/ClearOnShutdown.h"
-@@ -1391,7 +1393,8 @@ nsDNSService::Observe(nsISupports* subject, const char* topic,
+@@ -1416,7 +1418,8 @@ nsDNSService::Observe(nsISupports* subject, const char* topic,
  uint16_t nsDNSService::GetAFForLookup(const nsACString& host,
                                        nsIDNSService::DNSFlags flags) {
    if (StaticPrefs::network_dns_disableIPv6() ||
@@ -97,10 +97,10 @@ index 11d0b319d6..5e79cea81d 100644
    }
  
 diff --git a/netwerk/protocol/http/HttpConnectionUDP.cpp b/netwerk/protocol/http/HttpConnectionUDP.cpp
-index 63353c402b..9d244330dd 100644
+index db77675dde..c662beac36 100644
 --- a/netwerk/protocol/http/HttpConnectionUDP.cpp
 +++ b/netwerk/protocol/http/HttpConnectionUDP.cpp
-@@ -280,6 +280,11 @@ nsresult HttpConnectionUDP::InitCommon(nsIUDPSocket* aSocket,
+@@ -303,6 +303,11 @@ nsresult HttpConnectionUDP::InitCommon(nsIUDPSocket* aSocket,
                                         const NetAddr& aPeerAddr,
                                         nsIInterfaceRequestor* callbacks,
                                         uint32_t caps, bool isInTunnel) {
@@ -125,7 +125,7 @@ index 1b8068f235..101ab978e2 100644
 +LOCAL_INCLUDES += ["/camoucfg"]
 \ No newline at end of file
 diff --git a/netwerk/protocol/http/nsHttpHandler.cpp b/netwerk/protocol/http/nsHttpHandler.cpp
-index 0192e5f6f2..a43ecf238e 100644
+index c35867b90d..4286a89d4f 100644
 --- a/netwerk/protocol/http/nsHttpHandler.cpp
 +++ b/netwerk/protocol/http/nsHttpHandler.cpp
 @@ -12,6 +12,7 @@
@@ -136,7 +136,8 @@ index 0192e5f6f2..a43ecf238e 100644
  #include "SerializedLoadContext.h"
  #include "TRRServiceChannel.h"
  #include "Tickler.h"
-@@ -993,6 +994,26 @@ uint8_t nsHttpHandler::UrgencyFromCoSFlags(uint32_t cos,
+@@ -1001,7 +1002,27 @@ uint8_t nsHttpHandler::UrgencyFromCoSFlags(uint32_t cos,
+ // nsHttpHandler <private>
  //-----------------------------------------------------------------------------
  
 +// Camoufox: the spoofed User-Agent, or null without one. CAMOU_CONFIG never
@@ -163,14 +164,8 @@ index 0192e5f6f2..a43ecf238e 100644
    if (aShouldResistFingerprinting && !mSpoofedUserAgent.IsEmpty()) {
      LOG(("using spoofed userAgent : %s\n", mSpoofedUserAgent.get()));
      return mSpoofedUserAgent;
-@@ -2113,15 +2134,19 @@ nsresult nsHttpHandler::SetAcceptLanguages() {
-           rv = gHttpHandler->SetAcceptLanguages();
-         }));
-     return rv;
-   }
+@@ -2120,6 +2141,11 @@ nsresult nsHttpHandler::SetAcceptLanguages() {
  
-   MOZ_ASSERT(NS_IsMainThread());
--
    mAcceptLanguagesIsDirty = false;
  
 +  if (auto value = MaskConfig::GetString("headers.Accept-Language")) {
@@ -181,32 +176,34 @@ index 0192e5f6f2..a43ecf238e 100644
    nsAutoCString acceptLanguages;
    intl::LocaleService::GetInstance()->GetAcceptLanguages(acceptLanguages);
  
-   nsAutoCString buf;
-   nsresult rv = PrepareAcceptLanguages(acceptLanguages.get(), buf);
-   if (NS_SUCCEEDED(rv)) {
-@@ -2129,13 +2154,25 @@ nsresult nsHttpHandler::SetAcceptLanguages() {
-   }
-   return rv;
- }
+@@ -2133,6 +2159,30 @@ nsresult nsHttpHandler::SetAcceptLanguages() {
  
  nsresult nsHttpHandler::SetAcceptEncodings(const char* aAcceptEncodings,
                                             bool isSecure, bool isDictionary) {
-+  // Camoufox: headers.Accept-Encoding replaces the list sent over https only.
++  // Camoufox: headers.Accept-Encoding replaces the list sent over https.
 +  // Firefox keeps three lists -- plain http ("gzip, deflate"), https and
 +  // dictionary-eligible requests (adds "dcb, dcz") -- and one value written
 +  // over all three makes http:// requests claim encodings no Firefox sends
-+  // there.
++  // there. Stock builds the dictionary list as the https list plus
++  // network.http.accept-encoding.dictionary (PrefsChanged), so a request that
++  // offers a dictionary sends the override followed by dcb/dcz, as stock's
++  // does after its own https list.
 +  nsCString encodingOverride;
-+  if (isSecure && !isDictionary) {
++  if (isSecure) {
 +    if (auto value = MaskConfig::GetString("headers.Accept-Encoding")) {
 +      encodingOverride.Assign(value.value().c_str());
++      if (isDictionary) {
++        nsAutoCString dictionaryEncodings;
++        if (NS_SUCCEEDED(Preferences::GetCString(
++                HTTP_PREF("accept-encoding.dictionary"), dictionaryEncodings)) &&
++            !dictionaryEncodings.IsEmpty()) {
++          encodingOverride.Append(", "_ns);
++          encodingOverride.Append(dictionaryEncodings);
++        }
++      }
 +      aAcceptEncodings = encodingOverride.get();
 +    }
 +  }
    if (isDictionary) {
      mDictionaryAcceptEncodings = aAcceptEncodings;
    } else if (isSecure) {
-     mHttpsAcceptEncodings = aAcceptEncodings;
-   } else {
-     // use legacy list if a secure override is not specified
-     mHttpAcceptEncodings = aAcceptEncodings;

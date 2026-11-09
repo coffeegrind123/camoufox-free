@@ -1,0 +1,29 @@
+Camoufox: DuckDuckGo is the default search engine.
+
+Stock's engines are back (no policies.json, no-search-engines.patch removed),
+and only the application default changes, to the "ddg" engine that
+search-config-v2 lists for every region and locale. No page can read which
+engine the browser uses; a SearchEngines policy would put Firefox in enterprise
+mode (enterprise-policies.py), which pages can tell.
+
+diff --git a/toolkit/components/search/SearchEngineSelector.sys.mjs b/toolkit/components/search/SearchEngineSelector.sys.mjs
+index 3a42b383af..6909774a1c 100644
+--- a/toolkit/components/search/SearchEngineSelector.sys.mjs
++++ b/toolkit/components/search/SearchEngineSelector.sys.mjs
+@@ -233,6 +233,16 @@
+       e => !e.optional
+     );
+ 
++    // Camoufox: DuckDuckGo is the application default engine wherever the
++    // configuration lists it (search-config-v2 lists it for every region and
++    // locale), so a URL-bar search goes there. Only the default changes: the
++    // engines and their order stay stock's, and no page can read which engine
++    // the browser uses. A SearchEngines policy would do this, but any
++    // policies.json puts Firefox in enterprise mode, which pages can tell.
++    if (refinedSearchConfig.engines.some(e => e.identifier == "ddg")) {
++      refinedSearchConfig.appDefaultEngineId = "ddg";
++    }
++
+     if (
+       !refinedSearchConfig.appDefaultEngineId ||
+       !refinedSearchConfig.engines.find(

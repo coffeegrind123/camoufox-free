@@ -17,6 +17,7 @@ import pytest
 
 from camoufox.fingerprints import (
     _generate_random_voice_subset,
+    _speechd_voices,
     _normalize_preset_voices,
 )
 
@@ -38,11 +39,76 @@ def test_entries_are_full_objects(target_os):
         assert _REQUIRED_FIELDS <= set(v.keys())
 
 
-@pytest.mark.parametrize("target_os", ["macos", "windows", "linux"])
+@pytest.mark.parametrize("target_os", ["windows", "linux"])
 def test_no_default_voice(target_os):
-    # Stock Firefox 152 marks no SpeechSynthesisVoice.default on any OS.
+    # Stock Firefox marks no SpeechSynthesisVoice.default with SAPI or
+    # speech-dispatcher.
     voices = _generate_random_voice_subset(target_os, "en-US")
     assert voices and not any(v["isDefault"] for v in voices)
+
+
+def test_macos_system_voice_is_default():
+    # Stock Firefox on macOS 14, 15, 26 and 27 marks the system voice default:
+    # Samantha on an English system.
+    voices = _generate_random_voice_subset("macos", "en-US", seed=1)
+    assert [v["name"] for v in voices if v["isDefault"]] == ["Samantha"]
+
+
+@pytest.mark.parametrize("seed", range(40))
+def test_linux_voices_follow_the_font_release(seed):
+    # One machine runs one Ubuntu release: its voices and its fonts are that
+    # release's, never a mix. 24.04 lists 13362 speech-dispatcher voices and
+    # 26.04 lists 14805 (measured on each release's default install).
+    import camoufox.fingerprints as fp
+
+    release = fp._pick_release("lin", fp._rng(seed))["id"]
+    base = next(b for b in fp._load_font_bases()["lin"] if b["id"] == release)
+    assert set(base["fonts"]) <= set(fp._generate_random_font_subset("linux", seed=seed))
+    count = len(_generate_random_voice_subset("linux", seed=seed))
+    assert count == {"ubuntu2404": 13362, "ubuntu2604": 14805}[release]
+
+
+def test_linux_voices_are_speech_dispatchers_order():
+    # Each espeak-ng language alone, then with each variant, as
+    # spd_list_synthesis_voices() returns them.
+    names = [v["name"] for v in _generate_random_voice_subset("linux", seed=1)[:3]]
+    assert names == ["Afrikaans", "Afrikaans+Adam", "Afrikaans+Alex"]
+
+
+@pytest.mark.usefixtures("any_installed_browser")
+def test_linux_launch_carries_the_grid():
+    # ~15000 voice objects do not fit in the environment; the grid does.
+    cfg = _launch_config(os="linux")
+    grid = cfg["voices:speechd"]
+    assert "voices" not in cfg
+    assert len(grid["languages"]) in (131, 141)
+    assert cfg["voices:blockIfNotDefined"] is True
+
+
+@pytest.mark.usefixtures("any_installed_browser")
+def test_a_given_speechd_grid_is_kept():
+    # A caller's grid is the identity's voices,
+    # not something to draw over.
+    grid = {"languages": [["English (America)", "en-US"]], "variants": ["Adam"]}
+    cfg = _launch_config(os="linux", config={"voices:speechd": grid})
+    assert cfg["voices:speechd"] == grid
+    assert "voices" not in cfg
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        {"languages": [["Afrikaans", "af"]]},  # no variants
+        {"languages": [["Afrikaans"]], "variants": []},  # language without a code
+        {"languages": [["Afrikaans", "af"]], "variants": [1]},
+        [["Afrikaans", "af"]],  # not an object
+    ],
+)
+def test_validate_speechd_voices_rejects_unusable_shapes(value):
+    from camoufox.utils import validate_speechd_voices
+
+    with pytest.raises(InvalidPropertyType):
+        validate_speechd_voices(value)
 
 
 def test_windows_display_language_pack():
@@ -75,8 +141,11 @@ class TestLinuxSpeechdUris:
         gb = next(v for v in self.lin if v["name"] == "English (Great Britain)")
         assert gb["voiceUri"] == "urn:moz-tts:speechd:English%20(Great%20Britain)?en-GB"
 
-    def test_all_local_service(self):
-        assert all(v["isLocalService"] for v in self.lin)
+    def test_none_local_service(self):
+        # Stock reports localService false for every speech-dispatcher voice
+        # (measured on Ubuntu 26.04: SpeechDispatcherService passes
+        # name == "default" as aLocalService).
+        assert not any(v["isLocalService"] for v in self.lin)
 
 
 def test_normalize_preset_voices_converts_strings():
@@ -118,6 +187,15 @@ from camoufox.exceptions import InvalidPropertyType  # noqa: E402
 from camoufox.utils import validate_voices  # noqa: E402
 
 
+@pytest.fixture
+def any_installed_browser(monkeypatch):
+    """The grid must not depend on the build this machine has active, whose
+    properties.json may predate it."""
+    from camoufox import utils
+
+    monkeypatch.setattr(utils, "validate_config", lambda *args, **kwargs: None)
+
+
 def _launch_config(**kwargs):
     """Rebuild the config dict from the chunked CAMOU_CONFIG_* env vars."""
     import json
@@ -152,7 +230,7 @@ def test_voice_generation_failure_fails_closed(monkeypatch):
     def boom(*_args, **_kwargs):
         raise OSError("voice-manifests.json unreadable")
 
-    monkeypatch.setattr(utils, "_generate_random_voice_subset", boom)
+    monkeypatch.setattr(utils, "draw_voice_config", boom)
     with pytest.warns(FallbackWarning, match="github.com/daijro/camoufox/issues/new"):
         cfg = _launch_config(os="macos")
     # An empty list plus the block flag means "no voices" -- never "all of the
@@ -217,11 +295,28 @@ def test_a_context_voice_list_keeps_names_that_hold_commas():
 def test_launch_registers_every_voice_a_context_can_draw():
     from camoufox.fingerprints import generate_context_fingerprint
 
-    pool = {v["voiceUri"] for v in _launch_config(os="windows")["voices:pool"]}
+    config = _launch_config(os="windows")
+    pool = {v["voiceUri"] for v in config["voices:pool"]}
+    grid = config["voices:pool:speechd"]
+    pooled_speechd = set(_speechd_voices(grid))
     for os in ("windows", "macos", "linux"):
         for locale in ("de-DE", "fr-FR", "ja-JP", "en-GB"):
-            context = generate_context_fingerprint(os=os, locale=locale)
-            assert {v["voiceUri"] for v in context["config"]["voices"]} <= pool
+            context = generate_context_fingerprint(os=os, locale=locale)["config"]
+            if os == "linux":
+                # A Linux context names its release's speech-dispatcher grid,
+                # which the browser registers from voices:pool:speechd.
+                assert "voices" not in context
+                assert set(_speechd_voices(context["voices:speechd"])) <= pooled_speechd
+            else:
+                assert {v["voiceUri"] for v in context["voices"]} <= pool
+
+
+def test_the_speechd_pool_holds_every_release_grid():
+    from camoufox.fingerprints import _load_voice_manifests
+
+    pooled = set(_speechd_voices(_launch_config(os="windows")["voices:pool:speechd"]))
+    for release in _load_voice_manifests()["lin"]["releases"].values():
+        assert set(_speechd_voices(release["speechd"])) <= pooled
 
 
 def test_voice_pool_entries_are_full_objects():
@@ -229,7 +324,9 @@ def test_voice_pool_entries_are_full_objects():
     assert pool
     for v in pool:
         assert _REQUIRED_FIELDS <= set(v.keys())
-        assert v["isDefault"] is False
+    # Only macOS's system voice, as stock macOS marks it: a macOS context in a
+    # launch of another OS reports it default too.
+    assert [v["name"] for v in pool if v["isDefault"]] == ["Samantha"]
 
 
 def test_caller_can_replace_the_voice_pool():
@@ -274,3 +371,22 @@ def test_new_context_draws_voices_for_its_locale(api, locale):
     options, script = _new_context_script(api, os="windows", locale=locale)
     assert options["locale"] == locale
     assert "Microsoft Hedda - German (Germany)" in script
+
+
+def test_a_linux_context_with_a_locale_keeps_its_release_grid():
+    """The locale redraw is for Windows' language packs. A Linux grid does not
+    depend on the locale, and a redraw could name another Ubuntu release than
+    the context's fonts; the browser gets the grid as JSON (leading "{")."""
+    import json
+    import re
+
+    from camoufox.fingerprints import generate_context_fingerprint
+
+    for locale in ("de-DE", "ja-JP"):
+        fp = generate_context_fingerprint(os="linux", locale=locale)
+        assert "voices" not in fp["config"]
+        grid = fp["config"]["voices:speechd"]
+        call = re.search(r"w\.setSpeechVoices\((\".*\")\);", fp["init_script"])
+        sent = json.loads(call.group(1))
+        assert sent.startswith("{")
+        assert json.loads(sent) == {"speechd": grid}

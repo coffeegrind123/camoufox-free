@@ -1,8 +1,9 @@
 import ipaddress
+import json
 import re
 from dataclasses import dataclass
 from functools import lru_cache
-from typing import Dict, NamedTuple, Optional, Tuple
+from typing import Any, Dict, NamedTuple, Optional, Tuple
 from urllib.parse import quote, unquote, urlsplit
 
 import requests
@@ -66,6 +67,9 @@ class Proxy:
         }
 
 
+# A caller-declared map of SOCKS5 credentials by "host:port", which Juggler
+# still reads (NetworkObserver.js). The launchers themselves send a proxy's
+# credentials through PROXY_AUTH_ENV and proxy_auth_init_script.
 PROXY_CREDENTIALS_ENV = 'CAMOU_PROXY_CREDENTIALS'
 SOCKS5_SCHEMES = ('socks5', 'socks5h')
 
@@ -153,6 +157,59 @@ def split_socks_credentials(
             "password": password,
         }
     }
+
+
+def socks5_auth(proxy: Optional[Dict[str, Any]]) -> Tuple[Optional[Dict[str, Any]], Optional[Dict[str, Any]]]:
+    """
+    Splits a SOCKS5 proxy's username and password from what Playwright is given.
+
+    Playwright refuses a `socks5://` proxy that has a username ("Browser does
+    not support socks5 proxy authentication"), but Juggler can send them
+    (RFC 1929). Returns the proxy without its credentials (socks5h normalized
+    to socks5), and the credentials with the proxy's host and port, for
+    Juggler; or the proxy unchanged and None when it is not SOCKS5 or has no
+    credentials. split_socks_credentials does the parsing and validation.
+    """
+    bare, credentials = split_socks_credentials(proxy)
+    if not credentials:
+        return bare, None
+    ((endpoint, selected),) = credentials.items()
+    host, port = endpoint.rsplit(':', 1)
+    return bare, {'host': host, 'port': int(port), **selected}
+
+
+def validated_proxy(proxy: Optional[Dict[str, str]]) -> Optional[Dict[str, str]]:
+    """
+    The proxy as split_socks_credentials validates and normalizes it, with a
+    SOCKS5 proxy's selected credentials kept on it as username and password:
+    the form a lookup through the proxy and a context's new_context() take
+    (attach_socks5_auth moves them to Juggler there).
+    """
+    bare, credentials = split_socks_credentials(proxy)
+    if not credentials:
+        return bare
+    return {**bare, **next(iter(credentials.values()))}
+
+
+# The environment variable that carries a launch-level SOCKS5 proxy's
+# credentials to Juggler (TargetRegistry.js), which clears it once read.
+PROXY_AUTH_ENV = 'CAMOU_PROXY_AUTH'
+
+
+def proxy_auth_env(auth: Dict[str, Any]) -> Dict[str, str]:
+    """The environment that hands a launch-level proxy's credentials to Juggler."""
+    return {PROXY_AUTH_ENV: json.dumps(auth, separators=(',', ':'))}
+
+
+def proxy_auth_init_script(auth: Dict[str, Any]) -> str:
+    """
+    The init script that hands a context's SOCKS5 credentials to Juggler.
+
+    Juggler takes it out of the context's init scripts (TargetRegistry.js), so
+    it never reaches a page or a content process. It is valid JavaScript that
+    does nothing, should a browser without that support run it.
+    """
+    return f"camoufoxProxyAuth: ({json.dumps(auth, separators=(',', ':'))});"
 
 
 @lru_cache(128, typed=True)

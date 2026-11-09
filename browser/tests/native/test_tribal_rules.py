@@ -368,7 +368,7 @@ def _dependency_files():
     for pattern in ("**/requirements*.txt", "**/pyproject.toml", "**/setup.cfg"):
         for path in REPO_ROOT.glob(pattern):
             parts = set(path.parts)
-            if "node_modules" in parts or ".venv" in parts or "venv" in parts:
+            if "node_modules" in parts or ".venv" in parts or "venv" in parts or ".claude" in parts:
                 continue
             # Skip the generated Firefox tree and any fetched upstream checkout.
             if any(p.startswith("camoufox-1") or p.startswith("playwright-python-") for p in path.parts):
@@ -663,13 +663,20 @@ def test_network_patch_clears_the_accept_language_dirty_flag_on_override():
 
 def test_network_patch_overrides_accept_encoding_for_https_only():
     patch = (BROWSER / "patches" / "network-patches.patch").read_text(encoding="utf-8")
-    condition = patch.index("if (isSecure && !isDictionary)")
-    override = patch.index('MaskConfig::GetString("headers.Accept-Encoding")')
-    scheme_assignment = patch.index("if (isDictionary)", condition)
-    assert condition < override < scheme_assignment, (
-        "headers.Accept-Encoding must replace only Firefox's HTTPS list; "
-        "plain HTTP and dictionary requests keep their native encodings."
+    start = patch.index("nsresult nsHttpHandler::SetAcceptEncodings(")
+    # Up to stock's own code, an unchanged context line.
+    body = patch[start:patch.index("\n   if (isDictionary) {", start)]
+    condition = body.index("if (isSecure) {")
+    override = body.index('MaskConfig::GetString("headers.Accept-Encoding")')
+    dictionary = body.index("if (isDictionary) {", override)
+    suffix = body.index('HTTP_PREF("accept-encoding.dictionary")', dictionary)
+    assert condition < override < dictionary < suffix, (
+        "headers.Accept-Encoding must replace only Firefox's HTTPS list, so plain "
+        "HTTP keeps its native encodings; a dictionary request sends the override "
+        "followed by network.http.accept-encoding.dictionary, as stock builds its "
+        "dictionary list from its HTTPS one."
     )
+    assert "isSecure ||" not in body and "!isSecure" not in body
 
 
 def test_dnt_config_is_read_by_the_getter_and_wire_header():
@@ -1030,10 +1037,16 @@ def test_juggler_is_not_a_chrome_package():
 
 def test_fc_activates_only_firefox_own_bundled_fonts():
     """Rule: fc-activates-only-firefox-own-bundled-fonts."""
-    patch = (BROWSER / "patches" / "linux-bundled-fonts-toplevel.patch").read_text(encoding="utf-8")
-    added = [line for line in patch.splitlines() if line.startswith("+") and not line.startswith("+++")]
-    removed = [line for line in patch.splitlines() if line.startswith("-") and not line.startswith("---")]
+    # font-hijacker.patch carries the change (upstream's form of it); only its
+    # ActivateBundledFonts() hunk is read.
+    patch = (BROWSER / "patches" / "font-hijacker.patch").read_text(encoding="utf-8")
+    hunks = re.split(r"^(?=@@ )", patch, flags=re.M)
+    activate = [h for h in hunks if h.startswith("@@") and "ActivateBundledFonts() {" in h.splitlines()[0]]
     why = explain("fc-activates-only-firefox-own-bundled-fonts")
+    assert len(activate) == 1, why
+    lines = activate[0].splitlines()[1:]
+    added = [line for line in lines if line.startswith("+")]
+    removed = [line for line in lines if line.startswith("-")]
     assert any("FcConfigAppFontAddFile(" in line for line in added), why
     assert not any("FcConfigAppFontAddDir(" in line for line in added), why
     assert any("FcConfigAppFontAddDir(" in line for line in removed), why

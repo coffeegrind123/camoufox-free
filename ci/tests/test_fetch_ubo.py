@@ -1,10 +1,12 @@
-"""browser/scripts/fetch-ubo.py: every package bundles AMO's newest uBlock Origin,
-checked, and a release bundles the one its tests ran with."""
+"""browser/scripts/fetch-ubo.py: every package bundles the uBlock Origin release
+committed in browser/scripts/data/ubo.json, checked, and a release bundles the one
+its tests ran with. AMO's newest is only a candidate for a reviewed bump."""
 
 import hashlib
 import importlib.util
 import io
 import json
+import re
 import zipfile
 
 import pytest
@@ -19,12 +21,39 @@ spec.loader.exec_module(fetch_ubo)
 GUID = "uBlock0@raymondhill.net"
 
 
+# The lines freeze_lists edits, as uBO's own source has them (gorhill/uBlock
+# src/js/background.js and src/js/storage.js).
+UBO_BACKGROUND = (
+    "const hiddenSettingsDefault = {\n"
+    "    suspendUntilListsAreLoaded: vAPI.Net.canSuspend(),\n"
+    "};\n"
+    "const userSettingsDefault = {\n"
+    "    autoUpdate: true,\n"
+    "};\n"
+)
+UBO_STORAGE = (
+    "µb.autoSelectRegionalFilterLists = function(lists) {\n"
+    "    for ( const key in lists ) {\n"
+    "        if ( list.off !== true ) {\n"
+    "            selectedListKeys.push(key);\n"
+    "            continue;\n"
+    "        }\n"
+    "        if ( this.listMatchesEnvironment(list) ) {\n"
+    "            selectedListKeys.push(key);\n"
+    "            list.off = false;\n"
+    "        }\n"
+    "    }\n"
+    "};\n"
+)
+
+
 def xpi(version="1.76.0", guid=GUID, extra=()):
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w") as z:
         z.writestr("manifest.json", json.dumps(
             {"version": version, "browser_specific_settings": {"gecko": {"id": guid}}}))
-        z.writestr("js/background.js", "")
+        z.writestr("js/background.js", UBO_BACKGROUND)
+        z.writestr("js/storage.js", UBO_STORAGE)
         for name in extra:
             z.writestr(name, "")
     return buf.getvalue()
@@ -42,6 +71,41 @@ def test_the_pin_is_amo_s_current_release():
     pin = fetch_ubo.pin_from_amo(amo(data))
     assert pin == {"version": "1.76.0", "sha256": hashlib.sha256(data).hexdigest(),
                    "url": "https://addons.mozilla.org/firefox/downloads/file/1/ublock_origin-1.76.0.xpi"}
+
+
+def test_resolve_is_the_committed_pin_and_needs_no_network(monkeypatch):
+    monkeypatch.setattr(fetch_ubo, "get", lambda url, timeout: pytest.fail(f"resolve fetched {url}"))
+    pin = fetch_ubo.resolve()
+    committed = json.loads((BROWSER_ROOT / "scripts" / "data" / "ubo.json").read_text())
+    assert pin == committed
+    assert re.fullmatch(r"[0-9a-f]{64}", pin["sha256"])
+    assert pin["url"].startswith("https://addons.mozilla.org/")
+
+
+def test_stage_without_a_release_pin_uses_the_committed_one(tmp_path, monkeypatch):
+    data = xpi(version="1.75.4")
+    pin = {"version": "1.75.4", "sha256": hashlib.sha256(data).hexdigest(),
+           "url": "https://addons.mozilla.org/firefox/downloads/file/1/ublock_origin-1.75.4.xpi"}
+    monkeypatch.delenv("CAMOUFOX_UBO", raising=False)
+    monkeypatch.setattr(fetch_ubo, "resolve", lambda: pin)
+    monkeypatch.setattr(fetch_ubo, "newest", lambda: pytest.fail("a build must not take AMO's newest"))
+    monkeypatch.setattr(fetch_ubo, "get", lambda url, timeout: data if url == pin["url"] else pytest.fail(url))
+    fetch_ubo.stage(str(tmp_path))
+    assert json.loads((tmp_path / "addons" / "UBO" / "manifest.json").read_text())["version"] == "1.75.4"
+
+
+def test_newest_reads_amo(monkeypatch):
+    data = xpi()
+    monkeypatch.setattr(fetch_ubo, "get", lambda url, timeout: json.dumps(amo(data)).encode()
+                        if url == fetch_ubo.AMO_ADDON else pytest.fail(url))
+    assert fetch_ubo.newest()["version"] == "1.76.0"
+
+
+@pytest.mark.parametrize("pin", [{"version": "1", "url": "https://addons.mozilla.org/x.xpi"},
+                                 {"version": "1", "sha256": "0" * 64, "url": "https://example.com/x.xpi"}])
+def test_an_incomplete_or_foreign_pin_is_refused(pin):
+    with pytest.raises(SystemExit):
+        fetch_ubo.check_pin(pin, "test")
 
 
 @pytest.mark.parametrize("record", [amo(b"", guid="evil@example.com"), amo(b"", algorithm="sha1")])
@@ -62,6 +126,9 @@ def test_stage_extracts_the_pinned_release_beside_the_binary(tmp_path, monkeypat
     ubo = tmp_path / "addons" / "UBO"
     assert json.loads((ubo / "manifest.json").read_text())["version"] == "1.76.0"
     assert sorted(p.name for p in ubo.iterdir()) == ["js", "manifest.json"], "the previous copy is replaced"
+    # Its filter lists stay the packaged ones: uBO's own default downloads them
+    # within a minute of every launch.
+    assert "    autoUpdate: false,\n" in (ubo / "js" / "background.js").read_text()
     assert [p.name for p in (tmp_path / "addons").iterdir()] == ["UBO"], "no staging directory is left"
 
 
@@ -84,35 +151,28 @@ def test_packaging_bundles_it_where_the_launchers_look():
     assert fetch_ubo.ADDON_DIR.replace("\\", "/") == "addons/UBO"
 
 
-def test_ubo_policy_keeps_every_setting_and_uses_only_bundled_lists():
-    policies_path = BROWSER_ROOT / "settings" / "distribution" / "policies.json"
-    duplicates = []
+def test_bundled_ubo_keeps_its_packaged_lists_without_a_policy(tmp_path):
+    """No policies.json (it puts Firefox in enterprise mode), so the bundled
+    uBO's own defaults are edited: no list downloads, no request held while
+    lists compile, and a first run selects only the lists uBO enables by
+    default, which its package carries, never a regional one for the locale
+    (camoufox-free#211)."""
+    data = xpi()
+    pin = {"version": "1.76.0", "url": "u", "sha256": hashlib.sha256(data).hexdigest()}
+    ubo = tmp_path / "addons" / "UBO"
+    fetch_ubo.extract(data, pin, str(ubo))
+    background = (ubo / "js" / "background.js").read_text(encoding="utf-8")
+    storage = (ubo / "js" / "storage.js").read_text(encoding="utf-8")
 
-    def unique_pairs(pairs):
-        out = {}
-        for key, value in pairs:
-            if key in out:
-                duplicates.append(key)
-            out[key] = value
-        return out
-
-    policies = json.loads(policies_path.read_text(encoding="utf-8"), object_pairs_hook=unique_pairs)
-    assert not duplicates, f"duplicate JSON keys: {duplicates}"
-    ubo = policies["policies"]["3rdparty"]["Extensions"][GUID]
-    assert ubo["userSettings"] == [["autoUpdate", "false"]]
-    assert ubo["advancedSettings"] == [["suspendUntilListsAreLoaded", "false"]]
-    assert ubo["toOverwrite"]["filterLists"] == [
-        "user-filters",
-        "ublock-filters",
-        "ublock-badware",
-        "ublock-privacy",
-        "ublock-unbreak",
-        "ublock-quick-fixes",
-        "easylist",
-        "easyprivacy",
-        "urlhaus-1",
-        "plowe-0",
-    ]
+    assert "    autoUpdate: false,\n" in background
+    assert "autoUpdate: true" not in background
+    assert "    suspendUntilListsAreLoaded: false,\n" in background
+    assert "vAPI.Net.canSuspend()" not in background
+    # The regional branch can no longer select a list; the default-on branch is untouched.
+    assert "        if ( this.listMatchesEnvironment(list) ) {\n" not in storage
+    assert "        if ( false && this.listMatchesEnvironment(list) ) {\n" in storage
+    assert "        if ( list.off !== true ) {\n            selectedListKeys.push(key);" in storage
+    assert not (BROWSER_ROOT / "settings" / "distribution" / "policies.json").exists()
 
 
 def test_a_release_bundles_the_ubo_its_tests_ran_with():
@@ -164,13 +224,41 @@ def test_the_staged_addon_is_readable_by_every_user(tmp_path):
 
 
 def test_duckduckgo_is_the_default_search_engine():
-    """URL-bar searches go to DuckDuckGo. The build has no built-in engines
-    (no-search-engines.patch leaves only an inert "None"), so the policy must
-    add DuckDuckGo itself; a Default naming an engine nobody added is ignored."""
-    policies = json.loads((BROWSER_ROOT / "settings" / "distribution" / "policies.json").read_text())
-    search = policies["policies"]["SearchEngines"]
-    assert search["Default"] == "DuckDuckGo"
-    added = {e["Name"]: e for e in search.get("Add", [])}
-    assert added["DuckDuckGo"]["URLTemplate"] == "https://duckduckgo.com/?q={searchTerms}"
-    assert added["DuckDuckGo"]["Method"] == "GET"
-    assert not [e for e in added.values() if "127.0.0.1" in e.get("URLTemplate", "")]
+    """URL-bar searches go to DuckDuckGo. Stock's engines stay (no
+    no-search-engines.patch, no SearchEngines policy, which would put Firefox in
+    enterprise mode); search-default-duckduckgo.patch changes only the
+    application default, to the "ddg" engine, where the configuration lists it.
+    search-service-init.py checks the running browser against stock."""
+    patches = BROWSER_ROOT / "patches"
+    assert not (patches / "no-search-engines.patch").exists()
+    assert not (BROWSER_ROOT / "settings" / "distribution" / "policies.json").exists()
+    patch = (patches / "search-default-duckduckgo.patch").read_text(encoding="utf-8")
+    files = re.findall(r"^diff --git a/(\S+)", patch, flags=re.M)
+    assert files == ["toolkit/components/search/SearchEngineSelector.sys.mjs"]
+    added = [line[1:].strip() for line in patch.splitlines()
+             if line.startswith("+") and not line.startswith("+++")]
+    code = [line for line in added if line and not line.startswith("//")]
+    assert code == [
+        'if (refinedSearchConfig.engines.some(e => e.identifier == "ddg")) {',
+        'refinedSearchConfig.appDefaultEngineId = "ddg";',
+        "}",
+    ], "only the default may change: the engines and their order stay stock's"
+    assert not [line for line in patch.splitlines() if line.startswith("-") and not line.startswith("---")]
+    assert "127.0.0.1" not in patch
+
+
+@pytest.mark.parametrize("rel, line", [
+    ("background.js", "    autoUpdate: true,\n"),
+    ("background.js", "    suspendUntilListsAreLoaded: vAPI.Net.canSuspend(),\n"),
+    ("storage.js", "        if ( this.listMatchesEnvironment(list) ) {\n"),
+])
+def test_a_ubo_whose_default_moved_is_refused(tmp_path, rel, line):
+    """Shipping a uBO that downloads lists or holds requests is worse than
+    failing the build."""
+    js = tmp_path / "js"
+    js.mkdir()
+    sources = {"background.js": UBO_BACKGROUND, "storage.js": UBO_STORAGE}
+    for name, text in sources.items():
+        (js / name).write_text(text.replace(line, "") if name == rel else text, encoding="utf-8")
+    with pytest.raises(SystemExit, match="uBO changed"):
+        fetch_ubo.freeze_lists(str(tmp_path))

@@ -7,7 +7,7 @@ macOS, W for Windows, ...) sat on the search path past the per-OS directories
 the launcher's fontconfig names. The font list filters by family name, not by
 the file a name resolves to, so a Linux identity's "Helvetica" drew Apple's
 Helvetica from fonts/M/, a face no Linux machine has, and a canvas text
-fingerprint records it. linux-bundled-fonts-toplevel.patch adds only the files
+fingerprint records it. font-hijacker.patch adds only the files
 directly in fonts/.
 
 A real Linux machine resolves Helvetica, Times and Courier to their metric

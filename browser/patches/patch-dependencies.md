@@ -49,18 +49,20 @@ be listed there.
 | `no-css-animations.patch` | `instantAnimations` |
 | `privacy-signals-spoofing.patch` | `navigator.doNotTrack` |
 | `screen-spoofing.patch` | `screen.*` |
-| `speech-voices-spoofing.patch` | `voices`, `voices:pool` (whether a page sees only some voices) |
+| `search-default-duckduckgo.patch` | none (no config: DuckDuckGo is the application default engine in stock's search config) |
+| `speech-voices-spoofing.patch` | `voices`, `voices:pool` (whether a page sees only some voices); a context list that starts with `{` is a Linux identity's `voices:speechd` grid |
 | `system-ui-font-spoofing.patch` | `navigator.platform` |
 | `timezone-spoofing.patch` | `timezone` |
 | `touchscreen-fingerprint-spoofing.patch` | `navigator.maxTouchPoints` |
-| `voice-spoofing.patch` | `voices`, `voices:blockIfNotDefined`, `voices:pool` |
+| `virtual-display-claimed-screen.patch` | `screen.width`, `screen.height`, `screen.avail*` (the X screen reports the claimed screen when it is smaller) |
+| `voice-spoofing.patch` | `voices`, `voices:speechd`, `voices:blockIfNotDefined`, `voices:pool` |
 | `webgl-spoofing.patch` | `webGl:*`, `webGl2:*` (per context: `setWebGLConfig` replaces the tables with the context GPU's) |
 | `webgpu-limits-spoofing.patch` | `webGpu:limits` |
 | `webrtc-ip-spoofing.patch` | `webrtc:ipv4`, `webrtc:ipv6`, `navigator.platform` |
-| `window-screen-origin.patch` | `window.screenX`, `window.screenY` (moves `mozInnerScreenX/Y` and mouse and touch event `screenX/Y` with them) |
+| `window-screen-origin.patch` | `window.screenX`, `window.screenY` (`window.screenX/Y`, `mozInnerScreenX/Y` and mouse and touch event `screenX/Y` read the identity's position where the window manager left the window elsewhere; zero shift for a popup a page opened, which reports where it is; CamoufoxWindow.sys.mjs moves the real window there first) |
 | `window-sizing-claimed-os.patch` | `window.frameLeft`, `window.frameTop`, `window.frameRight`, `window.frameBottom` (a page's `outerWidth/outerHeight` and screen points measure the content area inside that frame; none in fullscreen) |
 | `windows-keyboard.patch` | `input:windowsKeyboard` (launch-wide: the shortcut tables and GTK's key handling are process-level) |
-| `zz-stock-cost-parity.patch` | `navigator.hardwareConcurrency`, `navigator.maxTouchPoints`, `screen.*`, `window.screenX`, `window.screenY` (re-orders the getters above so stock's work runs first) |
+| `zz-stock-cost-parity.patch` | `navigator.hardwareConcurrency`, `navigator.maxTouchPoints`, `screen.*` (re-orders the getters above so stock's work runs first) |
 | `zz-window-presentation.patch` | `window.frameBorderTop`, `window.maximized`, `screen.availLeft/Top/Width/Height`, `window.screenX`, `window.screenY` (the claimed frame and position follow the window's state: maximized by the real window or by content filling the available area, normal after a resize, none in fullscreen at 0,0) |
 
 To regenerate the list: `grep -l 'MaskConfig::' patches/*.patch`.
@@ -81,20 +83,21 @@ already set up, and do not add the include or `LOCAL_INCLUDES` themselves:
 | `system-ui-font-spoofing.patch` | `font-hijacker.patch` for `MaskConfig.hpp` in `gfx/thebes/gfxPlatformFontList.cpp` and `/camoucfg` in `gfx/thebes/moz.build` |
 | `touchscreen-fingerprint-spoofing.patch` | `navigator-spoofing.patch` for `MaskConfig.hpp` in `dom/base/Navigator.cpp` |
 | `font-list-spoofing.patch` | `anti-font-fingerprinting.patch` for `gfxFontGroup::mUserContextId` |
-| `linux-bundled-fonts-toplevel.patch` | nothing beyond Firefox; it replaces the `FcConfigAppFontAddDir` call in `ActivateBundledFonts()`, which no earlier patch changes |
 | `voice-spoofing.patch` | `speech-voices-spoofing.patch` for `nsTHashSet.h` in `dom/media/webspeech/synth/nsSynthVoiceRegistry.h` |
 | `timezone-spoofing.patch`, `webrtc-ip-spoofing.patch` | `audio-fingerprint-manager.patch` for `RoverfoxStorageManager.h` in `dom/base/nsGlobalWindowInner.cpp` |
 | `font-system-fonts-css2.patch`, `system-ui-font-spoofing.patch`, `webrtc-ip-spoofing.patch`, `zz-stock-cost-parity.patch` | `navigator-spoofing.patch` for `NavigatorManager::GetSpoofedOS()` |
+| `per-context-http-user-agent.patch` | `navigator-spoofing.patch` for `NavigatorManager::GetUserAgent()` (exported as `mozilla/dom/NavigatorManager.h`); `cross-process-storage.patch` for reading the context's value in the parent and worker processes |
+| `virtual-display-claimed-screen.patch` | `windows-keyboard.patch` for `/camoucfg` in `widget/gtk/moz.build` |
 | `windows-keyboard.patch` | `touchscreen-fingerprint-spoofing.patch` for `/camoucfg` in `dom/events/moz.build` |
 | `window-screen-origin.patch` | `fingerprint-injection.patch` for `MaskConfig.hpp` in `dom/base/nsGlobalWindowInner.cpp` |
-| `window-sizing-claimed-os.patch` | `window-screen-origin.patch` for `nsGlobalWindowInner::SpoofedScreenShift()`; `fingerprint-injection.patch` for `MaskConfig.hpp` in `dom/base/nsGlobalWindowInner.cpp` |
+| `window-sizing-claimed-os.patch` | `window-screen-origin.patch` for `nsGlobalWindowInner::SpoofedScreenShift()` and `SpoofedWindowShift()`; `fingerprint-injection.patch` for `MaskConfig.hpp` in `dom/base/nsGlobalWindowInner.cpp` |
 | `zz-stock-cost-parity.patch` | `cross-process-storage.patch` for `RoverfoxStorageManager::Generation()`; `screen-spoofing.patch` for `ScreenDimensionManager` in `dom/base/nsScreen.cpp` |
-| `zz-window-presentation.patch` | `window-sizing-claimed-os.patch` for `ClaimedWindowFrame()`, `CamouContentRect` and `UpdateCamouContentRect()`; `zz-stock-cost-parity.patch` for the stock-first `GetScreenX/Y` it extends |
+| `zz-window-presentation.patch` | `window-sizing-claimed-os.patch` for `ClaimedWindowFrame()`, `CamouContentRect` and `UpdateCamouContentRect()`; `window-screen-origin.patch` for `SpoofedWindowShift()`, which reads the presented position, and `IsPagePopup()` |
 
 `zzz-context-locale.patch` applies last and depends on `locale-spoofing.patch`
 for the default-locale hook, `navigator-spoofing.patch` for
 `NavigatorManager`, `cross-process-storage.patch` for the context store, and
-`network-patches.patch` for the request-header path it extends.
+`network-patches.patch` for the request-header path it extends. Its `HttpBaseChannel.cpp` part needs `per-context-http-user-agent.patch` for the `NavigatorManager.h` include and covers only the language; that patch sends the context's User-Agent.
 
 ## Headless WebGL
 
@@ -135,6 +138,52 @@ nothing writes a fallback copy under context 0.
 requests, and service workers without a browsing context read that key. The
 context's process gets the locale as its default and app locale, covering
 isolated worlds, worklets, form widgets and built-in strings.
+
+## Driver input and the page's globals
+
+- `input-coalescing-parity.patch` uses `mJugglerEventId` and the
+  `juggler-mouse-event-hit-renderer` ack from `playwright/0-playwright.patch`.
+  Its JS half is in `additions/juggler` (`MouseDispatch.sendQueuedMove`,
+  `PageHandler.beforeDispatch`), and either half without the other wedges
+  every move until the ack deadline.
+- `drag-source-events.patch` extends the drag branch that
+  `playwright/0-playwright.patch` adds to `nsContentUtils::SynthesizeMouseEvent`.
+- `isolated-world-global-order.patch` stands alone. It recognises Juggler as
+  the scripted caller (its `resource://gre/modules/juggler/` modules, and the
+  sandboxes those modules create, whose location names them) and leaves the
+  interfaces it creates undefined on the page's window until the page uses
+  them. It edits `Codegen.py` (the window Xray's resolve on the window), so
+  every generated binding rebuilds, and `BindingUtils.h`
+  (`DoGetOrCreateDOMReflector`), which most of `dom/` includes.
+
+## WebRTC behind a proxy
+
+`webrtc-socks5-udp.patch` builds on two earlier patches and uses their lines as
+context:
+
+- `webrtc-proxy-local-network.patch` keeps UDP host sockets behind a proxy and
+  limits them to the local network (`NrSocketBase::RefusesDestination`). The
+  new patch adds `NrUdpRelaySocket`, which sends the rest through a SOCKS5 UDP
+  ASSOCIATE relay on the tab's proxy, and makes a refused destination fail at
+  once instead of being dropped silently.
+- `webrtc-ip-spoofing.patch` rewrites candidate, SDP and `getStats()` addresses
+  to `webrtc:ipv4`/`ipv6`; it makes up host candidates when none reached the
+  page, never a srflx. It also decides whether a page is behind a proxy
+  (`ShouldForceProxy`): Juggler records each proxy it sets, which decides for a
+  document with no HTTP channel, so a direct launch stays direct and a proxied
+  one never gathers around its proxy. The new patch keeps a srflx or
+  relay address gathered through the proxy as it is, because a page's own STUN
+  server already saw that address. Behind an HTTP proxy, or a SOCKS5 proxy that
+  refuses UDP, no srflx surfaces: the page reads a machine whose UDP is
+  blocked, not one that made a STUN answer up.
+
+ICE sockets live in the socket process, and proxies are resolved in the
+parent. The patch adds an optional `LoadInfoArgs` to the existing
+`PProxyConfigLookup` constructor (`netwerk/ipc`), so the parent resolves the
+proxy with the tab's load info, as it does for the tab's own loads. Juggler's
+per-context proxy filter then picks that context's proxy. The SOCKS5 control
+connection (`WebrtcUdpAssociation`) runs in the socket process, so the relay
+sees the control connection and the datagrams come from the same address.
 
 ## Backports
 

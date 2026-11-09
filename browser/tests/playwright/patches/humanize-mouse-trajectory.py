@@ -2,8 +2,8 @@
 Verify humanize=True produces a human cursor trajectory (daijro/camoufox#677).
 
 Camoufox's cursor humanization has a single call site: the `mousemove` branch of
-`sendEvents()` in additions/juggler/protocol/PageHandler.js, which calls
-`humanizedSteps()` (additions/juggler/input/CursorTrajectory.js) and dispatches
+`sendEvents()` in browser/additions/juggler/protocol/PageHandler.js, which plans
+the move (browser/additions/juggler/input/CursorTrajectory.js) and dispatches
 the intermediate points. The Firefox 146 Juggler migration (commit 03c1230)
 rewrote that helper and silently dropped the branch, so from FF146 through v152
 `humanize=True` emitted only the endpoint mousemove -- no trajectory at all.
@@ -19,14 +19,12 @@ coalesces pointer motion and delivers at most one mousemove per refresh tick.
 Stock Firefox 158 on Xvfb, driven by XTest motion at irregular 3-15 ms
 intervals, gave a page gaps of 16-18 ms in three runs of 155-164 moves, with
 requestAnimationFrame ticking every 17.1 ms. A synthesized move dispatches at
-once, so the page saw the trajectory's own clock: gaps of 5-13 ms (faster than
-any refresh) from Cursory, and a steady ~22 ms beat from mousecrack, out of step
-with the frame. Stock dispatches each move at the refresh tick itself: 90-91%
-of its moves landed within 2.5 ms of a requestAnimationFrame callback, against
-30-38% of synthesized ones, which landed anywhere in the frame. So a humanized
+once, so the page saw the trajectory's own clock, gaps of 5-13 ms (faster than
+any refresh). Stock dispatches each move at the refresh tick itself: 90-91% of
+its moves landed within 2.5 ms of a requestAnimationFrame callback, against
+19-43% of synthesized ones, which landed anywhere in the frame. So a humanized
 move must deliver its points at refresh ticks, as the page's own rAF measures
-them. How many frames lie between two points is the hand's own timing: a move
-with pauses has a median gap of two frames or more, as a real one does.
+them, with a median gap of one frame.
 
 Run against a specific build:
     CAMOUFOX_EXECUTABLE_PATH=/path/to/camoufox-bin python browser/tests/playwright/patches/humanize-mouse-trajectory.py
@@ -36,7 +34,7 @@ through AsyncCamoufox, which sets FONTCONFIG_FILE, and a build with no bundled
 fonts fails startup in a way that surfaces as a confusing TargetClosedError.
 
 Both cursor generators are checked: Cursory (the default) and mousecrack
-(humanize_engine="mousecrack", additions/juggler/input/mousecrack/).
+(humanize_engine="mousecrack", browser/additions/juggler/input/mousecrack/).
 
 What PASS means, for each generator:
     * humanize=True expands one long mouse.move into many intermediate
@@ -50,8 +48,9 @@ What PASS means, for each generator:
       cursor does (mouseout with no relatedTarget), and comes back with a
       mouseover before its next mousemove, instead of vanishing silently and
       reappearing elsewhere;
-    * without humanize, each move emits only its endpoint (pins the other
-      direction so accidental always-on humanization is also caught).
+    * without humanize, a move emits only its endpoint (pins the other
+      direction so accidental always-on humanization is also caught). Two
+      moves close together may share one event, coalesced, as a real mouse's do.
 """
 
 import asyncio
@@ -78,9 +77,14 @@ RECORDER = """
 """
 # How close to a requestAnimationFrame callback, on either side, a mousemove
 # counts as delivered at the refresh tick, and the share that must be: below
-# stock's 90%, far above the 30-38% of moves played on the generator's clock.
+# stock's 90%, far above the 19-43% of moves played on the generator's clock.
 TICK_MS = 2.5
 AT_TICK = 0.75
+# Most gaps of a move are exactly one frame; a pause in the hand is whole frames.
+MEDIAN_FRAMES = (0.85, 1.25)
+# The click's own move can be short: at one mousemove per frame, as stock
+# delivers them, a 150 ms move to the button is about 9 events. Without
+# humanize it is 1, the endpoint (#677).
 CLICK_MIN_MOVES = 3
 
 # The default humanize ceiling is 1.5s, and playback may end up to a frame past
@@ -226,12 +230,13 @@ async def _check_engine(engine) -> bool:
         print(f"  FAIL: expected {MIN_DURATION_MS}-{MAX_DURATION_MS}ms, got {duration}ms")
     at_tick = sum(1 for m in humanized if _tick_distance(m[2], frames) <= TICK_MS)
     share = at_tick / len(humanized) if humanized else 0
-    if share >= AT_TICK:
-        print(f"  PASS: delivered at refresh ticks ({share:.0%} of moves, {frame_ms:.1f}ms frame)")
+    median = statistics.median(gaps) if gaps else 0
+    if share >= AT_TICK and MEDIAN_FRAMES[0] * frame_ms <= median <= MEDIAN_FRAMES[1] * frame_ms:
+        print(f"  PASS: delivered at refresh ticks ({share:.0%}), median gap {median}ms")
     else:
         passed = False
         print(f"  FAIL: {share:.0%} of mousemoves within {TICK_MS}ms of a refresh tick "
-              f"(need {AT_TICK:.0%}, {frame_ms:.1f}ms frame)")
+              f"(need {AT_TICK:.0%}), median gap {median}ms against a {frame_ms:.1f}ms frame")
 
     # The entry point is within a quarter viewport of the destination's x
     # (0.75w), so it lies right of 0.5w; one out of the corner lands near 0.
@@ -268,9 +273,6 @@ async def _check_engine(engine) -> bool:
     moves, clicked = await _humanized_click_hits_target(engine)
     print(f"\n=== humanized click, {engine} ===")
     print(f"  intermediate moves: {moves}  clicked: {clicked}")
-    # The click's own move can be short: at one mousemove per frame, as stock
-    # delivers them, a 150 ms move to the button is about 9 events. Without
-    # humanize it is 1, the endpoint (#677).
     if moves >= CLICK_MIN_MOVES and clicked:
         print("  PASS: humanized click landed on the target")
     else:
@@ -287,7 +289,13 @@ async def main() -> int:
     plain, plain_dest, _ = await _collect_moves(False)
     print("\n=== humanize off ===")
     print(f"  mousemove events: {[m[:2] for m in plain]}")
-    if [m[:2] for m in plain] == [[20, 20], list(plain_dest)]:
+    # Two awaited moves 8 ms apart can share a refresh tick. The page then sees
+    # one mousemove, at the destination, with the start in getCoalescedEvents()
+    # — the same coalescing a 125 Hz mouse gets. A trajectory is many points
+    # that are neither endpoint.
+    endpoints = [[20, 20], list(plain_dest)]
+    points = [m[:2] for m in plain]
+    if points and points[-1] == list(plain_dest) and len(points) <= 2 and all(p in endpoints for p in points):
         print("  PASS: only endpoints emitted")
     else:
         passed = False
