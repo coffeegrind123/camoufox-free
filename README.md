@@ -116,12 +116,6 @@ For an identity whose OS is not the host's. Offered upstream in
   Juggler hanging. The header order fix is offered upstream in
   [#989](https://github.com/daijro/camoufox/pull/989).
   ([a645377](https://github.com/coffeegrind123/camoufox-free/commit/a645377641887a9443c5e6be0d0f7e1e209eed39), [3cebf99](https://github.com/coffeegrind123/camoufox-free/commit/3cebf99c8f486c211a5502099c9ecfdc91164813))
-- **The spoofed user agent is read once.** Firefox's HTTP handler rewrote
-  its shared user-agent string on every `UserAgent()` call, and that also runs
-  on proxy CONNECT threads, racing the main thread. The configured value is now
-  read once into a string nothing writes again. Offered upstream in
-  [#984](https://github.com/daijro/camoufox/pull/984).
-  ([01c8209](https://github.com/coffeegrind123/camoufox-free/commit/01c82098c1910f2a66585941c42053bcb0d1de70))
 - **Per-context locale follows every scope.** A context's locale reaches
   `Intl`, `navigator.languages`, Accept-Language q-values, isolated worlds,
   dedicated/shared/service workers, AudioWorklets, requests without a browsing
@@ -287,14 +281,14 @@ For an identity whose OS is not the host's. Offered upstream in
   after the first (`RegExp`), where stock and 1.75.4 do not, so
   [`data/ubo.json`](browser/scripts/data/ubo.json) pins the release by
   sha256 and a bump is a reviewed commit. ([73921940](https://github.com/coffeegrind123/camoufox-free/commit/739219402277874bec6326ad80bce4c5c9587327))
-- **Every user that runs the release can read all of it.** `addons/UBO` was
-  staged in a 0700 directory and 64 Windows fonts shipped as 0600, so when root
-  unzipped the release and another user ran it (the Docker image's app user),
-  there was no uBO and those fonts were missing. Staging and packaging now make
-  every file readable by all users. The build fails if the zip still has an
-  entry other users can't read. The release build then runs the uBO guard as a
-  user that owns neither the browser nor the launcher. The packaging fix is
-  offered upstream in [#1002](https://github.com/daijro/camoufox/pull/1002). ([8c39ce4](https://github.com/coffeegrind123/camoufox-free/commit/8c39ce46388a69c7909daea335b13007953a84d6), [432bd63](https://github.com/coffeegrind123/camoufox-free/commit/432bd6355a6a1965ca107526bcc28e485ffed3ae), [a494551](https://github.com/coffeegrind123/camoufox-free/commit/a494551287ec0585163f89607440fbb24aaa237d))
+- **The release build checks uBO as a user that owns no file.** Every guard
+  ran as the owner on the unpackaged build, so none saw a zip that hid uBO
+  from another user. The build now unzips the release and installs the
+  launcher as root, then runs the uBO guard as a user that owns neither. The
+  guard names an unreadable addon, and fails when a page load still takes
+  over 10 s once uBO is ready. Upstream merged the staging and packaging fix
+  this guards, from [#1002](https://github.com/daijro/camoufox/pull/1002).
+  ([a494551](https://github.com/coffeegrind123/camoufox-free/commit/a494551287ec0585163f89607440fbb24aaa237d))
 - **DuckDuckGo is the default search engine.** Upstream's #997 restored
   stock's engines and default. This fork keeps stock's engine list and makes
   DuckDuckGo the default, in the search service's own engine selection, where a
