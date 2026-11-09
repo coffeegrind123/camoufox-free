@@ -162,6 +162,13 @@ const OS_NAMES = { win: "windows", mac: "macos", lin: "linux" } as const;
 // Camoufox preferences to cache previous pages and requests
 export const CACHE_PREFS: Record<string, any> = LAUNCHER_CONSTANTS.cachePrefs;
 
+// target_os -> the webcompat add-on's platform names (appConstants.js getPlatform).
+export const WEBCOMPAT_PLATFORMS: Record<TargetOS, string> = {
+	win: "windows",
+	mac: "mac",
+	lin: "linux",
+};
+
 // low_bandwidth: prefs per level for a connection billed per byte, and the stock value of each
 // (StaticPrefList.yaml, all.js, HTMLMediaElement.cpp GetPreloadDefault/GetPreloadDefaultAuto).
 // No level intercepts requests: a Playwright route makes Juggler set INHIBIT_CACHING on the
@@ -2291,6 +2298,14 @@ export async function launchOptions({
 		requested = "en-US";
 	}
 	setInto(firefox_user_prefs, "intl.locale.requested", requested);
+
+	// The webcompat add-on picks its per-site interventions by the host's OS
+	// (intervention_helpers.js getOS); its override makes it match the claimed one.
+	setInto(
+		firefox_user_prefs,
+		"extensions.webcompat.platform_override",
+		WEBCOMPAT_PLATFORMS[targetOs],
+	);
 
 	// Spoof the speech-synthesis voice list. This has to fail CLOSED: leaving
 	// `voices` unset exposes every native voice on the box (#731). Drawn after

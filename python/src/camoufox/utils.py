@@ -83,6 +83,9 @@ DEFAULT_CANVAS_NOISE: Optional[bool] = False
 # Camoufox preferences to cache previous pages and requests
 CACHE_PREFS: Dict[str, Any] = LAUNCHER_CONSTANTS['cachePrefs']
 
+# target_os -> the webcompat add-on's platform names (appConstants.js getPlatform).
+WEBCOMPAT_PLATFORMS: Dict[str, str] = {'win': 'windows', 'mac': 'mac', 'lin': 'linux'}
+
 # low_bandwidth: prefs per level for a connection billed per byte, and the stock value of each
 # (StaticPrefList.yaml, all.js, HTMLMediaElement.cpp GetPreloadDefault/GetPreloadDefaultAuto).
 # Level 1 changes nothing a page can see: a 2 GiB disk cache instead of the 1 GB smart-size
@@ -1964,6 +1967,12 @@ def launch_options(
     else:
         requested = 'en-US'
     firefox_user_prefs.setdefault('intl.locale.requested', requested)
+
+    # The webcompat add-on picks its per-site interventions by the host's OS
+    # (intervention_helpers.js getOS), so a Windows identity on Linux sent one
+    # site a macOS UA, another sec-ch-ua-platform "Linux", and missed Windows'
+    # own fixes. Its override pref makes the claimed OS the one it matches.
+    firefox_user_prefs.setdefault('extensions.webcompat.platform_override', WEBCOMPAT_PLATFORMS[target_os])
 
     # Spoof the speech-synthesis voice list.
     #
