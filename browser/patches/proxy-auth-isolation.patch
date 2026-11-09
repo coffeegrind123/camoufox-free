@@ -81,3 +81,19 @@ index cacd523a5..9b4ed4c2f 100644
      if (mProxyInfo) {
        nsAutoCString type;
        mProxyInfo->GetType(type);
+diff --git a/netwerk/protocol/http/nsHttpAuthCache.cpp b/netwerk/protocol/http/nsHttpAuthCache.cpp
+--- a/netwerk/protocol/http/nsHttpAuthCache.cpp
++++ b/netwerk/protocol/http/nsHttpAuthCache.cpp
+@@ -82,6 +82,12 @@
+   if (obsSvc) {
+     MOZ_ALWAYS_SUCCEEDS(
+         obsSvc->AddObserver(this, "clear-origin-attributes-data", true));
++    // Camoufox: the same pattern clear, for the auth cache alone. Juggler
++    // drops a context's cached proxy login when its proxy changes; the
++    // general topic above also wipes its sessionStorage and push
++    // subscriptions, which a page can notice.
++    MOZ_ALWAYS_SUCCEEDS(
++        obsSvc->AddObserver(this, "camoufox-clear-auth-cache-data", true));
+   }
+ }
+ 

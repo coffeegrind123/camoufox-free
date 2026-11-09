@@ -1406,9 +1406,11 @@ class BrowserContext {
     // Proxy credentials are cached per browser context (proxy-auth-isolation.patch),
     // so a context's first proxy needs no cache work. Replacing a proxy must drop
     // this context's stale login, but `net:clear-active-logins` clears every
-    // context's cache and can race another context's authentication.
+    // context's cache and can race another context's authentication, and
+    // `clear-origin-attributes-data` also wipes the context's sessionStorage and
+    // push subscriptions. The patch's own topic clears the auth cache alone.
     if (this._proxy) {
-      Services.obs.notifyObservers(null, "clear-origin-attributes-data",
+      Services.obs.notifyObservers(null, "camoufox-clear-auth-cache-data",
           JSON.stringify({userContextId: this.userContextId}));
     }
     this._proxy = withProxyAuth(proxy, this._proxyAuth);
