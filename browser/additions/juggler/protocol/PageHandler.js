@@ -8,7 +8,7 @@ const {Helper, EventWatcher} = ChromeUtils.importESModule('resource://gre/module
 const {NetUtil} = ChromeUtils.importESModule('resource://gre/modules/NetUtil.sys.mjs');
 const {NetworkObserver, PageNetwork} = ChromeUtils.importESModule('resource://gre/modules/juggler/NetworkObserver.js');
 const {PageTarget} = ChromeUtils.importESModule('resource://gre/modules/juggler/TargetRegistry.js');
-const {setTimeout} = ChromeUtils.importESModule('resource://gre/modules/Timer.sys.mjs');
+const {setTimeout, clearTimeout} = ChromeUtils.importESModule('resource://gre/modules/Timer.sys.mjs');
 const {MouseDispatch, kAckDeadlineMs} = ChromeUtils.importESModule('resource://gre/modules/juggler/input/MouseDispatch.js');
 const kMoveIntervalMs = 8; // a 125 Hz mouse
 const {logNormalDelay} = ChromeUtils.importESModule('resource://gre/modules/juggler/input/HumanDelay.js');
@@ -114,6 +114,13 @@ export class PageHandler {
     // taken the pointer from the window yet (_dragMotion).
     this._dragMoves = 0;
     this._dragHasPointer = false;
+    // Windows: the move an OLE drag loop leaves queued until the drop, the
+    // dragovers sent so far, the DragOver timer, and the chain that keeps the
+    // timer's events from interleaving with a motion's (_dragSend).
+    this._dragHeldMove = null;
+    this._dragOvers = 0;
+    this._dragTimer = null;
+    this._dragChain = Promise.resolve();
     this._lastMousePosition = { x: 0, y: 0 };
     // Camoufox: last position an actual mousemove landed on. Used as the
     // start point for the humanized cursor trajectory (humanize=True). Until
@@ -661,6 +668,7 @@ export class PageHandler {
     // key events don't fire if we are dragging.
     if (this._isDragging) {
       if (type === 'keydown' && key === 'Escape') {
+        this._stopDragTimer();
         await this._contentPage.send('dispatchDragEvent', {
           type: 'dragover',
           x: this._lastMousePosition.x,
@@ -866,15 +874,24 @@ export class PageHandler {
       if (type === 'mousemove') {
         this._lastMousePosition = { x, y };
         await this._settleDrag(false);
-        if (this._isDragging && !this._dragSkipsMove()) {
+        const firstMove = this._isDragging ? this._firstDragMove() : null;
+        if (firstMove === 'hold') {
+          this._dragHeldMove = { x, y };
+          return;
+        }
+        if (this._isDragging && firstMove !== 'mousemove') {
           this._dragMotion(dispatch, x, y);
-          const watcher = new EventWatcher(this._pageEventSink, ['dragover'], this._pendingEventWatchers);
           // A motion fires `drag` at the source, then dragover at the target,
-          // as GTK's drag session does. The dragover before a drop is not a
-          // motion and has no `drag` (measured on X11 against stock 158.0.1).
-          await this._contentPage.send('dispatchDragEvent', {type: 'drag', x, y, modifiers});
-          await this._contentPage.send('dispatchDragEvent', {type:'dragover', x, y, modifiers});
-          await watcher.ensureEventsAndDispose(['dragover']);
+          // as GTK's, OLE's and AppKit's drag sessions all do.
+          await this._dragSend(() => this._dragOverAt(x, y, modifiers));
+          if (this._dragPlatform() === 'win') {
+            // OLE calls DragOver again a few ms after a motion's, then on its
+            // timer while the button is held (stock 159 on Windows 11: pairs
+            // 6-8 ms apart at each motion, then every 59-77 ms at rest).
+            await new Promise(resolve => setTimeout(resolve, 4 + Math.random() * 4));
+            await this._dragSend(() => this._dragOverAt(x, y, modifiers));
+            this._startDragTimer(x, y, modifiers);
+          }
           return;
         }
 
@@ -923,19 +940,28 @@ export class PageHandler {
       if (type === 'mouseup') {
         await this._settleDrag(true);
         if (this._isDragging) {
+          this._stopDragTimer();
+          await this._dragChain;
           this._dragMotion(dispatch, x, y);
-          const watcher = new EventWatcher(this._pageEventSink, ['dragover'], this._pendingEventWatchers);
-          await this._contentPage.send('dispatchDragEvent', {type: 'dragover', x, y, modifiers});
+          // A drop follows the last motion's dragover with none of its own:
+          // GTK's drag-drop and OLE's Drop fire none (stock 159, X11 and
+          // Windows 11). One is sent only when no motion has reached a target
+          // yet, since the drop needs the target's answer.
+          if (!this._dragOvers)
+            await this._dragOverAt(x, y, modifiers, {drag: false});
           await this._contentPage.send('dispatchDragEvent', {type: 'drop', x, y, modifiers});
           await this._contentPage.send('dispatchDragEvent', {type: 'dragend', x, y, modifiers});
-          // The pointer comes back to the window with the button still held.
-          if (this._dragHasPointer)
-            MouseDispatch.forBrowser(win, this._pageTarget._linkedBrowser, {...eventArgs, buttons: 1}).enterWindow(x, y);
           // NOTE:
           // - 'drop' event might not be dispatched at all, depending on dropAction.
           // - 'dragend' event might not be dispatched at all, if the source element was removed
           //   during drag. However, it'll be dispatched synchronously in the renderer.
-          await watcher.ensureEventsAndDispose(['dragover']);
+          const held = MouseDispatch.forBrowser(win, this._pageTarget._linkedBrowser, {...eventArgs, buttons: 1});
+          if (this._dragPlatform() === 'win') {
+            await this._afterWindowsDrop(win, held, eventArgs, x, y);
+          } else if (this._dragHasPointer) {
+            // GTK: the pointer comes back to the window with the button still held.
+            held.enterWindow(x, y);
+          }
           this._isDragging = false;
         } else {
           const eventNames = (button === 2 && this._contextMenuOnMouseUp()) ? ['mouseup', 'contextmenu'] : ['mouseup'];
@@ -1009,24 +1035,111 @@ export class PageHandler {
     this._isDragging = !!finalized?.dragSessionStarted;
     this._dragMoves = 0;
     this._dragHasPointer = false;
+    this._dragHeldMove = null;
+    this._dragOvers = 0;
+    this._stopDragTimer();
   }
 
-  // GTK hands the pointer to a new drag session one move late: the move after
-  // the one that fired dragstart still reaches the page as a mousemove with the
-  // button held (measured on X11 against stock 158.0.1). Windows and macOS are
-  // not measured, so they keep dragging from the first move.
-  _dragSkipsMove() {
-    return Services.appinfo.widgetToolkit === 'gtk' && this._dragMoves++ === 0;
+  // Juggler's drag session is synthesized: no native session runs on any
+  // host, so how the drag reaches the page is emulated, and it follows the
+  // claimed OS, not the host's toolkit.
+  _dragPlatform() {
+    if (this._identityIs('Win', 'WINNT'))
+      return 'win';
+    if (this._identityIs('Mac', 'Darwin'))
+      return 'mac';
+    return 'gtk';
+  }
+
+  // What the first move after dragstart is. GTK hands the pointer to the new
+  // session one move late, so the page gets it as a mousemove with the button
+  // held (stock 158.0.1 and 159.0.1 on X11). Windows enters its OLE loop late
+  // too, but leaves the move queued: the page gets it only after the drop
+  // (stock 159.0.1 on Windows 11, one recording). macOS is not measured, so
+  // it drags from the first move.
+  _firstDragMove() {
+    if (this._dragMoves++ !== 0)
+      return 'drag';
+    const platform = this._dragPlatform();
+    if (platform === 'gtk')
+      return 'mousemove';
+    if (platform === 'win')
+      return 'hold';
+    return 'drag';
   }
 
   // The first drag motion takes the pointer from the window, as a GTK drag
   // session's grab does: a widget exit, so the drag starts with nothing hovered
-  // and the next move after the drop reports no movement.
+  // and the next move after the drop reports no movement. OLE takes no grab
+  // the page sees: hover stays on the source until the drop.
   _dragMotion(dispatch, x, y) {
-    if (this._dragHasPointer || Services.appinfo.widgetToolkit !== 'gtk')
+    if (this._dragHasPointer || this._dragPlatform() !== 'gtk')
       return;
     this._dragHasPointer = true;
     dispatch.leaveWindow(x, y);
+  }
+
+  // Motions and timer ticks take turns, so a tick's drag/dragover never lands
+  // between a motion's.
+  _dragSend(fn) {
+    const turn = this._dragChain.then(fn);
+    this._dragChain = turn.catch(() => {});
+    return turn;
+  }
+
+  async _dragOverAt(x, y, modifiers, {drag = true} = {}) {
+    if (!this._isDragging)
+      return;
+    const watcher = new EventWatcher(this._pageEventSink, ['dragover'], this._pendingEventWatchers);
+    if (drag)
+      await this._contentPage.send('dispatchDragEvent', {type: 'drag', x, y, modifiers});
+    await this._contentPage.send('dispatchDragEvent', {type: 'dragover', x, y, modifiers});
+    this._dragOvers++;
+    await watcher.ensureEventsAndDispose(['dragover']);
+  }
+
+  // Windows: OLE's DoDragDrop calls DragOver on a timer while the button is
+  // held, still or not, and each call fires drag then dragover (stock 159.0.1
+  // on Windows 11: 59-77 ms apart). Restarted from each motion's position.
+  _startDragTimer(x, y, modifiers) {
+    this._stopDragTimer();
+    const tick = () => {
+      this._dragTimer = setTimeout(async () => {
+        if (!this._isDragging || this._dragTimer === null)
+          return;
+        try {
+          await this._dragSend(() => this._dragOverAt(x, y, modifiers));
+        } catch (e) {
+          return;
+        }
+        if (this._dragTimer !== null)
+          tick();
+      }, 59 + Math.random() * 18);
+    };
+    tick();
+  }
+
+  _stopDragTimer() {
+    if (this._dragTimer !== null)
+      clearTimeout(this._dragTimer);
+    this._dragTimer = null;
+  }
+
+  // Windows, after the drop: the presshell's synthesized move hovers the drop
+  // point with the button still held (over/out only, no mousemove), the move
+  // the OLE loop left queued arrives with the button held, then Windows' own
+  // move at the release point with the button up (stock 159.0.1 on Windows 11,
+  // one recording). No mouseup or click: OLE consumed the release.
+  async _afterWindowsDrop(win, held, eventArgs, x, y) {
+    held.synthesizeHover(x, y);
+    const watcher = new EventWatcher(this._pageEventSink, ['mousequeued'], this._pendingEventWatchers);
+    if (this._dragHeldMove)
+      await held.sendAcked(watcher, 'mousemove', this._dragHeldMove.x, this._dragHeldMove.y);
+    const released = MouseDispatch.forBrowser(win, this._pageTarget._linkedBrowser, {...eventArgs, buttons: 0});
+    await released.sendAcked(watcher, 'mousemove', x, y);
+    watcher.dispose();
+    this._dragHeldMove = null;
+    this._lastTrackedPos = { x, y };
   }
 
   _contextMenuOnMouseUp() {

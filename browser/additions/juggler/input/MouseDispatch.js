@@ -404,6 +404,21 @@ export class MouseDispatch {
     this._sendAbsolute('mouseover', absX, absY);
   }
 
+  /**
+   * Hover a relative point without moving there: a widget-synthesized
+   * mousemove, as the presshell sends when what is under the pointer changes.
+   * It fires the over/out and enter/leave chains but no mousemove. Unacked.
+   */
+  synthesizeHover(x, y) {
+    const {x: absX, y: absY} = this.toAbsolute(x, y);
+    return this._win.windowUtils.jugglerSendMouseEvent(
+      'mousemove', absX, absY, this._args.button, 0, this._args.modifiers,
+      false /* aIgnoreRootScrollFrame */, 0.0 /* pressure */,
+      this._win.MouseEvent.MOZ_SOURCE_MOUSE /* inputSource */,
+      true /* isDOMEventSynthesized */, true /* isWidgetEventSynthesized */,
+      this._args.buttons, this._win.windowUtils.DEFAULT_MOUSE_POINTER_ID, false);
+  }
+
   /** Wheel events take the same conversion; they are not acked. */
   sendWheel(x, y, {deltaX, deltaY, deltaZ, deltaMode, lineOrPageDeltaX, lineOrPageDeltaY, nativeNotches = false}) {
     const {x: absX, y: absY} = this.toAbsolute(x, y);
