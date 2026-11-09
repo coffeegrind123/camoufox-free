@@ -83,6 +83,34 @@ DEFAULT_CANVAS_NOISE: Optional[bool] = False
 # Camoufox preferences to cache previous pages and requests
 CACHE_PREFS: Dict[str, Any] = LAUNCHER_CONSTANTS['cachePrefs']
 
+# low_bandwidth: prefs per level for a connection billed per byte, and the stock value of each
+# (StaticPrefList.yaml, all.js, HTMLMediaElement.cpp GetPreloadDefault/GetPreloadDefaultAuto).
+# Level 1 changes nothing a page can see: a 2 GiB disk cache instead of the 1 GB smart-size
+# ceiling. Level 2 takes the media preload Firefox itself uses on a cellular connection and
+# drops prefetch and web fonts; level 3 also blocks images. No level intercepts requests: a Playwright
+# route makes Juggler set INHIBIT_CACHING on the context (TargetRegistry.js setCacheDisabled),
+# so every revisit would be downloaded again through the metered connection.
+LOW_BANDWIDTH_PREFS: Dict[str, Any] = LAUNCHER_CONSTANTS['lowBandwidthPrefs']
+LOW_BANDWIDTH_MAX = len(LOW_BANDWIDTH_PREFS['levels']) + 1
+
+
+def low_bandwidth_level(value: Any) -> int:
+    """0 for off, else the level; refuses anything that is not None, False or an int level."""
+    if value is None or value is False:
+        return 0
+    if isinstance(value, bool) or not isinstance(value, int) or not 0 <= value <= LOW_BANDWIDTH_MAX:
+        raise ValueError(f'low_bandwidth must be 0 to {LOW_BANDWIDTH_MAX}, got {value!r}.')
+    return value
+
+
+def low_bandwidth_prefs(level: int) -> Dict[str, Any]:
+    """Every pref the mode owns, at stock when the level does not change it. The launch
+    writes only the changed ones, and stock only to clear a persistent profile's old value."""
+    prefs = dict(LOW_BANDWIDTH_PREFS['stock'])
+    for step in LOW_BANDWIDTH_PREFS['levels'][:level]:
+        prefs.update(step)
+    return prefs
+
 # Prefs whose default differs between Firefox's Windows and Linux builds (all.js,
 # firefox.js and StaticPrefList.yaml, checked on 158) and that a page or the
 # user can observe, set to the Windows default:
@@ -1271,6 +1299,7 @@ def launch_options(
     firefox_user_prefs: Optional[Dict[str, Any]] = None,
     proxy: Optional[Dict[str, str]] = None,
     enable_cache: Optional[bool] = None,
+    low_bandwidth: Optional[int] = None,
     args: Optional[List[str]] = None,
     env: Optional[Dict[str, Union[str, float, bool]]] = None,
     i_know_what_im_doing: Optional[bool] = None,
@@ -1370,6 +1399,10 @@ def launch_options(
             Note: If geoip is True, a request will be sent through this proxy to find the target IP.
         enable_cache (Optional[bool]):
             Cache previous pages, requests, etc (uses more memory).
+        low_bandwidth (Optional[int]):
+            Spend fewer bytes on a metered connection. 1: a 2 GiB disk cache. 2: also cellular
+            media preload, no prefetch and no web fonts (warns: detectable). 3: also blocks
+            images, as block_images. Needs enable_cache=True. Default: off.
         args (Optional[List[str]]):
             Arguments to pass to the browser.
         env (Optional[Dict[str, Union[str, float, bool]]]):
@@ -2002,6 +2035,19 @@ def launch_options(
 
     # Fresh profiles get a toggle's pref only when on. A persistent profile
     # may need the stock value written once to clear an earlier toggled value.
+    bandwidth_level = low_bandwidth_level(low_bandwidth)
+    if bandwidth_level and not enable_cache:
+        raise ValueError('low_bandwidth needs enable_cache=True: revisited pages from the disk cache are most of what it saves.')
+    if bandwidth_level >= 3:
+        if block_images is False:
+            raise ValueError('low_bandwidth=3 blocks images; it cannot be combined with block_images=False.')
+        block_images = True
+    if bandwidth_level >= 2:
+        LeakWarning.warn('low_bandwidth', i_know_what_im_doing)
+    bandwidth_prefs = low_bandwidth_prefs(bandwidth_level)
+    for pref, stock in LOW_BANDWIDTH_PREFS['stock'].items():
+        value = bandwidth_prefs[pref]
+        set_toggle_pref(firefox_user_prefs, pref, value != stock, stock, value, launch_options.get('user_data_dir'))
     if block_images:
         LeakWarning.warn('block_images', i_know_what_im_doing)
     if disable_coop:

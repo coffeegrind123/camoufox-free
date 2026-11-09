@@ -231,6 +231,28 @@ Windows context on a browser launched as another OS has the host's. `NewContext`
 does not refuse the mix. Pass `os` at launch for the OS whose behaviour matters,
 or use one browser per OS.
 
+### Low bandwidth
+
+A residential proxy billed per byte charges for everything a page loads. `low_bandwidth` cuts
+that in levels, each including the one before:
+
+| Level | What changes | What a page can see |
+|---|---|---|
+| 1 | Disk cache of 2 GiB instead of Firefox's 1 GB smart-size ceiling. | Nothing. |
+| 2 | Also media preload as Firefox sets it on a cellular connection (`none`, and `metadata` for `preload="auto"`), no link prefetch and no web fonts. | Media `readyState` and `buffered` advance later; a prefetched resource is missing from Resource Timing; `document.fonts` loads fail and text measures in the fallback font. Warns. |
+| 3 | Also no images, as `block_images`. | Images fail to load while `data:` images work. Warns. |
+
+```python
+with Camoufox(enable_cache=True, low_bandwidth=1, proxy=...) as browser:
+    ...
+```
+
+It needs `enable_cache=True`, because revisited pages served from the disk cache are most of
+what it saves. No level intercepts requests: a Playwright route (`page.route`,
+`context.route`) turns caching off for the whole context, so a blocker built on routes
+downloads every revisit again. uBlock Origin, which Camoufox loads by default, already drops ads
+and trackers.
+
 ### The canvas on another OS
 
 A page can draw a canvas or a WebGL scene and read the pixels back. Those pixels
@@ -397,6 +419,7 @@ passed to Playwright's `firefox.launch()` (or `launch_persistent_context()`).
 | `main_world_eval` | `bool` | `False` | Allow `page.evaluate("mw:...")` and `mw:` init scripts to run in the page's own world. |
 | `allow_addon_new_tab` | `bool` | `False` | Let addons open tabs. |
 | `enable_cache` | `bool` | `False` | Keep Firefox's page and request caches. Uses more memory. |
+| `low_bandwidth` | `int` | off | Spend fewer bytes on a connection billed per byte, at levels 1 to 3. Needs `enable_cache=True`. Warns from level 2. See [Low bandwidth](#low-bandwidth). |
 | `pin_cpu_cores` | `bool` | `False` | Linux and Windows: pin the browser to as many cores as `navigator.hardwareConcurrency` claims, so a page timing parallel workers measures the same number. Costs CPU and serializes concurrent launches. |
 | `fingerprint` | fpgen fingerprint `dict` | drawn | Use this fpgen fingerprint instead of drawing one. Warns. |
 | `fingerprint_preset` | `bool` or `dict` | `None` | Opt into a recorded real-device preset instead of fpgen: `True` picks a random bundled one, a dict uses that one. |

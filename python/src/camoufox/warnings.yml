@@ -71,6 +71,12 @@ gpu_software_rendering: >-
 block_images: >-
     Blocking image requests has been reported to cause detection issues on major WAFs.
 
+low_bandwidth: >-
+    low_bandwidth=2 and above preload media as on a cellular connection and turn off link
+    prefetch and web fonts. A page can see all three: media readyState and buffered advance
+    later, a prefetched resource is missing from its Resource Timing, document.fonts loads
+    fail and text measures in the fallback font.
+
 custom_fonts_only: >-
     Disabling OS-specific fonts while spoofing your OS will make your browser fingerprint inconsistent.
     WAFs can detect this mismatch between your claimed OS and available system fonts.

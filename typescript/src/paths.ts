@@ -117,6 +117,10 @@ export interface LauncherConstants {
 	windowsUiColors: Record<string, string>;
 	windowsWebGpuLimits: Record<string, number>;
 	cachePrefs: Record<string, any>;
+	lowBandwidthPrefs: {
+		stock: Record<string, any>;
+		levels: Record<string, any>[];
+	};
 	windowsBehaviourPrefs: Record<string, any>;
 	windowFrame: Record<
 		string,

@@ -80,6 +80,28 @@
     "maxComputeWorkgroupSizeZ": 64,
     "maxComputeWorkgroupsPerDimension": 65535
   },
+  "lowBandwidthPrefs": {
+    "stock": {
+      "browser.cache.disk.smart_size.enabled": true,
+      "browser.cache.disk.capacity": 256000,
+      "media.preload.default": 2,
+      "media.preload.auto": 3,
+      "network.prefetch-next": true,
+      "gfx.downloadable_fonts.enabled": true
+    },
+    "levels": [
+      {
+        "browser.cache.disk.smart_size.enabled": false,
+        "browser.cache.disk.capacity": 2097152
+      },
+      {
+        "media.preload.default": 1,
+        "media.preload.auto": 2,
+        "network.prefetch-next": false,
+        "gfx.downloadable_fonts.enabled": false
+      }
+    ]
+  },
   "cachePrefs": {
     "browser.sessionhistory.max_total_viewers": -1,
     "browser.cache.memory.enable": true,

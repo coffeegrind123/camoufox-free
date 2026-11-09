@@ -162,6 +162,39 @@ const OS_NAMES = { win: "windows", mac: "macos", lin: "linux" } as const;
 // Camoufox preferences to cache previous pages and requests
 export const CACHE_PREFS: Record<string, any> = LAUNCHER_CONSTANTS.cachePrefs;
 
+// low_bandwidth: prefs per level for a connection billed per byte, and the stock value of each
+// (StaticPrefList.yaml, all.js, HTMLMediaElement.cpp GetPreloadDefault/GetPreloadDefaultAuto).
+// No level intercepts requests: a Playwright route makes Juggler set INHIBIT_CACHING on the
+// context (TargetRegistry.js setCacheDisabled), so every revisit would be downloaded again.
+export const LOW_BANDWIDTH_PREFS = LAUNCHER_CONSTANTS.lowBandwidthPrefs;
+export const LOW_BANDWIDTH_MAX = LOW_BANDWIDTH_PREFS.levels.length + 1;
+
+/** 0 for off, else the level; refuses anything that is not undefined, null, false or an int level. */
+export function lowBandwidthLevel(value: unknown): number {
+	if (value === undefined || value === null || value === false) return 0;
+	if (
+		typeof value !== "number" ||
+		!Number.isInteger(value) ||
+		value < 0 ||
+		value > LOW_BANDWIDTH_MAX
+	) {
+		throw new ValueError(
+			`low_bandwidth must be 0 to ${LOW_BANDWIDTH_MAX}, got ${typeof value === "string" ? `'${value}'` : value === true ? "True" : String(value)}.`,
+		);
+	}
+	return value;
+}
+
+/** Every pref the mode owns, at stock when the level does not change it. The launch
+ * writes only the changed ones, and stock only to clear a persistent profile's old value. */
+export function lowBandwidthPrefs(level: number): Record<string, any> {
+	const prefs: Record<string, any> = { ...LOW_BANDWIDTH_PREFS.stock };
+	for (const step of LOW_BANDWIDTH_PREFS.levels.slice(0, level)) {
+		Object.assign(prefs, step);
+	}
+	return prefs;
+}
+
 // Prefs whose Firefox default differs between the Windows and Linux builds and
 // that a page or the user can observe, at the Windows default (see
 // WINDOWS_BEHAVIOUR_PREFS in the Python launcher for each one's reason).
@@ -1643,6 +1676,10 @@ export interface LaunchOptions {
 	proxy?: ProxyConfig;
 	/** Cache previous pages, requests, etc (uses more memory). */
 	enable_cache?: boolean;
+	/** Spend fewer bytes on a metered connection. 1: a 2 GiB disk cache. 2: also cellular
+	 * media preload, no prefetch and no web fonts (warns: detectable). 3: also blocks images,
+	 * as block_images. Needs enable_cache. Default: off. */
+	low_bandwidth?: number | boolean;
 	/** Arguments to pass to the browser. */
 	args?: string[];
 	/** Environment variables to set. Defaults to a copy of process.env. */
@@ -1714,6 +1751,7 @@ export async function launchOptions({
 	firefox_user_prefs,
 	proxy,
 	enable_cache,
+	low_bandwidth,
 	args,
 	env,
 	i_know_what_im_doing,
@@ -2339,6 +2377,23 @@ export async function launchOptions({
 
 	// Fresh profiles get a toggle's pref only when on. A persistent profile
 	// may need the stock value written once to clear an earlier toggled value.
+	const bandwidthLevel = lowBandwidthLevel(low_bandwidth);
+	if (bandwidthLevel && !enable_cache) {
+		throw new ValueError(
+			"low_bandwidth needs enable_cache=True: revisited pages from the disk cache are most of what it saves.",
+		);
+	}
+	if (bandwidthLevel >= 3) {
+		if (block_images === false) {
+			throw new ValueError(
+				"low_bandwidth=3 blocks images; it cannot be combined with block_images=False.",
+			);
+		}
+		block_images = true;
+	}
+	if (bandwidthLevel >= 2) {
+		LeakWarning.warn("low_bandwidth", i_know_what_im_doing);
+	}
 	if (block_images) {
 		LeakWarning.warn("block_images", i_know_what_im_doing);
 	}
@@ -2348,6 +2403,18 @@ export async function launchOptions({
 	const profileDir = (passthrough.user_data_dir ?? passthrough.userDataDir) as
 		| string
 		| undefined;
+	const bandwidthPrefs = lowBandwidthPrefs(bandwidthLevel);
+	for (const [pref, stock] of Object.entries(LOW_BANDWIDTH_PREFS.stock)) {
+		const value = bandwidthPrefs[pref];
+		setTogglePref(
+			firefox_user_prefs,
+			pref,
+			value !== stock,
+			stock,
+			value,
+			profileDir,
+		);
+	}
 	for (const [on, pref, stock, toggled] of [
 		[block_images, "permissions.default.image", 1, 2],
 		[block_webrtc, "media.peerconnection.enabled", true, false],

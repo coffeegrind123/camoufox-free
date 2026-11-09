@@ -334,6 +334,17 @@ scenario('block_all', fingerprint=FP['windows'], os='windows', block_images=True
 scenario('block_all_ikwid', fingerprint=FP['windows'], os='windows', block_images=True, block_webrtc=True,
          block_webgl=True, disable_coop=True, i_know_what_im_doing=True)
 scenario('allow_webgl_false', fingerprint=FP['linux'], os='linux', allow_webgl=False)
+
+# low_bandwidth levels and refusals
+scenario('low_bandwidth_1', fingerprint=FP['windows'], os='windows', enable_cache=True, low_bandwidth=1)
+scenario('low_bandwidth_2', fingerprint=FP['windows'], os='windows', enable_cache=True, low_bandwidth=2)
+scenario('low_bandwidth_3', fingerprint=FP['windows'], os='windows', enable_cache=True, low_bandwidth=3)
+scenario('low_bandwidth_3_ikwid', fingerprint=FP['windows'], os='windows', enable_cache=True, low_bandwidth=3,
+         i_know_what_im_doing=True)
+scenario('low_bandwidth_no_cache', fingerprint=FP['windows'], os='windows', low_bandwidth=1)
+scenario('low_bandwidth_bad_level', fingerprint=FP['windows'], os='windows', enable_cache=True, low_bandwidth=4)
+scenario('low_bandwidth_3_keep_images', fingerprint=FP['windows'], os='windows', enable_cache=True, low_bandwidth=3,
+         block_images=False)
 scenario('flags', fingerprint=FP['macos'], os='macos', main_world_eval=True, allow_addon_new_tab=True,
          enable_cache=True, args=['--foo', '--bar=1'], firefox_user_prefs={'my.pref': 'x', 'ui.useOverlayScrollbars': 0,
                                                                           'intl.locale.requested': 'de-DE'})
