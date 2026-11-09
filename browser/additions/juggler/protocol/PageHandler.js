@@ -834,7 +834,11 @@ export class PageHandler {
         // A special hack: if someone tries to do `mousemove` outside of
         // viewport coordinates, then move the mouse off from the Web Content.
         // This way we can eliminate all the hover effects.
-        dispatch.parkOffContent();
+        // Camoufox: toward the point it was sent to, as a mouse leaves: up into
+        // the toolbar at its own x, or out of the window through the edge it
+        // crosses. Parked at the chrome window's origin, every exit read as
+        // (0, -85) on the page, whichever edge (driven-exit-point.py).
+        dispatch.leaveContent(x, y);
         // Camoufox: the pointer really moved (off content), so forget the tracked
         // position. Otherwise a later move back to the same coordinates was
         // treated as a no-op and skipped, and the following mousedown made the

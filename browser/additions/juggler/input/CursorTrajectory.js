@@ -225,7 +225,7 @@ export const cursory = {
   planMove(ctx, to) {
     const destination = {kind: 'move', x: to.x, y: to.y};
     const {x: fromX, y: fromY} = ctx.cursor;
-    // parkOffContent() forgets the cursor position (it sets NaN) because the
+    // A move off the page forgets the cursor position (it sets NaN) because the
     // pointer really did move somewhere untracked. With no start point there is
     // no path to draw, so this move goes straight to its destination.
     if (!Number.isFinite(fromX) || !Number.isFinite(fromY))

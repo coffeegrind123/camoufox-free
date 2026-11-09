@@ -353,17 +353,6 @@ export class MouseDispatch {
   }
 
   /**
-   * Park the cursor off web content so hover effects clear.
-   *
-   * Deliberately dispatched at the chrome window's own origin rather than a
-   * content coordinate, and deliberately unacked: it never enters the renderer,
-   * so there is no ack to wait for.
-   */
-  parkOffContent() {
-    this._sendAbsolute('mousemove', 0, 0);
-  }
-
-  /**
    * Take the pointer off the content toward a relative point outside the
    * viewport, as a curve straying off the page does. Above the content,
    * within its width, is the toolbar, where a cursor leaving through the top

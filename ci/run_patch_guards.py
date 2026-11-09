@@ -115,6 +115,7 @@ GROUPS: Dict[str, Tuple[str, ...]] = {
         "driven-dblclick-gap",
         "driven-drag-gtk",
         "driven-evaluate-globals",
+        "driven-exit-point",
         "driven-fill-paste",
         "driven-global-order",
         "driven-move-coalescing",
