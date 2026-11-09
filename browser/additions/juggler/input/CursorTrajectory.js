@@ -51,16 +51,17 @@ function staysWithin(points, within) {
 }
 
 /**
- * Samples per second.
+ * Samples per second: a USB mouse's 125Hz report rate.
  *
- * A USB mouse reports at 125Hz, but Gecko coalesces moves to the refresh rate
- * before a page sees them, so 60 is what a page observes from a real cursor on
- * a 60Hz display -- and it is the rate the recordings themselves carry (median
- * gap across all 110664 of their samples: 16ms). Asking for more would not add
- * information, only more synthesized events per move, each of which costs a
- * round trip to the renderer and an ack.
+ * Gecko coalesces moves to the refresh rate for pointermove, but a page still
+ * sees every report: pointerrawupdate fires per report and getCoalescedEvents()
+ * lists them. A real 125Hz mouse gives about two per frame, 8ms apart; at 60
+ * the cursor read as a rare 60Hz device (one per frame, 16ms). The recordings
+ * carry 60Hz (median gap across 110664 samples: 16ms), so Cursory resamples
+ * them. sendTrajectoryAcked does not wait on each step's ack, or the steps
+ * would fall behind their 8ms gaps.
  */
-const kFrequencyHz = 60;
+const kFrequencyHz = 125;
 
 /**
  * Default ceiling on how long one movement may take, in seconds.
@@ -142,7 +143,7 @@ function durationScale(naturalMs, options) {
  * This is also why the event rate is only ever *at most* kFrequencyHz: a
  * short move has fewer whole pixels along it than samples, so it reports
  * fewer events, exactly as a real mouse crossing the same distance would.
- * Measured with a 3s floor: 41Hz over 72px, 56Hz over 400px, 60Hz over
+ * Measured at the former 60Hz with a 3s floor: 41Hz over 72px, 56Hz over 400px, 60Hz over
  * 2100px.
  */
 function toSteps(from, to, points, times, totalMs) {

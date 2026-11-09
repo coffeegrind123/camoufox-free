@@ -7,7 +7,7 @@ import {load} from './gecko.mjs';
 await load('input/mousecrack/mousecrack.js');
 const {mousecrack, humanizedMove} = await load('input/CursorTrajectory.js');
 
-const kMinGapMs = 1000 / 60;
+const kMinGapMs = 1000 / 125;
 
 function assertPlan(steps, to, budgetMs) {
   const last = steps.at(-1);
@@ -44,7 +44,7 @@ test('plans end exactly on the target, in time order, inside maxTime, or are nul
   assert.ok(planned >= 20, `only ${planned} of 24 moves planned`);
 });
 
-test('thinned intermediate steps keep at least a 60 Hz gap', async () => {
+test('thinned intermediate steps keep at least a 125 Hz gap', async () => {
   const options = {maxTime: 1.5};
   for (let i = 0; i < 6; i++) {
     const plan = await mousecrack.planMove({cursor: {x: 10 + i, y: 20}, options, rng: Math.random}, {x: 900, y: 600 - i * 40});

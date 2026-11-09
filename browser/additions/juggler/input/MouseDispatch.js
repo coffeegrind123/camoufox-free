@@ -297,9 +297,9 @@ export class MouseDispatch {
    *
    * Bounding each ack individually is not enough to bound the work: a curve is
    * dispatched inside a SINGLE activation-chain slot, and holds up to ~90
-   * points at the 1.5s default ceiling (the generator holds the sample rate at
-   * 60Hz however the duration is scaled; measured worst case over 800 moves was
-   * 83). A curve riding a coordinate that cannot be delivered would spend 90 x
+   * points at the 1.5s default ceiling at 60Hz, ~190 at the 125Hz the generator
+   * now holds (measured worst case over 800 moves at 60Hz was 83). A curve
+   * riding a coordinate that cannot be delivered would spend that many times
    * the deadline there. So the first undelivered point abandons the rest of the
    * curve and the move goes straight to its destination. Intermediate points
    * are humanization garnish: if one did not reach the renderer the rest of
@@ -324,13 +324,25 @@ export class MouseDispatch {
     let lastX = NaN;
     let lastY = NaN;
     let offContent = false;
+    // An intermediate step goes out at its due time without waiting for the
+    // renderer's ack: at a 125 Hz mouse's 8 ms a step's ack under load took
+    // longer than the gap, so awaiting each one made every later step late
+    // (a 500 ms plan took 750). The dispatch itself is synchronous and in
+    // order; only the ack is outstanding, each under its own deadline. A
+    // failed ack abandons the curve at the next step, and the destination
+    // waits for every outstanding one, so the page has them all first.
+    let failed = false;
+    const outstanding = [];
     const destination = plan.steps.length - 1;
     await play(plan, async ({x, y}, i) => {
       if (i === destination) {
+        await Promise.all(outstanding);
         await this._reveal(x, y);
         await sendDestination(x, y);
         return true;
       }
+      if (failed)
+        return false;
       this._remeasure();
       if (!this.isInViewport(x, y) || !this._isShown(x, y)) {
         if (!offContent) {
@@ -344,8 +356,11 @@ export class MouseDispatch {
       offContent = false;
       if (Math.round(x) === lastX && Math.round(y) === lastY)
         return true;
-      if (!await this.sendAcked(watcher, eventType, x, y))
-        return false;
+      // sendAcked dispatches before its first await.
+      outstanding.push(this.sendAcked(watcher, eventType, x, y).then(ack => {
+        if (!ack)
+          failed = true;
+      }));
       lastX = Math.round(x);
       lastY = Math.round(y);
       return true;
