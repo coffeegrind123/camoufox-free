@@ -109,6 +109,7 @@ GROUPS: Dict[str, Tuple[str, ...]] = {
     "parity": (
         "certificate-revocations",
         "contentaccessible-parity",
+        "context-proxy-browser-traffic",
         "css-device-size-fractional",
         "driven-click-hold",
         "driven-click-throughput",
