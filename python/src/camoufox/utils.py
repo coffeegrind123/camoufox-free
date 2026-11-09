@@ -1968,6 +1968,13 @@ def launch_options(
         requested = 'en-US'
     firefox_user_prefs.setdefault('intl.locale.requested', requested)
 
+    # Stock learns its home region from a network lookup this launch turns off,
+    # and writes it here. Without it the search service offers the region-less
+    # engine list (a German identity lacked Ecosia and Startpage) and the DoH
+    # rollout, which decides by region, never decides at all.
+    if config.get('locale:region'):
+        firefox_user_prefs.setdefault('browser.search.region', config['locale:region'])
+
     # The webcompat add-on picks its per-site interventions by the host's OS
     # (intervention_helpers.js getOS), so a Windows identity on Linux sent one
     # site a macOS UA, another sec-ch-ua-platform "Linux", and missed Windows'

@@ -2299,6 +2299,17 @@ export async function launchOptions({
 	}
 	setInto(firefox_user_prefs, "intl.locale.requested", requested);
 
+	// Stock learns its home region from a network lookup this launch turns
+	// off, and writes it here. Without it the search service offers the
+	// region-less engine list and the DoH rollout never decides.
+	if (pyTruthy(config["locale:region"])) {
+		setInto(
+			firefox_user_prefs,
+			"browser.search.region",
+			config["locale:region"],
+		);
+	}
+
 	// The webcompat add-on picks its per-site interventions by the host's OS
 	// (intervention_helpers.js getOS); its override makes it match the claimed one.
 	setInto(

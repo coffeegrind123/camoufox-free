@@ -28,3 +28,16 @@ def test_webcompat_interventions_follow_the_claimed_os(isolated_launch_dependenc
 def test_webcompat_caller_pref_wins(isolated_launch_dependencies):
     prefs = _prefs(config={'navigator.userAgent': UAS['windows']}, firefox_user_prefs={'extensions.webcompat.platform_override': 'linux'})
     assert prefs['extensions.webcompat.platform_override'] == 'linux'
+
+
+def test_search_region_follows_the_locale_region(isolated_launch_dependencies):
+    assert _prefs(locale='de-DE')['browser.search.region'] == 'DE'
+
+
+def test_no_search_region_without_one(isolated_launch_dependencies):
+    assert 'browser.search.region' not in _prefs(config={'locale:language': 'en'})
+
+
+def test_search_region_caller_pref_wins(isolated_launch_dependencies):
+    prefs = _prefs(locale='de-DE', firefox_user_prefs={'browser.search.region': 'AT'})
+    assert prefs['browser.search.region'] == 'AT'
