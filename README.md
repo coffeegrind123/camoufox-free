@@ -39,26 +39,6 @@ For an identity whose OS is not the host's. Offered upstream in
 
 ### Other browser fixes
 
-- **WebGL1 reports WebGL2's value for every shared parameter.** Firefox 156+
-  creates both on one GL profile; fpgen recorded 146, where they differ, and
-  CreepJS flags any mirrored parameter that does (two Linux records differed in
-  `ALIASED_POINT_SIZE_RANGE`). Both launchers copy every shared non-string
-  parameter. Offered upstream in [#1020](https://github.com/daijro/camoufox/pull/1020). ([5e59245](https://github.com/coffeegrind123/camoufox-free/commit/5e59245d0c542570df95514ef6bac295958db288))
-- **OffscreenCanvas has no WebGL2 where the device has none.** For a device
-  recorded without WebGL2, a canvas element offered none but OffscreenCanvas
-  did, with the host's real parameters under the spoofed renderer name, which
-  CreepJS flags. It now follows `webgl.enable-webgl2`, which stock never turns
-  off. Offered upstream in [#1022](https://github.com/daijro/camoufox/pull/1022). ([c313578](https://github.com/coffeegrind123/camoufox-free/commit/c313578b39b5377530adee05b158e41584ec64b9), guard
-  [offscreen-webgl2-follows-canvas.py](browser/tests/playwright/patches/offscreen-webgl2-follows-canvas.py))
-- **A repaired display scale keeps the display.** fpgen records some ratios
-  with a browser zoom folded in (1.0909 for 110%), which shrinks every CSS size.
-  The coherence repair moved the ratio to a real scaling step but kept the
-  shrunken sizes, so a 1920x1080 monitor was claimed as 1760x990 at 100%, and a
-  fullscreen window measured 1920x1080 against `screen.width` 1760. The geometry
-  is now rescaled with the ratio, including a ratio the launcher draws from
-  fpgen itself, which used to skip the repair. A screen the caller sets is
-  never rescaled. Offered upstream in [#1003](https://github.com/daijro/camoufox/pull/1003).
-  ([357cd48](https://github.com/coffeegrind123/camoufox-free/commit/357cd487113dad9a858a8e4ff7773e9cc141817c), [52b234f](https://github.com/coffeegrind123/camoufox-free/commit/52b234f29ba359dd7d2e2ae00743d3ee74f998d1), [1d1640b](https://github.com/coffeegrind123/camoufox-free/commit/1d1640bcc8de582f4ce49726258ee57c8fc9bff2), [#27](https://github.com/coffeegrind123/camoufox-free/pull/27))
 - **Large per-context values cross content processes.** Firefox does not sync a
   string pref over 4 KiB. Font and voice lists over 3 KiB are stored in chunks
   and reassembled from a generation header, so every content-process page and
@@ -72,12 +52,10 @@ For an identity whose OS is not the host's. Offered upstream in
   ([patch](browser/patches/speech-voices-spoofing.patch), guard
   [context-voice-names.py](browser/tests/playwright/patches/context-voice-names.py))
 - **Context identity and proxy settings stay isolated.** Proxy credentials are
-  isolated per container/private context, and a NewContext behind a proxy
-  derives its WebRTC IP, timezone, locale and geolocation from that proxy's
-  exit IP. Context viewports are bounded by the shared launch window. The
-  proxy exit placement is offered upstream in
-  [#990](https://github.com/daijro/camoufox/pull/990).
-  ([b84880a](https://github.com/coffeegrind123/camoufox-free/commit/b84880ae39c173aa8250d377b8e0679689c4cad2), [3777eaf](https://github.com/coffeegrind123/camoufox-free/commit/3777eaf09cc91a2eb1d7d1522a425785d8b23353))
+  isolated per container/private context, and a context's exit-IP lookup goes
+  through its proxy with those credentials. Context viewports are bounded by
+  the shared launch window.
+  ([a89eee3](https://github.com/coffeegrind123/camoufox-free/commit/a89eee3b313f48e0adb38b5dc75cafe004589062))
 - **Re-setting a context's proxy keeps its storage.** Dropping the old
   proxy's cached login went through Gecko's "forget this context's data"
   signal, so the page lost its sessionStorage and push subscriptions
@@ -122,13 +100,11 @@ For an identity whose OS is not the host's. Offered upstream in
   ([dacdda3](https://github.com/coffeegrind123/camoufox-free/commit/dacdda34ead3e11cfc94a10c25a06e4ebf127859), guard
   [ubo-seeded-start.py](browser/tests/playwright/patches/ubo-seeded-start.py),
   [fetch-ubo.py](browser/scripts/fetch-ubo.py), [41a9903](https://github.com/coffeegrind123/camoufox-free/commit/41a9903048c011b9fc9aa38aa9786d72d922a94d), [2a48d607](https://github.com/coffeegrind123/camoufox-free/commit/2a48d6072738d8ac47d428e34bbac130ae0735e2))
-- **Network and automation protocol fixes.** Routed requests keep Firefox's
-  original header order; UA, Accept-Language and per-scheme Accept-Encoding
-  stay coherent; DNT and context locale are stable across navigation.
-  A failed promise-reaction attach rejects immediately instead of leaving
-  Juggler hanging. The header order fix is offered upstream in
-  [#989](https://github.com/daijro/camoufox/pull/989).
-  ([a645377](https://github.com/coffeegrind123/camoufox-free/commit/a645377641887a9443c5e6be0d0f7e1e209eed39), [3cebf99](https://github.com/coffeegrind123/camoufox-free/commit/3cebf99c8f486c211a5502099c9ecfdc91164813))
+- **Network and automation protocol fixes.** UA, Accept-Language and
+  per-scheme Accept-Encoding stay coherent; DNT and context locale are stable
+  across navigation. A failed promise-reaction attach rejects immediately
+  instead of leaving Juggler hanging.
+  ([3cebf99](https://github.com/coffeegrind123/camoufox-free/commit/3cebf99c8f486c211a5502099c9ecfdc91164813))
 - **Per-context locale follows every scope.** A context's locale reaches
   `Intl`, `navigator.languages`, Accept-Language q-values, isolated worlds,
   dedicated/shared/service workers, AudioWorklets, requests without a browsing
@@ -174,26 +150,9 @@ For an identity whose OS is not the host's. Offered upstream in
   Ported from introvert's
   [d44921e](https://github.com/introvert/camoufox/commit/d44921e7e8103486aa8ef1232edee1ce5089d3e9).
   ([ae1f515](https://github.com/coffeegrind123/camoufox-free/commit/ae1f51504418287b2f8dbedc4650073f72e48207))
-- **Launcher failures are bounded and explicit.** Transient downloads retry
-  429/5xx/connection failures, and the host GPU probe has a 30-second deadline
-  that reports the executable and display it was probing instead of hanging;
-  the probe deadline is offered upstream in
-  [#985](https://github.com/daijro/camoufox/pull/985).
-  ([6fee36f](https://github.com/coffeegrind123/camoufox-free/commit/6fee36f05286233ea8c854faca4e53123fd283b6), [d5e2850](https://github.com/coffeegrind123/camoufox-free/commit/d5e28506cf2bca5a7d1a70083fa29bd5f3c2e3f8))
-- **A late window-manager frame keeps the identity's window size.** An X11
-  window manager can set its frame (`_NET_FRAME_EXTENTS`) after the window
-  maps. Firefox adds it to `outerWidth/outerHeight` without a resize event, so
-  the startup hold that keeps the identity's size never ran, and the outer size
-  could exceed `screen.width`. The hold now also checks on a timer. Offered
-  upstream in [#973](https://github.com/daijro/camoufox/pull/973).
-  ([e2f61ee](https://github.com/coffeegrind123/camoufox-free/commit/e2f61eeeab04c977d839930237a8a4c94f529ee8), guard
-  [startup-size-frame-extents.py](browser/tests/playwright/patches/startup-size-frame-extents.py))
-- **The startup size holds through a late toolbar reflow.** The toolbars
-  can shrink a few hundred ms after startup with no resize event; the hold took
-  the unchanged outer size for a fit and left the content area 12 px too tall
-  (1000x662 for 1000x650). It now checks the content area too. Offered
-  upstream in [#973](https://github.com/daijro/camoufox/pull/973).
-  ([4b5a4aa](https://github.com/coffeegrind123/camoufox-free/commit/4b5a4aa0c76beb2354bd3311d8d3f7f1c270958b))
+- **Transient downloads retry.** The launcher's downloads retry
+  429/5xx/connection failures instead of failing the fetch.
+  ([6fee36f](https://github.com/coffeegrind123/camoufox-free/commit/6fee36f05286233ea8c854faca4e53123fd283b6))
 - **A Windows or macOS identity's window frame measures as stock's.** A page
   can measure the frame around its content area (`outerWidth - innerWidth`,
   `mozInnerScreenX - screenX`), and it came from the host: GTK's 86x192 under
@@ -218,18 +177,15 @@ For an identity whose OS is not the host's. Offered upstream in
   really is. The getter costs what stock's does (getter-cost-parity.py).
   ([031108e](https://github.com/coffeegrind123/camoufox-free/commit/031108e0ed85469d834a9847bb5edcc17a4fcd84), [2a48d607](https://github.com/coffeegrind123/camoufox-free/commit/2a48d6072738d8ac47d428e34bbac130ae0735e2), [96e66d86](https://github.com/coffeegrind123/camoufox-free/commit/96e66d86794e3652134a30eec73e9bc164aebfbd), guard
   [window-screen-origin.py](browser/tests/playwright/patches/window-screen-origin.py))
-- **A humanized curve leaves the page as a real pointer does.** A point
-  outside the viewport was skipped with no event, so a curve that strayed off
-  the page left the cursor frozen at the edge with no `mouseout`, then
-  reappearing elsewhere, mid-page when a slow frame coalesced the re-entry.
-  The pointer now moves off the content (over the toolbar when it left through
-  the top) and re-enters with `mouseover`, and a page's first move redraws a
-  path that climbs out of the page. Ported onto upstream's #997 input design;
-  the page exit is offered upstream in
-  [#987](https://github.com/daijro/camoufox/pull/987), and the guard's check
-  that moves arrive at refresh ticks in
+- **A page's first humanized move comes in from the toolbar.** Every page's
+  first trajectory left from (0, 0), so each one swept out of the same corner.
+  It now starts just inside the top edge, within a quarter viewport of its
+  destination, on a path that stays on the page. Upstream's
+  [#987](https://github.com/daijro/camoufox/pull/987) exit model runs on top of
+  it, with the fork's unawaited intermediate steps; the guard's check that moves
+  arrive at refresh ticks is offered upstream in
   [#978](https://github.com/daijro/camoufox/pull/978).
-  ([MouseDispatch.js](browser/additions/juggler/input/MouseDispatch.js), guard
+  ([PageHandler.js](browser/additions/juggler/protocol/PageHandler.js), guard
   [humanize-mouse-trajectory.py](browser/tests/playwright/patches/humanize-mouse-trajectory.py))
 - **Humanized moves report like a 125 Hz mouse.** They were resampled to
   60 Hz, but `pointerrawupdate` and `getCoalescedEvents()` show every report:
