@@ -1,10 +1,11 @@
 """
 Verify Firefox gives each browser context its own web-content process.
 
-The per-context font memo bug needed two contexts in one content process.
+Per-context values cached in a content process (fontconfig's family-name
+memos, #941/#942, and any other process-wide cache keyed without a context)
+leak across identities only when two contexts share one content process.
 Firefox 158's SharedWeb pool keys the process by container and private mode,
-so that precondition is gone and the old font-rendering probe passed even when
-three contexts shared one process.
+which is why #942 was not needed on 158.
 
 This guard asserts the property that makes the failure impossible: with the
 default process pool, three contexts keep three web-content processes alive.
