@@ -101,19 +101,17 @@ for the default-locale hook, `navigator-spoofing.patch` for
 
 ## Headless WebGL
 
-`webgl-headless-egl.patch` has no source dependency on `webgl-spoofing.patch`.
-It touches only `gfx/gl/GLContextProviderLinux.cpp` and
-`gfx/thebes/gfxPlatform.cpp`, and applies in file-name order before the
-spoofing patch without sharing either file. The two are one behavioural unit:
-EGL creates a real context when `DISPLAY` is unset, and `webgl-spoofing.patch`
-makes that context report the identity's GPU. The
-`webgl-headless-parity.py` guard fails if either half is missing.
+`headless-software-webgl.patch` has no source dependency on `webgl-spoofing.patch`.
+It touches only `toolkit/xre/gfxtest/` and `widget/gtk/GfxInfo.cpp`, and the
+spoofing patch none of them. The two are one behavioural unit: the probe gives a
+display-less headless launch a real software EGL context, and
+`webgl-spoofing.patch` makes that context report the identity's GPU. The
+`webgl-headless-parity.py` and `headless-software-webgl.py` guards fail if
+either half is missing.
 
 Linux needs Mesa's EGL and DRI drivers at runtime: `libegl1`, `libegl-mesa0`
 and `libgl1-mesa-dri` on Debian/Ubuntu, or `mesa-libEGL` and
-`mesa-dri-drivers` on Fedora/RHEL. `libxul` dlopens `libEGL.so.1`; without the
-stack the browser starts but native-headless WebGL returns `null`. Xvfb is not
-needed for native headless.
+`mesa-dri-drivers` on Fedora/RHEL. Xvfb is not needed for native headless mode.
 
 ## RoverfoxStorageManager
 

@@ -26,13 +26,6 @@ For an identity whose OS is not the host's. Offered upstream in
   stock Firefox uses there. Where stock's Windows table names a face Windows 10
   and 11 no longer ship (Lao UI, Euphemia), the face Windows' own system
   fallback draws follows it (Leelawadee UI, Gadugi). ([7c8e6a9](https://github.com/coffeegrind123/camoufox-free/commit/7c8e6a9d8b3312846c26fe8e31984c10a1d3d6c6))
-- **Native headless WebGL** uses Mesa EGL with `DISPLAY` and
-  `WAYLAND_DISPLAY` unset. WebGL returns real rendering output, and WebGL2 does
-  so when the recorded GPU supports it, while both report the identity's pinned
-  GPU. Linux needs Mesa's EGL and DRI packages (`libegl1`, `libegl-mesa0` and
-  `libgl1-mesa-dri` on Debian/Ubuntu); Xvfb is not required. See
-  [Native headless WebGL](docs/headless-webgl.md).
-  ([21298fb](https://github.com/coffeegrind123/camoufox-free/commit/21298fb0517f708d374694cf06788ccf16bc036e))
 - **DirectWrite line metrics** for a Windows identity (`fonts:metrics`), so
   line boxes match Windows instead of FreeType. ([c8cd204](https://github.com/coffeegrind123/camoufox-free/commit/c8cd20423c9640bbb381fc33a293c33ccbbddadf), [6023d01](https://github.com/coffeegrind123/camoufox-free/commit/6023d01bd194ad38e1fae7a3660c0c02d5c200fa))
 - **Subpixel glyph positions** for a Windows or macOS identity, so text and

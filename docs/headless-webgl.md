@@ -14,27 +14,29 @@ falls back to GLX, which needs the display that is absent.
 
 ## Implementation
 
-[`webgl-headless-egl.patch`](../browser/patches/webgl-headless-egl.patch)
-changes the Linux offscreen factory to request Mesa's EGL provider when
-`MOZ_HEADLESS` is set. EGL reaches either the swrast device or
-`EGL_PLATFORM_SURFACELESS_MESA`, producing a real GL ES context on llvmpipe
-without X11 or a GPU.
+[`headless-software-webgl.patch`](../browser/patches/headless-software-webgl.patch)
+(upstream's, from Firefox 159's stock-parity work) gives the GPU probe a
+headless mode: a headless launch with neither `DISPLAY` nor `WAYLAND_DISPLAY`
+runs `gfxtest glx -e`, which probes Mesa's software GL through
+`EGL_PLATFORM_SURFACELESS_MESA` and needs no display. `GfxInfo` then keeps that
+launch's WebGL on Mesa's software EGL device (llvmpipe) rather than the first
+device EGL enumerates. A headless launch that does have a display probes it,
+as stock does.
 
-The GTK-only changes in `gfxPlatform::InitWebGLConfig()` stop the failed X11
-probe from vetoing WebGL and the variables that gate native context creation.
-They leave hardware acceleration off, as it should be in a headless process,
-and do not run on macOS or Windows.
+The same probe result also restores what an empty `gfxInfo` took away beyond
+WebGL: WebRTC's H264 video codecs.
 
-The patch deliberately does not flip `gfxVars::UseEGL()`. That flag also
-controls DMABUF, hardware video decoding, the EGL render compositor and the
-compositor's shared context. Those subsystems do not need to change for an
-offscreen WebGL context.
+The fork carried its own `webgl-headless-egl.patch` for this until
+2026-11-10. It forced the EGL provider on every headless launch, a display or
+not. Built with upstream's patch alone, headless WebGL equalled a headed launch
+on Xvfb key for key, framebuffer hash included, with and without a display;
+built with the fork's alone, WebRTC lost H264 headless. The fork's patch was
+redundant and was dropped.
 
-`webgl-headless-egl.patch` has no source dependency on
-[`webgl-spoofing.patch`](../browser/patches/webgl-spoofing.patch). The patches
-touch disjoint files and apply in file-name order. Together they make the
-headless context both real and consistent with the identity's recorded GPU;
-either half missing is a detectable browser.
+`headless-software-webgl.patch` has no source dependency on
+[`webgl-spoofing.patch`](../browser/patches/webgl-spoofing.patch). Together they
+make the headless context both real and consistent with the identity's
+recorded GPU; either half missing is a detectable browser.
 
 ## Runtime dependencies
 
