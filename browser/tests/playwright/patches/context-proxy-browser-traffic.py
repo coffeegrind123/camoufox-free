@@ -32,7 +32,8 @@ from helpers import resolve_binary  # noqa: E402
 
 CONTROL_HOST = "control.camoufox.test"
 PUSH_HOST = "push.camoufox.test"
-SUBSCRIBE_SECONDS = 30
+SUBSCRIBE_SECONDS = 15
+SUBSCRIBE_ATTEMPTS = 3
 
 
 class Logging(http.server.BaseHTTPRequestHandler):
@@ -93,16 +94,25 @@ def main() -> int:
 
         # localhost is never proxied, so the page itself loads direct; only
         # the push connection it causes is the browser's own.
-        page.goto(f"http://localhost:{site.server_address[1]}/")
-        page.evaluate(
-            "void navigator.serviceWorker.register('/sw.js')"
-            ".then(() => navigator.serviceWorker.ready)"
-            ".then(r => r.pushManager.subscribe({ userVisibleOnly: true }))"
-        )
-        deadline = time.monotonic() + SUBSCRIBE_SECONDS
-        while time.monotonic() < deadline and not any(PUSH_HOST in seen for seen in proxy.seen):
-            time.sleep(0.2)
-        push = [seen for seen in proxy.seen if PUSH_HOST in seen]
+        # Firefox's own push service drops a subscription that arrives before
+        # it has started (PushService.init), in stock too: no connection is
+        # even tried. That is not what this checks, so a subscription that
+        # opened nothing is made again from a fresh load.
+        push = []
+        for _attempt in range(SUBSCRIBE_ATTEMPTS):
+            page.goto(f"http://localhost:{site.server_address[1]}/")
+            time.sleep(2)
+            page.evaluate(
+                "void navigator.serviceWorker.register('/sw.js')"
+                ".then(() => navigator.serviceWorker.ready)"
+                ".then(r => r.pushManager.subscribe({ userVisibleOnly: true }))"
+            )
+            deadline = time.monotonic() + SUBSCRIBE_SECONDS
+            while time.monotonic() < deadline and not any(PUSH_HOST in seen for seen in proxy.seen):
+                time.sleep(0.2)
+            push = [seen for seen in proxy.seen if PUSH_HOST in seen]
+            if push:
+                break
 
     checks = [
         ("the context's navigation reaches its proxy", bool(control), control),
