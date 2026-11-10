@@ -192,12 +192,21 @@ SEED_KEYS = (
 # Added to start.js of a throwaway copy only, by `seed`: once uBO is ready it
 # saves its selfie and posts what it stored, with the list selection and its
 # asset registry (deserialized; uBO only reads a cache entry the registry names).
+# uBO saves the registry 3 s after a cache write (saveAssetCacheRegistry(3)), so
+# the hook waits until the stored one names every selfie it wrote.
 SEED_HOOK_ANCHOR = "µb.isReadyResolve();\n"
 SEED_HOOK = """
 (async ( ) => {
     await µb.selfieManager.create();
+    const wanted = SELFIES;
+    let assetCacheRegistry = {};
+    for ( let i = 0; i < 120; i++ ) {
+        const bin = await cacheStorage.get('assetCacheRegistry');
+        assetCacheRegistry = bin && bin.assetCacheRegistry || {};
+        if ( wanted.every(k => Object.hasOwn(assetCacheRegistry, k)) ) { break; }
+        await new Promise(resolve => setTimeout(resolve, 500));
+    }
     const stored = await browser.storage.local.get(null);
-    const { assetCacheRegistry } = await cacheStorage.get('assetCacheRegistry');
     await fetch(SINK, {
         method: 'POST',
         body: JSON.stringify({
@@ -402,7 +411,8 @@ def hooked_copy(addon_dir, dest, sink):
         source = f.read()
     if source.count(SEED_HOOK_ANCHOR) != 1:
         raise SystemExit(f"{path}: expected one {SEED_HOOK_ANCHOR.strip()!r}; uBO changed, update SEED_HOOK")
-    hook = SEED_HOOK.replace("SINK", json.dumps(sink))
+    selfies = [k[len("cache/"):] for k in SEED_KEYS if k.startswith("cache/")]
+    hook = SEED_HOOK.replace("SINK", json.dumps(sink)).replace("SELFIES", json.dumps(selfies))
     with open(path, "w", encoding="utf-8") as f:
         f.write(source.replace(SEED_HOOK_ANCHOR, SEED_HOOK_ANCHOR + hook))
 

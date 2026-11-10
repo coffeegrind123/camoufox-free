@@ -386,6 +386,10 @@ def test_the_generating_copy_posts_its_selfie_and_starts_unseeded(tmp_path):
     start = (copy / "js" / "start.js").read_text(encoding="utf-8")
     assert 'await fetch("http://127.0.0.1:1/", {' in start
     assert "await µb.selfieManager.create();" in start
+    # uBO saves its registry 3 s after a write: the hook waits for every selfie
+    # to be named there (a CI runner posted it before, and the seed was refused).
+    assert '"selfie/staticNetFilteringEngine"' in start
+    assert "wanted.every(k => Object.hasOwn(assetCacheRegistry, k))" in start
     assert "http" not in (ubo / "js" / "start.js").read_text(encoding="utf-8")
 
 
