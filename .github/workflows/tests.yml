@@ -690,6 +690,9 @@ jobs:
           make -C browser stage-fonts
           [ -f "$src/properties.json" ] || cp -v browser/settings/properties.json "$src/properties.json"
           python3 browser/scripts/fetch-ubo.py stage "$src"
+          # Its selfie, as a release ships it, or every suite runs a uBO that
+          # holds requests for 10-25 s at launch, which no user's does.
+          bash browser/scripts/seed-ubo.sh "$src"
 
           # Fail here, once, rather than in five browser jobs with five
           # different confusing errors.
@@ -697,7 +700,7 @@ jobs:
           # browser/bundle/fonts/groups.json), not a copy per OS; groups.json is what
           # utils._generate_fontconfig reads to decide which of them an identity
           # may see, so its absence is the failure that matters.
-          for required in camoufox-bin properties.json camoufox.cfg fonts/groups.json fonts/LMW fontconfig/linux addons/UBO/manifest.json; do
+          for required in camoufox-bin properties.json camoufox.cfg fonts/groups.json fonts/LMW fontconfig/linux addons/UBO/manifest.json addons/UBO/camoufox-seed/index.json; do
             [ -e "$src/$required" ] || { echo "::error::artifact is missing $required"; exit 1; }
           done
 
@@ -741,6 +744,7 @@ jobs:
           # The cached browser bundles the uBO of the run that built it; this
           # run's replaces it.
           python3 browser/scripts/fetch-ubo.py stage restored/bin
+          bash browser/scripts/seed-ubo.sh restored/bin
           test -f restored/bin/camoufox-bin || { echo "::error::restored artifact has no camoufox-bin"; exit 1; }
           # Via a temporary name, not over the input. `zstd -o` refuses an
           # existing destination ("already exists; stdin is an input - not
@@ -849,10 +853,13 @@ jobs:
           done
           mkdir -p pack/bin
           cp -a "$install_dir/." pack/bin/
-          # Releases from before uBlock Origin was bundled have none; give such
-          # a build this run's, as the build path does. A release that bundles
-          # one is tested with its own.
-          [ -e pack/bin/addons/UBO/manifest.json ] || python3 browser/scripts/fetch-ubo.py stage pack/bin
+          # Releases from before uBlock Origin was bundled, or before its
+          # selfie was (cg.14 and older), get this run's, as the build path
+          # does. A release that bundles a seeded one is tested with its own.
+          if [ ! -e pack/bin/addons/UBO/camoufox-seed/index.json ]; then
+            python3 browser/scripts/fetch-ubo.py stage pack/bin
+            bash browser/scripts/seed-ubo.sh pack/bin
+          fi
           tar -C pack -cf - bin | zstd -3 -T0 -o camoufox-dist.tar.zst
           ls -lh camoufox-dist.tar.zst
 

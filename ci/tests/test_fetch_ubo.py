@@ -8,6 +8,7 @@ import io
 import json
 import re
 import zipfile
+from pathlib import Path
 
 import pytest
 import yaml
@@ -46,14 +47,46 @@ UBO_STORAGE = (
     "};\n"
 )
 
+# The lines seed_layer edits (gorhill/uBlock src/js/start.js and
+# src/js/cachestorage.js).
+UBO_START = (
+    "const onVersionReady = async lastVersion => {\n"
+    "    if ( lastVersionInt === 0 ) {\n"
+    "        vAPI.net.unsuspend({ all: true, discard: true });\n"
+    "        return;\n"
+    "    }\n"
+    "};\n"
+    "µb.isReadyResolve();\n"
+)
+UBO_CACHESTORAGE = (
+    "const cacheStorage = (( ) => {\n"
+    "    const api = {\n"
+    "        get(argbin) {\n"
+    "            return exGet(cacheAPIs[fastCache], keysFromGetArg(argbin), outbin).then(wanted => {\n"
+    "                if ( wanted === undefined ) { return; }\n"
+    "                return exGet(extensionStorage, wanted, outbin);\n"
+    "            }).then(wanted => {\n"
+    "                if ( wanted === undefined ) { return; }\n"
+    "            });\n"
+    "        },\n"
+    "    };\n"
+    "})();\n"
+)
+SOURCES = {
+    "background.js": UBO_BACKGROUND,
+    "storage.js": UBO_STORAGE,
+    "start.js": UBO_START,
+    "cachestorage.js": UBO_CACHESTORAGE,
+}
+
 
 def xpi(version="1.76.0", guid=GUID, extra=()):
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w") as z:
         z.writestr("manifest.json", json.dumps(
             {"version": version, "browser_specific_settings": {"gecko": {"id": guid}}}))
-        z.writestr("js/background.js", UBO_BACKGROUND)
-        z.writestr("js/storage.js", UBO_STORAGE)
+        for name, text in SOURCES.items():
+            z.writestr(f"js/{name}", text)
         for name in extra:
             z.writestr(name, "")
     return buf.getvalue()
@@ -257,8 +290,170 @@ def test_a_ubo_whose_default_moved_is_refused(tmp_path, rel, line):
     failing the build."""
     js = tmp_path / "js"
     js.mkdir()
-    sources = {"background.js": UBO_BACKGROUND, "storage.js": UBO_STORAGE}
-    for name, text in sources.items():
+    for name, text in SOURCES.items():
         (js / name).write_text(text.replace(line, "") if name == rel else text, encoding="utf-8")
     with pytest.raises(SystemExit, match="uBO changed"):
         fetch_ubo.freeze_lists(str(tmp_path))
+
+
+def staged(tmp_path, version="1.76.0"):
+    data = xpi(version=version)
+    pin = {"version": version, "url": "u", "sha256": hashlib.sha256(data).hexdigest()}
+    ubo = tmp_path / "addons" / "UBO"
+    fetch_ubo.extract(data, pin, str(ubo))
+    return ubo
+
+
+def dump(version="1.76.0", **changes):
+    stored = {key: f"UOSC_1 {key}" for key in fetch_ubo.SEED_KEYS}
+    stored["cache/compiled/easylist"] = "UOSC_1 compiled"
+    stored["selectedFilterLists"] = ["user-filters", "easylist"]
+    registry = {key[len("cache/"):]: {"readTime": 1, "writeTime": 1, "resourceTime": 0}
+                for key in stored if key.startswith("cache/")}
+    out = {"version": version, "selectedFilterLists": ["user-filters", "easylist"],
+           "registry": registry, "stored": stored}
+    out.update(changes)
+    return out
+
+
+def test_a_first_run_reads_the_bundled_selfie_where_storage_has_nothing(tmp_path):
+    """A fresh profile is a fresh uBO install: without its selfie it compiles
+    every list for 10-25 s while its blocking webRequest listener holds every
+    request a page makes. The seed is a last layer under uBO's own storage, on
+    a first run only."""
+    ubo = staged(tmp_path)
+    start = (ubo / "js" / "start.js").read_text(encoding="utf-8")
+    cache = (ubo / "js" / "cachestorage.js").read_text(encoding="utf-8")
+    assert "    if ( lastVersionInt === 0 ) {\n        µb.camoufoxSeed = true;\n" in start
+    assert cache.index("const seed = (( ) => {") < cache.index("    const api = {\n")
+    chain = cache[cache.index("        get(argbin) {"):]
+    assert chain.index("exGet(cacheAPIs[fastCache]") < chain.index("exGet(extensionStorage") \
+        < chain.index("exGet(seed, wanted, outbin)"), "the seed only fills what uBO's storage lacks"
+    layer = fetch_ubo.SEED_LAYER
+    assert "if ( µb.camoufoxSeed !== true ) { return out; }" in layer
+    assert "sameSelection(µb.selectedFilterLists, idx.selectedFilterLists) === false" in layer
+    assert "fetch(" in layer and "http" not in layer, "the seed is read from the package only"
+
+
+@pytest.mark.parametrize("rel, line", [
+    ("start.js", "        vAPI.net.unsuspend({ all: true, discard: true });\n"),
+    ("cachestorage.js", "    const api = {\n"),
+    ("cachestorage.js", "                return exGet(extensionStorage, wanted, outbin);\n"),
+])
+def test_a_ubo_whose_seed_anchor_moved_is_refused(tmp_path, rel, line):
+    js = tmp_path / "js"
+    js.mkdir()
+    for name, text in SOURCES.items():
+        (js / name).write_text(text.replace(line, "") if name == rel else text, encoding="utf-8")
+    with pytest.raises(SystemExit, match="uBO changed, update SEED_EDITS"):
+        fetch_ubo.seed_layer(str(tmp_path))
+
+
+def test_a_seed_holds_only_what_a_first_run_reads(tmp_path):
+    index, texts = fetch_ubo.seed_from_dump(dump())
+    assert index["ubo"] == "1.76.0"
+    assert index["selectedFilterLists"] == ["user-filters", "easylist"]
+    assert set(index["files"]) == set(fetch_ubo.SEED_KEYS)
+    assert sorted(texts) == sorted(index["files"].values())
+    assert texts[index["files"]["cache/selfie/staticMain"]] == "UOSC_1 cache/selfie/staticMain"
+    # uBO reads a cache entry only if its registry names it; compiled lists stay out.
+    assert sorted(index["registry"]) == sorted(k[len("cache/"):] for k in fetch_ubo.SEED_KEYS
+                                               if k.startswith("cache/"))
+
+    ubo = staged(tmp_path)
+    dest = Path(fetch_ubo.write_seed(str(ubo), index, texts))
+    assert json.loads((dest / "index.json").read_text()) == index
+    for path in [dest, *dest.iterdir()]:
+        assert path.stat().st_mode & 0o777 == (0o755 if path.is_dir() else 0o644)
+
+
+@pytest.mark.parametrize("change", [
+    {"stored": {}},
+    {"registry": {}},
+    {"selectedFilterLists": []},
+])
+def test_a_dump_a_first_run_could_not_use_is_refused(change):
+    with pytest.raises(SystemExit):
+        fetch_ubo.seed_from_dump(dump(**change))
+
+
+def test_the_generating_copy_posts_its_selfie_and_starts_unseeded(tmp_path):
+    ubo = staged(tmp_path)
+    (ubo / fetch_ubo.SEED_DIR).mkdir()
+    copy = tmp_path / "copy"
+    fetch_ubo.hooked_copy(str(ubo), str(copy), "http://127.0.0.1:1/")
+    assert not (copy / fetch_ubo.SEED_DIR).exists(), "a stale seed would be posted back as new"
+    start = (copy / "js" / "start.js").read_text(encoding="utf-8")
+    assert 'await fetch("http://127.0.0.1:1/", {' in start
+    assert "await µb.selfieManager.create();" in start
+    assert "http" not in (ubo / "js" / "start.js").read_text(encoding="utf-8")
+
+
+def package(tmp_path, manifest_name, version="1.76.0"):
+    path = tmp_path / "camoufox.zip"
+    with zipfile.ZipFile(path, "w") as z:
+        z.writestr(manifest_name, json.dumps({"version": version}))
+        z.writestr("camoufox-bin", "")
+    return path
+
+
+def seed_dir(tmp_path):
+    index, texts = fetch_ubo.seed_from_dump(dump())
+    ubo = tmp_path / "s" / "UBO"
+    ubo.mkdir(parents=True)
+    return Path(fetch_ubo.write_seed(str(ubo), index, texts))
+
+
+@pytest.mark.parametrize("manifest", ["addons/UBO/manifest.json",
+                                      "Camoufox.app/Contents/Resources/addons/UBO/manifest.json"])
+def test_a_release_carries_the_seed_beside_its_ubo(tmp_path, manifest, monkeypatch):
+    monkeypatch.syspath_prepend(str(BROWSER_ROOT / "scripts"))
+    spec = importlib.util.spec_from_file_location("camoufox_package", BROWSER_ROOT / "scripts" / "package.py")
+    package_py = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(package_py)
+
+    zip_path = package(tmp_path, manifest)
+    seed = seed_dir(tmp_path)
+    fetch_ubo.inject(str(zip_path), str(seed))
+    prefix = manifest[: -len("manifest.json")] + fetch_ubo.SEED_DIR + "/"
+    with zipfile.ZipFile(zip_path) as z:
+        added = sorted(n[len(prefix):] for n in z.namelist() if n.startswith(prefix) and n != prefix)
+        assert added == sorted(p.name for p in seed.iterdir())
+        assert z.read(prefix + "index.json") == (seed / "index.json").read_bytes()
+    assert [e for e in package_py.unreadable_entries(str(zip_path)) if e.startswith(prefix)] == []
+
+
+def test_a_release_takes_a_seed_only_for_its_own_ubo(tmp_path):
+    seed = seed_dir(tmp_path)
+    with pytest.raises(SystemExit, match="seed is for 1.76.0"):
+        fetch_ubo.inject(str(package(tmp_path, "addons/UBO/manifest.json", "1.76.1")), str(seed))
+    zip_path = package(tmp_path, "addons/UBO/manifest.json")
+    fetch_ubo.inject(str(zip_path), str(seed))
+    with pytest.raises(SystemExit, match="already has"):
+        fetch_ubo.inject(str(zip_path), str(seed))
+
+
+def test_every_browser_ci_tests_or_ships_carries_the_seed():
+    """A uBO staged without its selfie holds every request for 10-25 s at
+    launch: tests.yml seeds wherever it stages, and a release seeds its zip
+    before the uBO guards check it as shipped."""
+    workflows = REPO_ROOT / ".github" / "workflows"
+    tests = yaml.safe_load((workflows / "tests.yml").read_text(encoding="utf-8"))
+    for job in ("build", "fetch-browser"):
+        for step in tests["jobs"][job]["steps"]:
+            run = step.get("run", "")
+            for line in run.splitlines():
+                if "fetch-ubo.py stage" not in line:
+                    continue
+                target = line.split("fetch-ubo.py stage", 1)[1].split()[0]
+                assert f"seed-ubo.sh {target}" in run, f"{job}: {line.strip()} is never seeded"
+
+    build = yaml.safe_load((workflows / "build.yml").read_text(encoding="utf-8"))["jobs"]["build"]["steps"]
+    step = next(s for s in build if "fetch-ubo.py seed" in s.get("run", ""))
+    run = step["run"]
+    assert run.index("fetch-ubo.py seed") < run.index("fetch-ubo.py inject") \
+        < run.rindex("unzip -q \"$zip\"") < run.index("ubo-seeded-start.py --binary"), \
+        "the guards check the zip after the seed went in"
+    assert "ubo-lists-frozen.py --binary" in run
+    seed_sh = (BROWSER_ROOT / "scripts" / "seed-ubo.sh").read_text(encoding="utf-8")
+    assert 'fetch-ubo.py seed "$bin_dir/camoufox-bin"' in seed_sh

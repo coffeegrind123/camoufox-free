@@ -192,11 +192,16 @@ jobs:
         working-directory: browser
         run: python3 ./multibuild.py --target ${{ matrix.target }} --arch ${{ matrix.arch }}
 
-      - name: The packaged release loads uBO for a user that doesn't own it
+      - name: Seed the packaged uBO, then check it as a user that doesn't own it
+        # The release's own browser compiles its bundled uBO's lists once and
+        # the selfie goes into the zip (scripts/fetch-ubo.py seed / inject), so
+        # a fresh profile's uBO starts warm instead of holding every request
+        # for 10-25 s. Then the zip is unzipped afresh and checked as shipped.
+        #
         # The Docker image unzips the release as root and runs the browser as
         # its app user. Through cg.13 the zip carried addons/UBO as 0700, so
         # the launcher there loaded no uBO, while every guard (run by the owner
-        # on the unpackaged build) passed. This runs the uBO guard the image's
+        # on the unpackaged build) passed. So the uBO guards run the image's
         # way: unzipped by root, launcher installed by root, browser run by a
         # user that owns neither.
         if: matrix.target == 'linux' && matrix.arch == 'x86_64'
@@ -212,12 +217,23 @@ jobs:
           sudo "$python" -m venv /opt/cf-guard/venv
           sudo /opt/cf-guard/venv/bin/pip install -q ./python
           sudo /opt/cf-guard/venv/bin/python python/scripts/pin-fpgen-model.py
-          sudo cp browser/tests/playwright/patches/ubo-lists-frozen.py \
+          sudo cp browser/scripts/fetch-ubo.py \
+            browser/tests/playwright/patches/ubo-lists-frozen.py \
+            browser/tests/playwright/patches/ubo-seeded-start.py \
             browser/tests/playwright/patches/helpers.py /opt/cf-guard/
           sudo useradd --system --no-create-home cfguard
           home="$(sudo -u cfguard mktemp -d)"
-          sudo -u cfguard env HOME="$home" /opt/cf-guard/venv/bin/python \
-            /opt/cf-guard/ubo-lists-frozen.py --binary /opt/cf-release/camoufox-bin
+          as_guard() { sudo -u cfguard env HOME="$home" /opt/cf-guard/venv/bin/python "$@"; }
+
+          as_guard /opt/cf-guard/fetch-ubo.py seed /opt/cf-release/camoufox-bin --out "$home"
+          # cfguard's home is 0700; root reads the seed, the zip keeps its owner.
+          sudo "$python" browser/scripts/fetch-ubo.py inject "$zip" "$home/camoufox-seed"
+          sudo rm -rf /opt/cf-release
+          sudo mkdir -p /opt/cf-release
+          sudo unzip -q "$zip" -d /opt/cf-release
+
+          as_guard /opt/cf-guard/ubo-lists-frozen.py --binary /opt/cf-release/camoufox-bin
+          as_guard /opt/cf-guard/ubo-seeded-start.py --binary /opt/cf-release/camoufox-bin
 
       - name: Upload artifacts
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2

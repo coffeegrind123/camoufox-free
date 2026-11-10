@@ -104,6 +104,7 @@ GROUPS: Dict[str, Tuple[str, ...]] = {
         "socks5-proxy-auth",
         "trusted-events",
         "ubo-lists-frozen",
+        "ubo-seeded-start",
         "visible-automation-cues",
         "webdriver-bidi-tabs",
     ),

@@ -253,10 +253,13 @@ leaves the browser alone still builds it rather than fetching a release.
 The build resolves AMO's newest uBlock Origin once, passes that pin to
 packaging, and names the bundled version in the release notes. Packaging fails
 if the zip has an entry other users can't read, and the release build then
-unzips the package as root and runs `ubo-lists-frozen.py` as a user that owns
-neither the browser nor the launcher, as the Docker image runs it. The test
-pipeline resolves its own pin once per run and stages it into both built and
-restored browsers.
+unzips the package as root and runs `ubo-lists-frozen.py` and
+`ubo-seeded-start.py` as a user that owns neither the browser nor the launcher,
+as the Docker image runs it. Before that, the release's own browser generates
+uBO's selfie (`fetch-ubo.py seed`) and `fetch-ubo.py inject` adds it to the zip,
+so a fresh profile's uBO starts warm. The test pipeline resolves its own pin once
+per run, stages it into both built and restored browsers and seeds each
+(`browser/scripts/seed-ubo.sh`).
 
 ## Running a piece by hand
 
