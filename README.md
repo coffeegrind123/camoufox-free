@@ -43,12 +43,12 @@ For an identity whose OS is not the host's. Offered upstream in
   creates both on one GL profile; fpgen recorded 146, where they differ, and
   CreepJS flags any mirrored parameter that does (two Linux records differed in
   `ALIASED_POINT_SIZE_RANGE`). Both launchers copy every shared non-string
-  parameter. ([5e59245](https://github.com/coffeegrind123/camoufox-free/commit/5e59245d0c542570df95514ef6bac295958db288))
+  parameter. Offered upstream in [#1020](https://github.com/daijro/camoufox/pull/1020). ([5e59245](https://github.com/coffeegrind123/camoufox-free/commit/5e59245d0c542570df95514ef6bac295958db288))
 - **OffscreenCanvas has no WebGL2 where the device has none.** For a device
   recorded without WebGL2, a canvas element offered none but OffscreenCanvas
   did, with the host's real parameters under the spoofed renderer name, which
   CreepJS flags. It now follows `webgl.enable-webgl2`, which stock never turns
-  off. ([c313578](https://github.com/coffeegrind123/camoufox-free/commit/c313578b39b5377530adee05b158e41584ec64b9), guard
+  off. Offered upstream in [#1022](https://github.com/daijro/camoufox/pull/1022). ([c313578](https://github.com/coffeegrind123/camoufox-free/commit/c313578b39b5377530adee05b158e41584ec64b9), guard
   [offscreen-webgl2-follows-canvas.py](browser/tests/playwright/patches/offscreen-webgl2-follows-canvas.py))
 - **A repaired display scale keeps the display.** fpgen records some ratios
   with a browser zoom folded in (1.0909 for 110%), which shrinks every CSS size.
@@ -191,7 +191,8 @@ For an identity whose OS is not the host's. Offered upstream in
 - **The startup size holds through a late toolbar reflow.** The toolbars
   can shrink a few hundred ms after startup with no resize event; the hold took
   the unchanged outer size for a fit and left the content area 12 px too tall
-  (1000x662 for 1000x650). It now checks the content area too.
+  (1000x662 for 1000x650). It now checks the content area too. Offered
+  upstream in [#973](https://github.com/daijro/camoufox/pull/973).
   ([4b5a4aa](https://github.com/coffeegrind123/camoufox-free/commit/4b5a4aa0c76beb2354bd3311d8d3f7f1c270958b))
 - **A Windows or macOS identity's window frame measures as stock's.** A page
   can measure the frame around its content area (`outerWidth - innerWidth`,
@@ -323,7 +324,8 @@ For an identity whose OS is not the host's. Offered upstream in
   newest at build time. uBO 1.76.0 changed the global order of every page
   after the first (`RegExp`), where stock and 1.75.4 do not, so
   [`data/ubo.json`](browser/scripts/data/ubo.json) pins the release by
-  sha256 and a bump is a reviewed commit. ([73921940](https://github.com/coffeegrind123/camoufox-free/commit/739219402277874bec6326ad80bce4c5c9587327))
+  sha256 and a bump is a reviewed commit. Offered upstream in
+  [#1012](https://github.com/daijro/camoufox/pull/1012). ([73921940](https://github.com/coffeegrind123/camoufox-free/commit/739219402277874bec6326ad80bce4c5c9587327))
 - **The release build checks uBO as a user that owns no file.** Every guard
   ran as the owner on the unpackaged build, so none saw a zip that hid uBO
   from another user. The build now unzips the release and installs the
