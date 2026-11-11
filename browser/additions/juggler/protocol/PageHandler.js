@@ -342,9 +342,9 @@ export class PageHandler {
     this._pageNetwork.setExtraHTTPHeaders(headers);
   }
 
-  async ['Network.setRequestInterception']({enabled}) {
+  async ['Network.setRequestInterception']({enabled, bypassServiceWorker}) {
     if (enabled)
-      this._pageNetwork.enableRequestInterception();
+      this._pageNetwork.enableRequestInterception(bypassServiceWorker);
     else
       this._pageNetwork.disableRequestInterception();
   }
@@ -814,7 +814,10 @@ export class PageHandler {
           humanized = await humanizedMove(from, {x, y}, {within});
         }
         if (humanized) {
-          await dispatch.sendTrajectoryAcked(watcher, 'mousemove', humanized.plan,
+          // Before its first move the cursor is not on the page: the tracked
+          // position is a placeholder, and the entry point was never sent.
+          const at = this._cursorEntered ? this._lastTrackedPos : {x: NaN, y: NaN};
+          await dispatch.sendTrajectoryAcked(watcher, 'mousemove', at, humanized.plan,
               (plan, dispatchStep) => play(plan, dispatchStep, {signal: this._humanizeAbort.signal, deadlineMs: humanized.deadlineMs}),
               (destX, destY) => this._sendMove(dispatch, watcher, destX, destY));
         } else if (eventType === 'mousemove') {

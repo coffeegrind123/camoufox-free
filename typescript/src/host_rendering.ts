@@ -199,11 +199,15 @@ async function readGpu(
 	prefs: Record<string, any>,
 	raw: boolean,
 ): Promise<Gpu | null> {
+	// A display that accepts connections but never answers the X handshake
+	// leaves Firefox inside getContext() forever. The launch, the read and the
+	// cleanup share one deadline, and a timeout says what it was waiting on.
 	const deadline = Date.now() + HOST_GPU_PROBE_TIMEOUT_MS;
+	const display = env.DISPLAY ? ` (DISPLAY=${env.DISPLAY})` : "";
 	const timeoutMessage =
 		`Host GPU probe timed out after ${HOST_GPU_PROBE_TIMEOUT_MS} ms ` +
-		`while launching ${executablePath}. The browser did not answer the ` +
-		"WebGL probe; check that the display accepts X connections.";
+		`while launching ${executablePath}${display}. The browser did not answer ` +
+		"the WebGL probe; check that the display accepts X connections.";
 	const remaining = () => Math.max(1, deadline - Date.now());
 	const firefoxUserPrefs: Record<string, any> = {
 		...prefs,
@@ -261,7 +265,7 @@ async function readGpu(
 			}
 		}
 	}
-	// Preserve the read failure; report a close-only failure.
+	// The read failure is the one to report; a close failure only on its own.
 	if (failed) throw failure;
 	if (closeFailure !== undefined) throw closeFailure;
 	return result;

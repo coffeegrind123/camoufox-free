@@ -8,7 +8,7 @@ Run with:
 import os
 import re
 import sys
-import threading
+import time
 import warnings
 from contextlib import contextmanager
 from unittest import mock
@@ -276,35 +276,45 @@ def test_the_probe_ignores_what_the_launcher_adds_to_the_environment():
     assert probe.call_args_list[0] == probe.call_args_list[1]
 
 
-def test_the_host_gpu_probe_times_out_and_says_so(monkeypatch):
-    release = threading.Event()
-    monkeypatch.setattr(host_rendering, 'HOST_GPU_PROBE_TIMEOUT_S', 0.05)
-    monkeypatch.setattr(
-        host_rendering, '_read_host_gpu', lambda *args: release.wait(2)
-    )
+def test_a_timed_out_host_gpu_probe_takes_its_browser_down(tmp_path, monkeypatch):
+    """A display that accepts connections but never answers the X handshake
+    leaves Firefox hung. The launch fails, naming the display, and the hung
+    browser does not outlive the probe."""
+    pid_file = tmp_path / "browser.pid"
+    browser = tmp_path / "firefox"
+    browser.write_text(f"#!/bin/sh\necho $$ > {pid_file}\nexec sleep 600\n")
+    browser.chmod(0o755)
+    monkeypatch.setattr(host_rendering, "HOST_GPU_PROBE_TIMEOUT_S", 5)
     host_rendering._host_gpu.cache_clear()
-
     try:
-        with pytest.raises(
-            TimeoutError,
-            match=r'Host GPU probe timed out after 0\.05 s',
-        ):
-            host_gpu('/bin/camoufox', True, {'DISPLAY': ':99'}, {})
+        with pytest.raises(TimeoutError, match=r"timed out after 5 s .*\(DISPLAY=:99\)"):
+            host_gpu(str(browser), True, {"DISPLAY": ":99"}, {})
     finally:
-        release.set()
         host_rendering._host_gpu.cache_clear()
+    pid = int(pid_file.read_text())
+    # The Playwright driver stops the browser once the probe's pipe closes.
+    deadline = time.monotonic() + 10
+    while process_is_running(pid):
+        assert time.monotonic() < deadline, f"the probe's browser (pid {pid}) is still running"
+        time.sleep(0.1)
 
 
-def test_the_host_gpu_probe_propagates_a_read_error(monkeypatch):
-    def fail(*args):
-        raise RuntimeError('browser died')
+def process_is_running(pid):
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    return True
 
-    monkeypatch.setattr(host_rendering, '_read_host_gpu', fail)
+
+def test_the_host_gpu_probe_reports_why_the_browser_did_not_start():
     host_rendering._host_gpu.cache_clear()
-
-    with pytest.raises(RuntimeError, match='browser died'):
-        host_gpu('/bin/camoufox', True, {}, {})
-    host_rendering._host_gpu.cache_clear()
+    try:
+        failed = r"(?s)Host GPU probe failed while launching /nonexistent/firefox.*Failed to launch"
+        with pytest.raises(RuntimeError, match=failed):
+            host_gpu("/nonexistent/firefox", True, {}, {})
+    finally:
+        host_rendering._host_gpu.cache_clear()
 
 
 def browser_on_host(gpu):
