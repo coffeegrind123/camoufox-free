@@ -365,7 +365,12 @@ export class MouseDispatch {
       lastY = Math.round(y);
       return true;
     };
-    const leave = (x, y) => {
+    // An exit waits for the moves before it. Unacked, the last one inside was
+    // still queued for the next refresh when the exit went out, so the page
+    // never saw it: its last mousemove came a whole step before the mouseout,
+    // 40ms in one run, where stock's are within a millisecond.
+    const leave = async (x, y) => {
+      await Promise.all(outstanding);
       this.leaveContent(x, y);
       offContent = true;
       lastX = NaN;
@@ -385,7 +390,7 @@ export class MouseDispatch {
       this._remeasure();
       if (!this.isInViewport(x, y) || !this._isShown(x, y)) {
         if (!offContent)
-          leave(x, y);
+          await leave(x, y);
         return true;
       }
       offContent = false;
@@ -402,7 +407,7 @@ export class MouseDispatch {
         await new Promise(resolve => setTimeout(resolve, wait));
       if (last && !await send(last.x, last.y))
         return false;
-      leave(exit.x, exit.y);
+      await leave(exit.x, exit.y);
       return true;
     });
   }
