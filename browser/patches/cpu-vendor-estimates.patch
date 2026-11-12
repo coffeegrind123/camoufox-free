@@ -2278,18 +2278,19 @@ index d03c9f0b5d..6dd0bc6231 100644
  av_vk_frame_alloc
  av_vk_get_optional_device_extensions
 diff --git a/media/ffvpx/libavutil/tx.c b/media/ffvpx/libavutil/tx.c
-index 54660c9079..37009ae0e7 100644
+index 54660c9079..6c0c98fe3c 100644
 --- a/media/ffvpx/libavutil/tx.c
 +++ b/media/ffvpx/libavutil/tx.c
-@@ -344,6 +344,7 @@ static const FFTXCodelet * const * const codelet_list[] = {
+@@ -344,6 +344,8 @@
      ff_tx_null_list,
  #if HAVE_X86ASM
      ff_tx_codelet_list_float_x86,
 +    ff_tx_codelet_list_float_neonemu,
++    ff_tx_codelet_list_float_neonemu_fma,
  #endif
  #if ARCH_AARCH64
      ff_tx_codelet_list_float_aarch64,
-@@ -351,6 +352,27 @@ static const FFTXCodelet * const * const codelet_list[] = {
+@@ -351,6 +353,37 @@
  };
  static const int codelet_list_num = FF_ARRAY_ELEMS(codelet_list);
  
@@ -2303,13 +2304,23 @@ index 54660c9079..37009ae0e7 100644
 +    tx_emulate_arm64 = !!on;
 +}
 +
++/* The same codelets built for AVX2 and FMA (x86/tx_float_neonemu_fma.c),
++ * where FMLA is one instruction; the same bits. */
++static int tx_neonemu_fma(void)
++{
++    int need = AV_CPU_FLAG_AVX2 | AV_CPU_FLAG_FMA3;
++    return (av_get_cpu_flags() & need) == need;
++}
++
 +static int tx_list_skipped(const FFTXCodelet * const * list)
 +{
 +#if HAVE_X86ASM
 +    if (list == ff_tx_codelet_list_float_x86)
 +        return tx_emulate_arm64;
 +    if (list == ff_tx_codelet_list_float_neonemu)
-+        return !tx_emulate_arm64;
++        return !tx_emulate_arm64 || tx_neonemu_fma();
++    if (list == ff_tx_codelet_list_float_neonemu_fma)
++        return !tx_emulate_arm64 || !tx_neonemu_fma();
 +#endif
 +    return 0;
 +}
@@ -2317,7 +2328,7 @@ index 54660c9079..37009ae0e7 100644
  static const int cpu_slow_mask = AV_CPU_FLAG_SSE2SLOW | AV_CPU_FLAG_SSE3SLOW  |
                                   AV_CPU_FLAG_ATOM     | AV_CPU_FLAG_SSSE3SLOW |
                                   AV_CPU_FLAG_AVXSLOW  | AV_CPU_FLAG_SLOW_GATHER;
-@@ -424,6 +446,9 @@ int ff_tx_decompose_length(int dst[TX_MAX_DECOMPOSITIONS], enum AVTXType type,
+@@ -424,6 +457,9 @@
          const FFTXCodelet * const * list = codelet_list[codelet_list_idx];
          const FFTXCodelet *cd = NULL;
  
@@ -2327,7 +2338,7 @@ index 54660c9079..37009ae0e7 100644
          while ((cd = *list++)) {
              int fl = len;
              int skip = 0, prio;
-@@ -753,6 +778,9 @@ av_cold int ff_tx_init_subtx(AVTXContext *s, enum AVTXType type,
+@@ -753,6 +789,9 @@
          const FFTXCodelet * const * list = codelet_list[codelet_list_idx];
          const FFTXCodelet *cd = NULL;
  
@@ -2356,29 +2367,33 @@ index c950095735..adb74804dd 100644
   * Initialize a transform context with the given configuration
   * (i)MDCTs with an odd length are currently not supported.
 diff --git a/media/ffvpx/libavutil/tx_priv.h b/media/ffvpx/libavutil/tx_priv.h
-index d3fcdbf563..bcc9bf2a9f 100644
+index d3fcdbf563..4b83c21f11 100644
 --- a/media/ffvpx/libavutil/tx_priv.h
 +++ b/media/ffvpx/libavutil/tx_priv.h
-@@ -384,6 +384,7 @@ int ff_tx_mdct_gen_exp_int32 (AVTXContext *s, int *pre_tab);
+@@ -384,6 +384,8 @@
  extern const FFTXCodelet * const ff_tx_codelet_list_float_c       [];
  extern const FFTXCodelet * const ff_tx_codelet_list_float_x86     [];
  extern const FFTXCodelet * const ff_tx_codelet_list_float_aarch64 [];
 +extern const FFTXCodelet * const ff_tx_codelet_list_float_neonemu [];
++extern const FFTXCodelet * const ff_tx_codelet_list_float_neonemu_fma [];
  
  extern const FFTXCodelet * const ff_tx_codelet_list_double_c      [];
  
 diff --git a/media/ffvpx/libavutil/x86/moz.build b/media/ffvpx/libavutil/x86/moz.build
-index 8a2116cdc4..8de0a5d45d 100644
+index 8a2116cdc4..e5a61666f2 100644
 --- a/media/ffvpx/libavutil/x86/moz.build
 +++ b/media/ffvpx/libavutil/x86/moz.build
-@@ -17,6 +17,7 @@ SOURCES += [
+@@ -17,7 +17,10 @@
      'pixelutils.asm',
      'tx_float.asm',
      'tx_float_init.c',
 +    'tx_float_neonemu.c',
++    'tx_float_neonemu_fma.c',
  ]
++SOURCES['tx_float_neonemu_fma.c'].flags += ['-mavx2', '-mfma']
  
  FINAL_LIBRARY = 'mozavutil'
+ 
 diff --git a/media/libopus/celt/celt_tx_tables.h b/media/libopus/celt/celt_tx_tables.h
 index 3fdabcbea0..f7297b338e 100644
 --- a/media/libopus/celt/celt_tx_tables.h
@@ -2648,18 +2663,19 @@ index ba8eafe6ad..f89b1e9d74 100644
  #endif
  
 diff --git a/media/libopus/celt/x86/x86cpu.c b/media/libopus/celt/x86/x86cpu.c
-index 2e7c32aeec..7ac5c476a9 100644
+index 2e7c32aeec..0c297d7462 100644
 --- a/media/libopus/celt/x86/x86cpu.c
 +++ b/media/libopus/celt/x86/x86cpu.c
-@@ -34,6 +34,7 @@
+@@ -34,6 +34,8 @@
  #include "main.h"
  #include "pitch.h"
  #include "x86cpu.h"
 +#include "opus_cpu_estimates.h"
++#include "x86/celt_neonemu.h"
  
  #if defined(OPUS_HAVE_RTCD) && \
    ((defined(OPUS_X86_MAY_HAVE_SSE) && !defined(OPUS_X86_PRESUME_SSE)) || \
-@@ -173,7 +174,11 @@ static int opus_select_arch_impl(void)
+@@ -173,7 +175,11 @@
  }
  
  int opus_select_arch(void) {
@@ -2672,11 +2688,28 @@ index 2e7c32aeec..7ac5c476a9 100644
  #ifdef FUZZING
      /* Randomly downgrade the architecture. */
      arch = rand()%(arch+1);
+@@ -181,4 +187,16 @@
+     return arch;
+ }
+ 
++#if defined(OPUS_X86_NEONEMU)
++/* Whether the emulated aarch64 kernels may run their AVX2/FMA build
++   (celt_neonemu.h): the CPU has what arch 4 (AVX2 with FMA) needs. */
++int celt_neonemu_use_fma(void) {
++    static int use = -1;
++    if (use < 0) {
++        use = opus_select_arch_impl() >= 4;
++    }
++    return use;
++}
++#endif
++
+ #endif
 diff --git a/media/libopus/moz.build b/media/libopus/moz.build
-index e140171d13..492e4b80c9 100644
+index e140171d13..3bd6bbbb14 100644
 --- a/media/libopus/moz.build
 +++ b/media/libopus/moz.build
-@@ -7,6 +7,7 @@ with Files("*"):
+@@ -7,6 +7,7 @@
  
  EXPORTS.opus += [
      "include/opus.h",
@@ -2684,7 +2717,7 @@ index e140171d13..492e4b80c9 100644
      "include/opus_defines.h",
      "include/opus_multistream.h",
      "include/opus_types.h",
-@@ -70,6 +71,9 @@ LOCAL_INCLUDES += [
+@@ -70,6 +71,9 @@
      "src",
  ]
  
@@ -2694,7 +2727,7 @@ index e140171d13..492e4b80c9 100644
  # sources.mozbuild is generated from gen-sources.py when a new libopus is
  # imported.
  include("sources.mozbuild")
-@@ -78,6 +82,7 @@ UNIFIED_SOURCES += celt_sources
+@@ -78,6 +82,7 @@
  UNIFIED_SOURCES += silk_sources
  UNIFIED_SOURCES += opus_sources
  SOURCES += opus_nonunified_sources
@@ -2702,19 +2735,23 @@ index e140171d13..492e4b80c9 100644
  
  if CONFIG["MOZ_SAMPLE_TYPE_FLOAT32"]:
      UNIFIED_SOURCES += silk_sources_float
-@@ -98,6 +103,15 @@ if CONFIG["TARGET_CPU"] in ("x86", "x86_64"):
+@@ -98,6 +103,19 @@
      SOURCES += celt_sources_sse4_1
      SOURCES += silk_sources_x86_rtcd
      SOURCES += silk_sources_sse4_1
 +    # aarch64 kernels for general.cpu_identity = arm64
-+    SOURCES += ["celt/x86/celt_neonemu.c"]
++    SOURCES += ["celt/x86/celt_neonemu.c", "celt/x86/celt_neonemu_fma.c"]
++    # The same kernels with FMA as an instruction (celt_neonemu_use_fma()).
++    SOURCES["celt/x86/celt_neonemu_fma.c"].flags += ["-mavx2", "-mfma"]
 +    if CONFIG["TARGET_CPU"] == "x86_64" and CONFIG["MOZ_SAMPLE_TYPE_FLOAT32"]:
 +        # aarch64's inverse MDCT, translated from celt/arm/celt_tx_neon.S
 +        DEFINES["OPUS_X86_NEONEMU_MDCT"] = True
 +        SOURCES += [
 +            "celt/x86/celt_mdct_neonemu.c",
 +            "celt/x86/celt_tx_neonemu.c",
++            "celt/x86/celt_tx_neonemu_fma.c",
 +        ]
++        SOURCES["celt/x86/celt_tx_neonemu_fma.c"].flags += ["-mavx2", "-mfma"]
      if not CONFIG["MOZ_SAMPLE_TYPE_FLOAT32"]:
          SOURCES += silk_sources_fixed_sse4_1
      for f in SOURCES:
