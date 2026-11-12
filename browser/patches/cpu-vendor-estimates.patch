@@ -645,7 +645,7 @@ index 3bd802d715..2a51a8f759 100644
      SOURCES["AudioNodeEngineSSE2.cpp"].flags += CONFIG["SSE2_FLAGS"]
      if CONFIG["SSE4_2_FLAGS"]:
 diff --git a/gfx/skia/moz.build b/gfx/skia/moz.build
-index 7c81493630..ad174bb53d 100644
+index 7c81493630..4a888e2a27 100644
 --- a/gfx/skia/moz.build
 +++ b/gfx/skia/moz.build
 @@ -508,6 +508,7 @@
@@ -656,7 +656,7 @@ index 7c81493630..ad174bb53d 100644
      'skia/src/sksl/SkSLLexer.cpp',
      'skia/src/utils/SkParse.cpp',
      'skia/src/utils/SkParsePath.cpp',
-@@ -583,6 +584,26 @@
+@@ -583,6 +584,31 @@
      ]
      SOURCES['skia/modules/skcms/src/skcms_TransformHsw.cc'].flags += skia_opt_flags
      SOURCES['skia/src/opts/SkOpts_ml3.cpp'].flags += skia_opt_flags
@@ -680,6 +680,11 @@ index 7c81493630..ad174bb53d 100644
 +    for f in skia_neonemu_hsw_sources:
 +        SOURCES[f].flags += skia_opt_flags + ['-Dskvx=skvx_neonemu_hsw', '-mavx2',
 +                                              '-mf16c', '-mfma']
++    # The raster pipeline at AVX2's width with the AArch64 helpers, chosen over
++    # the 4-wide emulated tier on such a CPU (SKRP_ARM_SEMANTICS).
++    SOURCES += ['skia/src/opts/SkOpts_armhsw.cpp']
++    SOURCES['skia/src/opts/SkOpts_armhsw.cpp'].flags += skia_opt_flags + [
++        '-Dskvx=skvx_hsw', '-mavx2', '-mf16c', '-mfma']
  
  
  # We allow warnings for third-party code that can be updated from upstream.
@@ -986,10 +991,10 @@ index 7ae979a931..9be36f00dc 100644
          steps.fFlags.encode) {
          return false;
 diff --git a/gfx/skia/skia/src/core/SkOpts.cpp b/gfx/skia/skia/src/core/SkOpts.cpp
-index adfbdc30f0..55f498f7c3 100644
+index adfbdc30f0..e752b84063 100644
 --- a/gfx/skia/skia/src/core/SkOpts.cpp
 +++ b/gfx/skia/skia/src/core/SkOpts.cpp
-@@ -4,6 +4,7 @@
+@@ -4,12 +4,15 @@
   * Use of this source code is governed by a BSD-style license that can be
   * found in the LICENSE file.
   */
@@ -997,23 +1002,42 @@ index adfbdc30f0..55f498f7c3 100644
  #include "src/core/SkOpts.h"
  
  #include "include/private/base/SkFeatures.h"
-@@ -45,6 +46,8 @@
+ #include "src/core/SkCpu.h"
+ #include "src/core/SkOptsTargets.h"
+ 
++#include <stdlib.h>
++
+ #define SK_OPTS_TARGET SK_OPTS_TARGET_DEFAULT
+ #include "src/opts/SkOpts_SetTarget.h"
+ 
+@@ -45,6 +48,9 @@
  
      // Each Init_foo() is defined in src/opts/SkOpts_foo.cpp.
      void Init_ml3();
 +    void Init_neonemu();
 +    void Init_neonemu_hsw();
++    void Init_armhsw();
      void Init_ml4();
      void Init_lasx();
  
-@@ -63,6 +66,11 @@
+@@ -63,6 +69,21 @@
              #endif
          #endif
  
 +        // general.cpu_identity = ARM64: Skia's AArch64 code, emulated; the
 +        // HSW build has the emulation's fast paths (SkNeonEmu.h).
 +        if (sk_cpu_emulates_arm64()) {
-+            if (SkCpu::Supports(SkX64::ML3)) { Init_neonemu_hsw(); } else { Init_neonemu(); }
++            // With AVX2 the pipeline runs at AVX2's width with the AArch64
++            // helpers (SkOpts_armhsw.cpp): the same bits, at native speed.
++            // MOZ_CAMOUFOX_ARM_RASTER_NARROW keeps the 4-wide emulated tier,
++            // for checks that compare the two.
++            if (!SkCpu::Supports(SkX64::ML3)) {
++                Init_neonemu();
++            } else if (getenv("MOZ_CAMOUFOX_ARM_RASTER_NARROW")) {
++                Init_neonemu_hsw();
++            } else {
++                Init_armhsw();
++            }
 +        }
      #elif defined(SK_CPU_LOONGARCH)
          #if SK_CPU_LSX_LEVEL < SK_CPU_LSX_LEVEL_LASX
@@ -1103,7 +1127,7 @@ index 54de40498a..e7c5479b5b 100644
      // SkMulDiv255Round() applied to each lane.
      static inline uint8x8_t SkMulDiv255Round_neon8(uint8x8_t x, uint8x8_t y) {
 diff --git a/gfx/skia/skia/src/opts/SkRasterPipeline_opts.h b/gfx/skia/skia/src/opts/SkRasterPipeline_opts.h
-index 9a0edd9594..e90f6f98cd 100644
+index 9a0edd9594..a8d9228d78 100644
 --- a/gfx/skia/skia/src/opts/SkRasterPipeline_opts.h
 +++ b/gfx/skia/skia/src/opts/SkRasterPipeline_opts.h
 @@ -108,7 +108,11 @@
@@ -1119,16 +1143,100 @@ index 9a0edd9594..e90f6f98cd 100644
  #elif defined(SKRP_CPU_LASX)
      #include <lasxintrin.h>
      #include <lsxintrin.h>
-@@ -116,6 +120,7 @@
+@@ -116,8 +120,19 @@
      #include <lsxintrin.h>
  #else
      #include <immintrin.h>
 +    #include "src/opts/SkCpuEstimates.h"
++    #if defined(SKRP_ARM_SEMANTICS)
++        #include "src/opts/SkNeonEmu.h"
++    #endif
  #endif
  
++// SKRP_ARM_SEMANTICS (SkOpts_armhsw.cpp, general.cpu_identity = ARM64): the
++// AVX2 tier computes what Skia's AArch64 tier computes. Pixels do not depend on
++// how many run at once, so the stages run 8 (highp) or 16 (lowp) wide; every
++// helper whose AArch64 definition differs from AVX2's is that definition, run
++// four lanes at a time through SkNeonEmu.h. Generic vector operators compile to
++// the same x86 instructions as in the 4-wide emulated tier (SkOpts_neonemu*).
++
  // Notes:
-@@ -608,8 +613,19 @@
-     SI I32 abs_  (I32 v)     { return (I32)_mm256_abs_epi32((__m256i)v); }
+ // * rcp_fast and rcp_precise both produce a reciprocal, but rcp_fast is an estimate with at least
+ //   12 bits of precision while rcp_precise should be accurate for float size. For ARM rcp_precise
+@@ -594,22 +609,85 @@
+     using U16 = V<uint16_t>;
+     using U8  = V<uint8_t >;
+ 
++#if defined(SKRP_ARM_SEMANTICS)
++    // The AArch64 tier's helpers (the SKRP_CPU_NEON section), on each half.
++    SI float32x4_t arm_lo(F v) { return __builtin_shufflevector(v, v, 0, 1, 2, 3); }
++    SI float32x4_t arm_hi(F v) { return __builtin_shufflevector(v, v, 4, 5, 6, 7); }
++    SI F arm_join(float32x4_t lo, float32x4_t hi) {
++        return __builtin_shufflevector(lo, hi, 0, 1, 2, 3, 4, 5, 6, 7);
++    }
++    template <typename Fn> SI F arm_each(F a, Fn fn) {
++        return arm_join(fn(arm_lo(a)), fn(arm_hi(a)));
++    }
++    template <typename Fn> SI F arm_each(F a, F b, Fn fn) {
++        return arm_join(fn(arm_lo(a), arm_lo(b)), fn(arm_hi(a), arm_hi(b)));
++    }
++    template <typename Fn> SI F arm_each(F a, F b, F c, Fn fn) {
++        return arm_join(fn(arm_lo(a), arm_lo(b), arm_lo(c)), fn(arm_hi(a), arm_hi(b), arm_hi(c)));
++    }
++    SI float32x4_t arm_rcp_approx(float32x4_t v) {
++        auto e = vrecpeq_f32(v);
++        return vrecpsq_f32(v, e) * e;
++    }
++    SI float32x4_t arm_rcp_precise(float32x4_t v) {
++        auto e = arm_rcp_approx(v);
++        return vrecpsq_f32(v, e) * e;
++    }
++    SI float32x4_t arm_rsqrt_approx(float32x4_t v) {
++        auto e = vrsqrteq_f32(v);
++        return vrsqrtsq_f32(v, e * e) * e;
++    }
++    SI F   mad(F f, F m, F a) {
++        return arm_each(a, f, m, [](float32x4_t x, float32x4_t y, float32x4_t z) { return vfmaq_f32(x, y, z); });
++    }
++    SI F  nmad(F f, F m, F a) {
++        return arm_each(a, f, m, [](float32x4_t x, float32x4_t y, float32x4_t z) { return vfmsq_f32(x, y, z); });
++    }
++    SI F   min(F a, F b) { return arm_each(a, b, [](float32x4_t x, float32x4_t y) { return vminq_f32(x, y); }); }
++    SI F   max(F a, F b) { return arm_each(a, b, [](float32x4_t x, float32x4_t y) { return vmaxq_f32(x, y); }); }
++    SI F   abs_(F v)       { return arm_each(v, [](float32x4_t x) { return vabsq_f32(x); }); }
++    SI F   floor_(F v)     { return arm_each(v, [](float32x4_t x) { return vrndmq_f32(x); }); }
++    SI F   ceil_(F v)      { return arm_each(v, [](float32x4_t x) { return vrndpq_f32(x); }); }
++    SI F   sqrt_(F v)      { return arm_each(v, [](float32x4_t x) { return vsqrtq_f32(x); }); }
++    SI F   rcp_approx(F v) { return arm_each(v, [](float32x4_t x) { return arm_rcp_approx(x); }); }
++    SI F   rcp_precise(F v) { return arm_each(v, [](float32x4_t x) { return arm_rcp_precise(x); }); }
++    SI F   rsqrt_approx(F v) { return arm_each(v, [](float32x4_t x) { return arm_rsqrt_approx(x); }); }
++    SI I32 iround(F v) {
++        return __builtin_shufflevector(vcvtnq_s32_f32(arm_lo(v)), vcvtnq_s32_f32(arm_hi(v)), 0, 1, 2, 3, 4, 5, 6, 7);
++    }
++    SI U32 round(F v) {
++        return __builtin_shufflevector(vcvtnq_u32_f32(arm_lo(v)), vcvtnq_u32_f32(arm_hi(v)), 0, 1, 2, 3, 4, 5, 6, 7);
++    }
++    // AArch64 truncates where AVX2's packs saturate.
++    SI U16 pack(U32 v) { return __builtin_convertvector(v, U16); }
++    SI U8  pack(U16 v) { return __builtin_convertvector(v,  U8); }
++    // BSL selects bit by bit.
++    SI F   if_then_else(I32 c, F t, F e) {
++        return sk_bit_cast<F>((sk_bit_cast<I32>(t) & c) | (sk_bit_cast<I32>(e) & ~c));
++    }
++    SI I32 if_then_else(I32 c, I32 t, I32 e) { return (t & c) | (e & ~c); }
++#else
+     SI F   mad(F f, F m, F a) { return _mm256_fmadd_ps(f, m, a); }
+     SI F  nmad(F f, F m, F a) { return _mm256_fnmadd_ps(f, m, a); }
+ 
+     SI F   min(F a, F b)     { return _mm256_min_ps(a,b);    }
+-    SI I32 min(I32 a, I32 b) { return (I32)_mm256_min_epi32((__m256i)a,(__m256i)b); }
+-    SI U32 min(U32 a, U32 b) { return (U32)_mm256_min_epu32((__m256i)a,(__m256i)b); }
+     SI F   max(F a, F b)     { return _mm256_max_ps(a,b);    }
+-    SI I32 max(I32 a, I32 b) { return (I32)_mm256_max_epi32((__m256i)a,(__m256i)b); }
+-    SI U32 max(U32 a, U32 b) { return (U32)_mm256_max_epu32((__m256i)a,(__m256i)b); }
+-
+     SI F   abs_  (F v)       { return _mm256_and_ps(v, 0-v); }
+-    SI I32 abs_  (I32 v)     { return (I32)_mm256_abs_epi32((__m256i)v); }
      SI F   floor_(F v)       { return _mm256_floor_ps(v);    }
      SI F   ceil_(F v)        { return _mm256_ceil_ps(v);     }
 -    SI F   rcp_approx(F v)   { return _mm256_rcp_ps  (v);    }  // use rcp_fast instead
@@ -1149,7 +1257,21 @@ index 9a0edd9594..e90f6f98cd 100644
      SI F   sqrt_ (F v)       { return _mm256_sqrt_ps (v);    }
      SI F   rcp_precise (F v) {
          F e = rcp_approx(v);
-@@ -809,9 +825,20 @@
+@@ -631,6 +709,13 @@
+     SI I32 if_then_else(I32 c, I32 t, I32 e) {
+         return (I32)_mm256_blendv_ps((__m256)e, (__m256)t, (__m256)c);
+     }
++#endif  // SKRP_ARM_SEMANTICS
++
++    SI I32 min(I32 a, I32 b) { return (I32)_mm256_min_epi32((__m256i)a,(__m256i)b); }
++    SI U32 min(U32 a, U32 b) { return (U32)_mm256_min_epu32((__m256i)a,(__m256i)b); }
++    SI I32 max(I32 a, I32 b) { return (I32)_mm256_max_epi32((__m256i)a,(__m256i)b); }
++    SI U32 max(U32 a, U32 b) { return (U32)_mm256_max_epu32((__m256i)a,(__m256i)b); }
++    SI I32 abs_  (I32 v)     { return (I32)_mm256_abs_epi32((__m256i)v); }
+ 
+     // NOTE: This version of 'all' only works with mask values (true == all bits set)
+     SI bool any(I32 c) { return !_mm256_testz_si256((__m256i)c, _mm256_set1_epi32(-1)); }
+@@ -809,9 +894,20 @@
  #else
      SI I32 abs_(I32 v)         { return max(v, -v); }
  #endif
@@ -1172,6 +1294,111 @@ index 9a0edd9594..e90f6f98cd 100644
      SI F    sqrt_(F v)         { return _mm_sqrt_ps (v);    }
  
      SI I32 iround(F v)         { return (I32)_mm_cvtps_epi32(v); }
+@@ -1427,6 +1523,10 @@
+ #if defined(SKRP_CPU_NEON) && defined(SK_CPU_ARM64)
+     return vcvt_f32_f16((float16x4_t)h);
+ 
++#elif defined(SKRP_ARM_SEMANTICS)
++    return arm_join(vcvt_f32_f16(__builtin_shufflevector(h, h, 0, 1, 2, 3)),
++                    vcvt_f32_f16(__builtin_shufflevector(h, h, 4, 5, 6, 7)));
++
+ #elif defined(SKRP_CPU_ML4)
+     return _mm512_cvtph_ps((__m256i)h);
+ 
+@@ -1450,6 +1550,10 @@
+ #if defined(SKRP_CPU_NEON) && defined(SK_CPU_ARM64)
+     return (U16)vcvt_f16_f32(f);
+ 
++#elif defined(SKRP_ARM_SEMANTICS)
++    return __builtin_shufflevector(vcvt_f16_f32(arm_lo(f)), vcvt_f16_f32(arm_hi(f)),
++                                   0, 1, 2, 3, 4, 5, 6, 7);
++
+ #elif defined(SKRP_CPU_ML4)
+     return (U16)_mm512_cvtps_ph(f, _MM_FROUND_CUR_DIRECTION);
+ 
+@@ -5476,6 +5580,10 @@
+     // With NEON we can compute [2] just as fast as [3], so let's be correct.
+     // First we compute v + ((v+128)>>8), then one more round of (...+128)>>8 to finish up:
+     return vrshrq_n_u16(vrsraq_n_u16(v, v, 8), 8);
++#elif defined(SKRP_ARM_SEMANTICS)
++    // The same, in the lane width: a rounding shift by 8 is (v >> 8) plus bit 7.
++    U16 t = v + ((v >> 8) + ((v >> 7) & 1));
++    return (t >> 8) + ((t >> 7) & 1);
+ #else
+     // Otherwise, use [3], which is never wrong by more than 1:
+     return (v+255)/256;
+@@ -5486,7 +5594,7 @@
+  * div255_accurate guarantees the right answer on all platforms, at the expense of performance.
+  */
+ SI U16 div255_accurate(U16 v) {
+-#if defined(SKRP_CPU_NEON)
++#if defined(SKRP_CPU_NEON) || defined(SKRP_ARM_SEMANTICS)
+     // Our NEON implementation of div255 is already correct for all inputs:
+     return div255(v);
+ #else
+@@ -5600,9 +5708,24 @@
+ 
+ SI U32 trunc_(F x) { return (U32)cast<I32>(x); }
+ 
++#if defined(SKRP_ARM_SEMANTICS)
++// A 16-lane float through a 4-lane AArch64 function, a quarter at a time.
++template <typename Fn> SI F arm_quarters(F x, Fn fn) {
++    auto lo = __builtin_shufflevector(fn(__builtin_shufflevector(x, x, 0, 1, 2, 3)),
++                                      fn(__builtin_shufflevector(x, x, 4, 5, 6, 7)),
++                                      0, 1, 2, 3, 4, 5, 6, 7);
++    auto hi = __builtin_shufflevector(fn(__builtin_shufflevector(x, x, 8, 9, 10, 11)),
++                                      fn(__builtin_shufflevector(x, x, 12, 13, 14, 15)),
++                                      0, 1, 2, 3, 4, 5, 6, 7);
++    return __builtin_shufflevector(lo, hi, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15);
++}
++#endif
++
+ // Use approximate instructions and one Newton-Raphson step to calculate 1/x.
+ SI F rcp_precise(F x) {
+-#if defined(SKRP_CPU_ML4)
++#if defined(SKRP_ARM_SEMANTICS)
++    return arm_quarters(x, [](float32x4_t v) { return SK_OPTS_NS::arm_rcp_precise(v); });
++#elif defined(SKRP_CPU_ML4)
+     F e = _mm512_rcp14_ps(x);
+     return _mm512_fnmadd_ps(x, e, _mm512_set1_ps(2.0f)) * e;
+ #elif defined(SKRP_CPU_AVX2)
+@@ -5630,7 +5753,9 @@
+ #endif
+ }
+ SI F sqrt_(F x) {
+-#if defined(SKRP_CPU_ML4)
++#if defined(SKRP_ARM_SEMANTICS)
++    return arm_quarters(x, [](float32x4_t v) { return vsqrtq_f32(v); });
++#elif defined(SKRP_CPU_ML4)
+     return _mm512_sqrt_ps(x);
+ #elif defined(SKRP_CPU_AVX2)
+     __m256 lo,hi;
+@@ -5675,6 +5800,8 @@
+     float32x4_t lo,hi;
+     split(x, &lo,&hi);
+     return join<F>(vrndmq_f32(lo), vrndmq_f32(hi));
++#elif defined(SKRP_ARM_SEMANTICS)
++    return arm_quarters(x, [](float32x4_t v) { return vrndmq_f32(v); });
+ #elif defined(SKRP_CPU_ML4)
+     return _mm512_floor_ps(x);
+ #elif defined(SKRP_CPU_AVX2)
+@@ -5705,7 +5832,15 @@
+ // The result is a number on [-1, 1).
+ // Note: on neon this is a saturating multiply while the others are not.
+ SI I16 scaled_mult(I16 a, I16 b) {
+-#if defined(SKRP_CPU_ML4)
++#if defined(SKRP_ARM_SEMANTICS)
++    // SQRDMULH saturates the one product PMULHRSW wraps.
++    return __builtin_shufflevector(
++            vqrdmulhq_s16(__builtin_shufflevector(a, a, 0, 1, 2, 3, 4, 5, 6, 7),
++                          __builtin_shufflevector(b, b, 0, 1, 2, 3, 4, 5, 6, 7)),
++            vqrdmulhq_s16(__builtin_shufflevector(a, a, 8, 9, 10, 11, 12, 13, 14, 15),
++                          __builtin_shufflevector(b, b, 8, 9, 10, 11, 12, 13, 14, 15)),
++            0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15);
++#elif defined(SKRP_CPU_ML4)
+     return (I16)_mm256_mulhrs_epi16((__m256i)a, (__m256i)b);
+ #elif defined(SKRP_CPU_AVX2)
+     return (I16)_mm256_mulhrs_epi16((__m256i)a, (__m256i)b);
 diff --git a/gfx/skia/skia/src/opts/SkSwizzler_opts.inc b/gfx/skia/skia/src/opts/SkSwizzler_opts.inc
 index e5c506b55e..695820d10b 100644
 --- a/gfx/skia/skia/src/opts/SkSwizzler_opts.inc
