@@ -5,6 +5,7 @@
 #include <cstring>
 
 #include "src/opts/SkNeonEmu.h"
+#include "src/opts/SkNeonEmuBlit.h"
 #include "ops.h"
 
 #define NEON_EMU_CAT2(a, b) a##_##b
@@ -153,3 +154,34 @@ EXPR2(vtbl1_u8, uint8x8_t, uint8x8_t, vtbl1_u8(x, y))
 EXPR2(vqtbl1q_u8, uint8x16_t, uint8x16_t, vqtbl1q_u8(x, y))
 EXPR2(vqtbl1_u8, uint8x16_t, uint8x8_t, vqtbl1_u8(x, y))
 EXPR1(vrev32q_u8, uint8x16_t, vrev32q_u8(x))
+
+// SkBlitRow_opts.h's AArch64 source-over (SkPMSrcOver_neon8), 8 pixels at a
+// time: through the lane-wise intrinsics in ref and base, through the AVX2
+// kernel the emulated blitter uses (SkNeonEmuBlit.h) in fast.
+#if !NEON_EMU_FAST
+static uint8x8_t srcover_muldiv255round(uint8x8_t x, uint8x8_t y) {
+  uint16x8_t prod = vmull_u8(x, y);
+  return vraddhn_u16(prod, vrshrq_n_u16(prod, 8));
+}
+#endif
+extern "C" void NEON_EMU_CAT(NS, op_srcover8)(unsigned char* o, const unsigned char* a,
+                                             const unsigned char* b, const unsigned char*,
+                                             unsigned long n) {
+  for (unsigned long i = 0; i < n; i++) {
+#if NEON_EMU_FAST
+    __m256i src = _mm256_loadu_si256((const __m256i*)(a + i * 32));
+    __m256i dst = _mm256_loadu_si256((const __m256i*)(b + i * 32));
+    _mm256_storeu_si256((__m256i*)(o + i * 32), sk_neon_emu_srcover_avx2(src, dst));
+#else
+    uint8x8x4_t src = vld4_u8(a + i * 32), dst = vld4_u8(b + i * 32);
+    uint8x8_t na = vmvn_u8(src.val[3]);
+    uint8x8x4_t r = {{
+        vqadd_u8(src.val[0], srcover_muldiv255round(na, dst.val[0])),
+        vqadd_u8(src.val[1], srcover_muldiv255round(na, dst.val[1])),
+        vqadd_u8(src.val[2], srcover_muldiv255round(na, dst.val[2])),
+        vqadd_u8(src.val[3], srcover_muldiv255round(na, dst.val[3])),
+    }};
+    vst4_u8(o + i * 32, r);
+#endif
+  }
+}

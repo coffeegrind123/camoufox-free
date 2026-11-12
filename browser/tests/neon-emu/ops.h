@@ -67,7 +67,8 @@
   X(vtbl1_u8, 8, 8, 0, 8, U)                  \
   X(vqtbl1q_u8, 16, 16, 0, 16, U)             \
   X(vqtbl1_u8, 16, 8, 0, 8, U)                \
-  X(vrev32q_u8, 16, 0, 0, 16, U)
+  X(vrev32q_u8, 16, 0, 0, 16, U)                \
+  X(srcover8, 32, 32, 0, 32, U)
 
 typedef void (*neon_emu_op)(unsigned char* out, const unsigned char* a, const unsigned char* b,
                             const unsigned char* c, unsigned long n);

@@ -7,7 +7,8 @@
 // base the shipped baseline x86-64 build: shuffles, no fast paths
 //
 // Unary float operations run on all 2^32 inputs, vcvt_f32_f16 on all 2^16
-// halves, vqrdmulhq_s16 on all 2^32 pairs; the rest on random vectors drawn
+// halves, vqrdmulhq_s16 on all 2^32 pairs, srcover8 on every source alpha,
+// source and destination byte; the rest on random vectors drawn
 // heavily from special values (zeros, subnormals, infinities, NaNs with
 // payloads, conversion and overflow boundaries). `quick` samples instead of
 // sweeping. Exit status 1 on any difference.
@@ -173,6 +174,25 @@ static void sweep_sqrdmulh(const Op& op, bool quick) {
   compare(op, in, 1, out);
 }
 
+// Source-over: every source alpha and source byte against every destination
+// byte (the source's colour bytes all s, its alpha sa).
+static void sweep_srcover(const Op& op) {
+  const size_t n = 8;  // 8 vectors of 8 pixels: 256 destination bytes
+  std::vector<unsigned char> src(n * 32), dst(n * 32), out[3];
+  for (auto& o : out) o.resize(n * 32);
+  for (size_t i = 0; i < n * 32; i++) dst[i] = (unsigned char)i;
+  unsigned char* in[3] = {src.data(), dst.data(), nullptr};
+  for (int sa = 0; sa < 256; sa++) {
+    for (int s = 0; s < 256; s++) {
+      for (size_t p = 0; p < n * 8; p++) {
+        src[p * 4 + 0] = src[p * 4 + 1] = src[p * 4 + 2] = (unsigned char)s;
+        src[p * 4 + 3] = (unsigned char)sa;
+      }
+      compare(op, in, n, out);
+    }
+  }
+}
+
 static void random_vectors(const Op& op, size_t total) {
   std::vector<unsigned char> buf[3], out[3];
   unsigned char* in[3] = {nullptr, nullptr, nullptr};
@@ -233,6 +253,9 @@ int main(int argc, char** argv) {
     auto t0 = std::chrono::steady_clock::now();
     if (!strcmp(op.name, "vcvt_f32_f16")) {
       sweep_f16(op);
+      random_vectors(op, 1 << 18);
+    } else if (!strcmp(op.name, "srcover8")) {
+      sweep_srcover(op);
       random_vectors(op, 1 << 18);
     } else if (!strcmp(op.name, "vqrdmulhq_s16")) {
       sweep_sqrdmulh(op, quick);
