@@ -9,7 +9,14 @@
 #include <stdint.h>
 #include <string.h>
 
-static const uint8_t armest_recip_tab[256] = {
+/* constexpr in C++, so SkNeonEmu.h can widen the tables at compile time. */
+#ifdef __cplusplus
+#define ARMEST_TABLE static constexpr
+#else
+#define ARMEST_TABLE static const
+#endif
+
+ARMEST_TABLE uint8_t armest_recip_tab[256] = {
   255,253,251,249,247,245,243,241,240,238,236,234,232,230,229,227,
   225,223,221,220,218,216,215,213,211,210,208,206,205,203,201,200,
   198,197,195,194,192,191,189,188,186,185,183,182,180,179,177,176,
@@ -28,7 +35,7 @@ static const uint8_t armest_recip_tab[256] = {
     8,  7,  7,  6,  6,  5,  5,  4,  4,  3,  3,  2,  2,  1,  1,  0,
 };
 
-static const uint8_t armest_rsqrt_tab[384] = {
+ARMEST_TABLE uint8_t armest_rsqrt_tab[384] = {
   255,253,251,249,247,245,243,242,240,238,236,234,233,231,229,228,
   226,224,223,221,219,218,216,215,213,212,210,209,207,206,204,203,
   201,200,198,197,196,194,193,192,190,189,188,186,185,184,183,181,

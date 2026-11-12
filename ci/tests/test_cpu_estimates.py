@@ -23,6 +23,10 @@ def test_the_generated_tables_are_current():
     subprocess.run([sys.executable, str(BROWSER / "scripts" / "gen-cpu-estimate-tables.py"), "--check"], check=True)
 
 
+def test_the_neon_emu_shuffles_are_current():
+    subprocess.run([sys.executable, str(BROWSER / "scripts" / "gen-neon-emu-shuffle.py"), "--check"], check=True)
+
+
 def test_the_launcher_sends_the_patchs_vendor_numbers():
     header = (OPTS / "SkCpuEstimates.h").read_text()
     enum = {m[1]: int(m[2]) for m in re.finditer(r"SK_CPU_(?:VENDOR|IDENTITY)_(INTEL|AMD|ARM64) = (\d+)", header)}

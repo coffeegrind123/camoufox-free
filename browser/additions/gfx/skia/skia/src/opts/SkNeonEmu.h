@@ -16,6 +16,14 @@
 // (FRECPE/FRSQRTE and their Newton steps, ArmEstimates.h), fused
 // multiply-add, FMIN/FMAX, the float-to-integer conversions (saturating,
 // NaN to 0) and NaN propagation in each.
+//
+// Built with AVX2 and FMA (the _neonemu_hsw files), the float operations take
+// a fast path: the x86 instruction, when every lane is one on which both ISAs
+// give the same bits (no NaN in or out, conversions in range, estimates of
+// normal numbers). Any other lane sends the whole vector through the lane-wise
+// reference. The interleaving loads and stores are shuffles under clang.
+// NEON_EMU_REFERENCE turns both off; browser/tests/neon-emu compares the two
+// builds on special and random values and times them.
 
 #ifndef SkNeonEmu_DEFINED
 #define SkNeonEmu_DEFINED
@@ -25,6 +33,18 @@
 #include <string.h>
 
 #include "src/opts/SkArmEstimates.h"
+
+#if defined(__cplusplus) && defined(__AVX2__) && defined(__FMA__) && !defined(NEON_EMU_REFERENCE)
+#  include <immintrin.h>
+#  define NEON_EMU_FAST 1
+#else
+#  define NEON_EMU_FAST 0
+#endif
+#if defined(__clang__) && !defined(NEON_EMU_REFERENCE)
+#  define NEON_EMU_SHUFFLE 1
+#else
+#  define NEON_EMU_SHUFFLE 0
+#endif
 
 #if defined(__clang__)
 #  define NEON_EMU_VEC(T, N) T __attribute__((ext_vector_type(N)))
@@ -250,41 +270,153 @@ NEON_EMU_SI float neon_emu_f16_to_f32(uint16_t h) {
     r_;                                                   \
   })
 
+#if NEON_EMU_FAST
+NEON_EMU_SI __m128 neon_emu_m(float32x4_t v) { return (__m128)v; }
+NEON_EMU_SI __m128i neon_emu_mi(float32x4_t v) { return (__m128i)v; }
+NEON_EMU_SI float32x4_t neon_emu_f(__m128 v) { return (float32x4_t)v; }
+NEON_EMU_SI int neon_emu_any_nan(__m128 v) {
+  return _mm_movemask_ps(_mm_cmpunord_ps(v, v));
+}
+NEON_EMU_SI int neon_emu_any_nan2(__m128 a, __m128 b) {
+  return _mm_movemask_ps(_mm_cmpunord_ps(a, b));
+}
+// Every lane's biased exponent, 0..255.
+NEON_EMU_SI __m128i neon_emu_exp(__m128i u) {
+  return _mm_and_si128(_mm_srli_epi32(u, 23), _mm_set1_epi32(0xff));
+}
+// Lanes all of whose mask bits are set.
+NEON_EMU_SI int neon_emu_all(__m128i m) {
+  return _mm_movemask_ps(_mm_castsi128_ps(m)) == 0xf;
+}
+// lo <= x <= hi on signed lanes.
+NEON_EMU_SI __m128i neon_emu_within(__m128i x, int lo, int hi) {
+  return _mm_andnot_si128(
+      _mm_or_si128(_mm_cmplt_epi32(x, _mm_set1_epi32(lo)),
+                   _mm_cmpgt_epi32(x, _mm_set1_epi32(hi))),
+      _mm_set1_epi32(-1));
+}
+// FRECPE's and FRSQRTE's tables as the result's mantissa bits (byte << 15),
+// one 32-bit word per entry, for AVX2 gathers.
+struct NeonEmuEstimateWords {
+  uint32_t recip[256];
+  uint32_t rsqrt[384];
+};
+static constexpr NeonEmuEstimateWords neon_emu_estimate_words() {
+  NeonEmuEstimateWords w{};
+  for (int i = 0; i < 256; i++) w.recip[i] = (uint32_t)armest_recip_tab[i] << 15;
+  for (int i = 0; i < 384; i++) w.rsqrt[i] = (uint32_t)armest_rsqrt_tab[i] << 15;
+  return w;
+}
+static constexpr NeonEmuEstimateWords kNeonEmuEstimateWords = neon_emu_estimate_words();
+NEON_EMU_SI __m128i neon_emu_gather(const uint32_t* words, __m128i idx) {
+  return _mm_i32gather_epi32((const int*)words, idx, 4);
+}
+#endif
+
 NEON_EMU_SI float32x4_t vrecpeq_f32(float32x4_t a) {
+#if NEON_EMU_FAST
+  // A normal input whose reciprocal is normal: biased exponent 1..252.
+  __m128i u = neon_emu_mi(a), e = neon_emu_exp(u);
+  if (neon_emu_all(neon_emu_within(e, 1, 252))) {
+    __m128i f = neon_emu_gather(kNeonEmuEstimateWords.recip,
+                                _mm_srli_epi32(_mm_and_si128(u, _mm_set1_epi32(0x7fffff)), 15));
+    __m128i re = _mm_slli_epi32(_mm_sub_epi32(_mm_set1_epi32(253), e), 23);
+    __m128i sign = _mm_and_si128(u, _mm_set1_epi32((int)0x80000000u));
+    return (float32x4_t)_mm_or_si128(_mm_or_si128(sign, re), f);
+  }
+#endif
   return NEON_EMU_MAP1(float32x4_t, a,
                        neon_emu_float(arm_frecpe_f32(neon_emu_bits(a[i]))));
 }
 NEON_EMU_SI float32x4_t vrsqrteq_f32(float32x4_t a) {
+#if NEON_EMU_FAST
+  // A positive normal input (the sign bit makes the lane's word negative).
+  __m128i u = neon_emu_mi(a), e = neon_emu_exp(u);
+  if (neon_emu_all(_mm_and_si128(neon_emu_within(e, 1, 254),
+                                 _mm_cmpgt_epi32(u, _mm_set1_epi32(-1))))) {
+    __m128i m = _mm_and_si128(u, _mm_set1_epi32(0x7fffff));
+    __m128i odd = _mm_cmpeq_epi32(_mm_and_si128(e, _mm_set1_epi32(1)), _mm_set1_epi32(1));
+    // odd exponent: table[f >> 16]; even: table[128 + (f >> 15)]
+    __m128i idx = _mm_or_si128(
+        _mm_and_si128(odd, _mm_srli_epi32(m, 16)),
+        _mm_andnot_si128(odd, _mm_add_epi32(_mm_srli_epi32(m, 15), _mm_set1_epi32(128))));
+    __m128i f = neon_emu_gather(kNeonEmuEstimateWords.rsqrt, idx);
+    __m128i re = _mm_slli_epi32(_mm_srli_epi32(_mm_sub_epi32(_mm_set1_epi32(380), e), 1), 23);
+    return (float32x4_t)_mm_or_si128(re, f);
+  }
+#endif
   return NEON_EMU_MAP1(float32x4_t, a,
                        neon_emu_float(arm_frsqrte_f32(neon_emu_bits(a[i]))));
 }
 NEON_EMU_SI float32x4_t vrecpsq_f32(float32x4_t a, float32x4_t b) {
+#if NEON_EMU_FAST
+  // 2 - a*b rounded once, as FMA does, when both are finite.
+  __m128i inf = _mm_set1_epi32(0xff);
+  __m128i special = _mm_or_si128(_mm_cmpeq_epi32(neon_emu_exp(neon_emu_mi(a)), inf),
+                                 _mm_cmpeq_epi32(neon_emu_exp(neon_emu_mi(b)), inf));
+  if (!_mm_movemask_ps(_mm_castsi128_ps(special))) {
+    return neon_emu_f(_mm_fnmadd_ps(neon_emu_m(a), neon_emu_m(b), _mm_set1_ps(2.0f)));
+  }
+#endif
   return NEON_EMU_MAP1(float32x4_t, a, arm_frecps_f32(a[i], b[i]));
 }
 NEON_EMU_SI float32x4_t vrsqrtsq_f32(float32x4_t a, float32x4_t b) {
+#if NEON_EMU_FAST
+  // (3 - a*b) / 2 rounded once: FMA then an exact halving, when both are
+  // finite and |a*b| < 2^127, so neither overflows (cancellation near 3
+  // leaves at least 2^-47, never a subnormal to halve).
+  __m128i ea = neon_emu_exp(neon_emu_mi(a)), eb = neon_emu_exp(neon_emu_mi(b));
+  __m128i ok = _mm_and_si128(_mm_and_si128(neon_emu_within(ea, 0, 254), neon_emu_within(eb, 0, 254)),
+                             neon_emu_within(_mm_add_epi32(ea, eb), 0, 379));
+  if (neon_emu_all(ok)) {
+    __m128 r = _mm_fnmadd_ps(neon_emu_m(a), neon_emu_m(b), _mm_set1_ps(3.0f));
+    return neon_emu_f(_mm_mul_ps(r, _mm_set1_ps(0.5f)));
+  }
+#endif
   return NEON_EMU_MAP1(float32x4_t, a, arm_frsqrts_f32(a[i], b[i]));
 }
 NEON_EMU_SI float32x4_t vfmaq_f32(float32x4_t a, float32x4_t b,
                                   float32x4_t c) {
+#if NEON_EMU_FAST
+  // No NaN out means no NaN in and no invalid operation.
+  __m128 r = _mm_fmadd_ps(neon_emu_m(b), neon_emu_m(c), neon_emu_m(a));
+  if (!neon_emu_any_nan(r)) return neon_emu_f(r);
+#endif
   return NEON_EMU_MAP1(float32x4_t, a, neon_emu_fmla(a[i], b[i], c[i]));
 }
 NEON_EMU_SI float32x4_t vfmsq_f32(float32x4_t a, float32x4_t b,
                                   float32x4_t c) {
   // FMLS negates op1 (b) first, a NaN's sign included.
+#if NEON_EMU_FAST
+  __m128 r = _mm_fnmadd_ps(neon_emu_m(b), neon_emu_m(c), neon_emu_m(a));
+  if (!neon_emu_any_nan(r)) return neon_emu_f(r);
+#endif
   return NEON_EMU_MAP1(
       float32x4_t, a,
       neon_emu_fmla(a[i], neon_emu_float(neon_emu_bits(b[i]) ^ 0x80000000u),
                     c[i]));
 }
 NEON_EMU_SI float32x4_t vmulq_f32(float32x4_t a, float32x4_t b) {
+#if NEON_EMU_FAST
+  __m128 r = _mm_mul_ps(neon_emu_m(a), neon_emu_m(b));
+  if (!neon_emu_any_nan(r)) return neon_emu_f(r);
+#endif
   return NEON_EMU_MAP1(float32x4_t, a,
                        neon_emu_arith_nan(a[i], b[i], a[i] * b[i]));
 }
 NEON_EMU_SI float32x4_t vaddq_f32(float32x4_t a, float32x4_t b) {
+#if NEON_EMU_FAST
+  __m128 r = _mm_add_ps(neon_emu_m(a), neon_emu_m(b));
+  if (!neon_emu_any_nan(r)) return neon_emu_f(r);
+#endif
   return NEON_EMU_MAP1(float32x4_t, a,
                        neon_emu_arith_nan(a[i], b[i], a[i] + b[i]));
 }
 NEON_EMU_SI float32x4_t vsubq_f32(float32x4_t a, float32x4_t b) {
+#if NEON_EMU_FAST
+  __m128 r = _mm_sub_ps(neon_emu_m(a), neon_emu_m(b));
+  if (!neon_emu_any_nan(r)) return neon_emu_f(r);
+#endif
   return NEON_EMU_MAP1(float32x4_t, a,
                        neon_emu_arith_nan(a[i], b[i], a[i] - b[i]));
 }
@@ -298,9 +430,23 @@ NEON_EMU_SI float32x4_t vmlsq_f32(float32x4_t a, float32x4_t b,
   return vsubq_f32(a, vmulq_f32(b, c));
 }
 NEON_EMU_SI float32x4_t vminq_f32(float32x4_t a, float32x4_t b) {
+#if NEON_EMU_FAST
+  // Equal lanes (+0 and -0 among them) take the sign rule of the reference.
+  __m128 x = neon_emu_m(a), y = neon_emu_m(b);
+  if (!neon_emu_any_nan2(x, y)) {
+    return neon_emu_f(_mm_blendv_ps(_mm_min_ps(x, y), _mm_or_ps(x, y), _mm_cmpeq_ps(x, y)));
+  }
+#endif
   return NEON_EMU_MAP1(float32x4_t, a, neon_emu_fmin(a[i], b[i]));
 }
 NEON_EMU_SI float32x4_t vmaxq_f32(float32x4_t a, float32x4_t b) {
+#if NEON_EMU_FAST
+  // Equal lanes (+0 and -0 among them) take the sign rule of the reference.
+  __m128 x = neon_emu_m(a), y = neon_emu_m(b);
+  if (!neon_emu_any_nan2(x, y)) {
+    return neon_emu_f(_mm_blendv_ps(_mm_max_ps(x, y), _mm_and_ps(x, y), _mm_cmpeq_ps(x, y)));
+  }
+#endif
   return NEON_EMU_MAP1(float32x4_t, a, neon_emu_fmax(a[i], b[i]));
 }
 NEON_EMU_SI float32x4_t vabsq_f32(float32x4_t a) {
@@ -308,6 +454,12 @@ NEON_EMU_SI float32x4_t vabsq_f32(float32x4_t a) {
                        neon_emu_float(neon_emu_bits(a[i]) & 0x7fffffffu));
 }
 NEON_EMU_SI float32x4_t vsqrtq_f32(float32x4_t a) {
+#if NEON_EMU_FAST
+  __m128 x = neon_emu_m(a);
+  if (!_mm_movemask_ps(_mm_or_ps(_mm_cmpunord_ps(x, x), _mm_cmplt_ps(x, _mm_setzero_ps())))) {
+    return neon_emu_f(_mm_sqrt_ps(x));
+  }
+#endif
   return NEON_EMU_MAP1(float32x4_t, a, neon_emu_fsqrt(a[i]));
 }
 NEON_EMU_SI float32x4_t vrndmq_f32(float32x4_t a) {
@@ -322,16 +474,41 @@ NEON_EMU_SI float32x4_t vrndnq_f32(float32x4_t a) {
   return NEON_EMU_MAP1(float32x4_t, a, neon_emu_rne(a[i]));
 }
 NEON_EMU_SI float32_t vrndns_f32(float32_t a) { return neon_emu_rne(a); }
+#if NEON_EMU_FAST
+// -2^31 <= x < 2^31 in every lane (false for NaN).
+NEON_EMU_SI int neon_emu_s32_range(__m128 x) {
+  return _mm_movemask_ps(_mm_and_ps(_mm_cmpge_ps(x, _mm_set1_ps(-2147483648.0f)),
+                                    _mm_cmplt_ps(x, _mm_set1_ps(2147483648.0f)))) == 0xf;
+}
+// 0 <= x < 2^31 in every lane.
+NEON_EMU_SI int neon_emu_u32_range(__m128 x) {
+  return _mm_movemask_ps(_mm_and_ps(_mm_cmpge_ps(x, _mm_setzero_ps()),
+                                    _mm_cmplt_ps(x, _mm_set1_ps(2147483648.0f)))) == 0xf;
+}
+#endif
 NEON_EMU_SI int32x4_t vcvtq_s32_f32(float32x4_t a) {
+#if NEON_EMU_FAST
+  if (neon_emu_s32_range(neon_emu_m(a))) return (int32x4_t)_mm_cvttps_epi32(neon_emu_m(a));
+#endif
   return NEON_EMU_MAP1(int32x4_t, a, neon_emu_f2s(a[i]));
 }
 NEON_EMU_SI uint32x4_t vcvtq_u32_f32(float32x4_t a) {
+#if NEON_EMU_FAST
+  if (neon_emu_u32_range(neon_emu_m(a))) return (uint32x4_t)_mm_cvttps_epi32(neon_emu_m(a));
+#endif
   return NEON_EMU_MAP1(uint32x4_t, a, neon_emu_f2u(a[i]));
 }
 NEON_EMU_SI int32x4_t vcvtnq_s32_f32(float32x4_t a) {
+#if NEON_EMU_FAST
+  // CVTPS2DQ rounds to nearest even under the default MXCSR, as FCVTNS does.
+  if (neon_emu_s32_range(neon_emu_m(a))) return (int32x4_t)_mm_cvtps_epi32(neon_emu_m(a));
+#endif
   return NEON_EMU_MAP1(int32x4_t, a, neon_emu_f2s(neon_emu_rne(a[i])));
 }
 NEON_EMU_SI uint32x4_t vcvtnq_u32_f32(float32x4_t a) {
+#if NEON_EMU_FAST
+  if (neon_emu_u32_range(neon_emu_m(a))) return (uint32x4_t)_mm_cvtps_epi32(neon_emu_m(a));
+#endif
   return NEON_EMU_MAP1(uint32x4_t, a, neon_emu_f2u(neon_emu_rne(a[i])));
 }
 NEON_EMU_SI float32x4_t vcvtq_f32_s32(int32x4_t a) {
@@ -341,9 +518,26 @@ NEON_EMU_SI float32x4_t vcvtq_f32_u32(uint32x4_t a) {
   return NEON_EMU_MAP1(float32x4_t, a, (float)a[i]);
 }
 NEON_EMU_SI float16x4_t vcvt_f16_f32(float32x4_t a) {
+#if NEON_EMU_FAST && defined(__F16C__)
+  // Round to nearest even with gradual underflow, as FCVT; NaNs differ.
+  if (!neon_emu_any_nan(neon_emu_m(a))) {
+    __m128i h = _mm_cvtps_ph(neon_emu_m(a), _MM_FROUND_TO_NEAREST_INT);
+    float16x4_t r;
+    memcpy(&r, &h, sizeof r);
+    return r;
+  }
+#endif
   return NEON_EMU_MAP1(float16x4_t, a, neon_emu_f32_to_f16(a[i]));
 }
 NEON_EMU_SI float32x4_t vcvt_f32_f16(float16x4_t a) {
+#if NEON_EMU_FAST && defined(__F16C__)
+  // Exact for every half but a NaN.
+  uint64_t bits;
+  memcpy(&bits, &a, 8);
+  __m128i h = _mm_cvtsi64_si128((long long)bits);
+  __m128i nan = _mm_cmpgt_epi16(_mm_and_si128(h, _mm_set1_epi16(0x7fff)), _mm_set1_epi16(0x7c00));
+  if (!(_mm_movemask_epi8(nan) & 0xff)) return neon_emu_f(_mm_cvtph_ps(h));
+#endif
   return NEON_EMU_MAP1(float32x4_t, a, neon_emu_f16_to_f32(a[i]));
 }
 NEON_EMU_SI float32x4_t vbslq_f32(uint32x4_t m, float32x4_t a,
@@ -756,6 +950,13 @@ NEON_EMU_SI uint8x16_t vqsubq_u8(uint8x16_t a, uint8x16_t b) {
 }
 // SQRDMULH: saturate((2*a*b + 2^15) >> 16)
 NEON_EMU_SI int16x8_t vqrdmulhq_s16(int16x8_t a, int16x8_t b) {
+#if NEON_EMU_FAST
+  // PMULHRSW is (a*b + 2^14) >> 15, the same value but for -32768 * -32768,
+  // which SQRDMULH saturates to 32767.
+  __m128i x = (__m128i)a, y = (__m128i)b, min = _mm_set1_epi16(-32768);
+  __m128i both = _mm_and_si128(_mm_cmpeq_epi16(x, min), _mm_cmpeq_epi16(y, min));
+  return (int16x8_t)_mm_xor_si128(_mm_mulhrs_epi16(x, y), both);
+#endif
   return NEON_EMU_MAP1(int16x8_t, a, ({
     int64_t p_ = (2 * (int64_t)a[i] * b[i] + (1 << 15)) >> 16;
     (int16_t)(p_ > 32767 ? 32767 : p_ < -32768 ? -32768 : p_);
@@ -857,4 +1058,5 @@ NEON_EMU_SI uint8x8_t vrev32_u8(uint8x8_t a) {
 }
 
 #undef NEON_EMU_MAP1
+#include "src/opts/SkNeonEmuShuffle.h"
 #endif  // SkNeonEmu_DEFINED

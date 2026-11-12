@@ -283,6 +283,14 @@ jobs:
         # patch guard.
         run: python3 browser/tests/ucrt-math/check.py
 
+      - name: ARM64 emulation fast paths are bit-exact
+        # SkNeonEmu.h's x86 fast paths and shuffles against its lane-wise
+        # reference: unary float operations over all 2^32 inputs, the rest
+        # over special-heavy random vectors, in the HSW and baseline builds
+        # the browser ships. Prints each operation's speed per build. The
+        # browser-level check is the cpu-vendor-estimates patch guard.
+        run: python3 browser/tests/neon-emu/check.py
+
       - name: Juggler input planners and pacing
         # The cursor and wheel planners, the pacer and the delays are plain ES
         # modules, so they run under Node without a browser build.
