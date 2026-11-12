@@ -50,6 +50,10 @@ from helpers import hidden_display, launch_kwargs  # noqa: E402
 # too, inside the guard's 1400x900 display.
 SPOOFED = {"window.screenX": 300, "window.screenY": 200,
            "window.outerWidth": 1000, "window.outerHeight": 650}
+# The Windows insets below are stock's at 100%: an unpinned devicePixelRatio
+# is drawn, and at a fractional one the borders round to other CSS pixels
+# (13 for 16).
+AT_100 = {"window.devicePixelRatio": 1}
 
 # (left, top, right, bottom) content insets in the window.
 # Stock Firefox 159, Windows 11, 1920x1080 at 100%, a normal window: inner
@@ -189,7 +193,7 @@ def main() -> int:
     failures: list = []
     results = {}
 
-    results["windows"] = normal = probe(resize=True, os="windows", config=SPOOFED)
+    results["windows"] = normal = probe(resize=True, os="windows", config={**SPOOFED, **AT_100})
     check("Windows, normal", normal["first"], WINDOWS_NORMAL, failures,
           expect_outer=(SPOOFED["window.outerWidth"], SPOOFED["window.outerHeight"]))
     check("Windows, after a viewport change", normal["resized"], WINDOWS_NORMAL, failures)
@@ -199,7 +203,8 @@ def main() -> int:
     check("Windows at 125%", scaled["first"], WINDOWS_125, failures)
 
     results["windows-maximized"] = maximized = probe(resize=True, os="windows",
-                                                     fingerprint=maximized_fingerprint())
+                                                     fingerprint=maximized_fingerprint(),
+                                                     config=AT_100)
     g = maximized["first"]["top"]["geometry"]
     check("Windows, maximized", maximized["first"], WINDOWS_MAXIMIZED, failures,
           expect_outer=(g["availWidth"] + 16, g["availHeight"] + 16),

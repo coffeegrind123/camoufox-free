@@ -89,7 +89,7 @@ def main() -> int:
     # zoom the page reads its own coordinate back to within a CSS pixel
     # (415.2 for 415), in stock Firefox as here.
     def at(point, x, y):
-        return abs(point[0] - x) < 1 and abs(point[1] - y) < 1
+        return abs(point[0] - x) <= 1 and abs(point[1] - y) <= 1
 
     if not moves or not at(moves[-1][1:], 100 + STEPS * 5, 100 + STEPS * 2):
         failures.append(f"the page's last move is {moves[-1] if moves else None} when move() returned")

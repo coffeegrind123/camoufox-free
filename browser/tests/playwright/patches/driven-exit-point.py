@@ -61,9 +61,9 @@ def main() -> int:
 
     # The pointer moves in device pixels, so under a fractional drawn scale or
     # zoom the page reads its own coordinate back to within a CSS pixel
-    # (350.2 for 350), in stock Firefox as here.
+    # (350.2 for 350; mouseout truncates 349.33 to 349), in stock Firefox as here.
     def near(a, b):
-        return abs(a - b) < 1
+        return abs(a - b) <= 1
 
     for name, got, check in (
         ("up into the toolbar", up, lambda x, y: near(x, UP[0]) and y < 0),
