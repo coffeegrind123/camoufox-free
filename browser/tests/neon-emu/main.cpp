@@ -75,7 +75,7 @@ static uint32_t lane() {
 // negation (min/max ties), or sits where a*b nears 2^127 (FRSQRTS's bound).
 static void fill_float(unsigned char* in[3], const int bytes[3], size_t n) {
   for (size_t v = 0; v < n; v++) {
-    for (int l = 0; l < 4; l++) {
+    for (int l = 0; l < bytes[0] / 4; l++) {
       uint32_t x[3];
       for (int j = 0; j < 3; j++) x[j] = lane();
       uint64_t r = gRng();
@@ -127,16 +127,17 @@ static void compare(const Op& op, unsigned char* in[3], size_t n, std::vector<un
 static const size_t kChunk = 1 << 16;
 
 static void sweep_unary32(const Op& op, bool quick) {
-  std::vector<unsigned char> buf(kChunk * 16), out[3];
+  const int lanes = op.in[0] / 4;
+  std::vector<unsigned char> buf(kChunk * op.in[0]), out[3];
   for (auto& o : out) o.resize(kChunk * op.out);
   unsigned char* in[3] = {buf.data(), nullptr, nullptr};
   uint64_t step = quick ? 4099 : 1;
   for (uint64_t x = 0; x < (1ull << 32);) {
     size_t n = 0;
     for (; n < kChunk && x < (1ull << 32); n++) {
-      for (int l = 0; l < 4; l++, x += step) {
+      for (int l = 0; l < lanes; l++, x += step) {
         uint32_t u = (uint32_t)x;
-        memcpy(buf.data() + n * 16 + l * 4, &u, 4);
+        memcpy(buf.data() + n * op.in[0] + l * 4, &u, 4);
       }
     }
     compare(op, in, n, out);

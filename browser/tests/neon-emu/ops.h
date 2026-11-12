@@ -68,7 +68,21 @@
   X(vqtbl1q_u8, 16, 16, 0, 16, U)             \
   X(vqtbl1_u8, 16, 8, 0, 8, U)                \
   X(vrev32q_u8, 16, 0, 0, 16, U)                \
-  X(srcover8, 32, 32, 0, 32, U)
+  X(srcover8, 32, 32, 0, 32, U) \
+  X(w8_fma, 32, 32, 32, 32, F) \
+  X(w8_fms, 32, 32, 32, 32, F) \
+  X(w8_min, 32, 32, 0, 32, F) \
+  X(w8_max, 32, 32, 0, 32, F) \
+  X(w8_abs, 32, 0, 0, 32, F) \
+  X(w8_floor, 32, 0, 0, 32, F) \
+  X(w8_ceil, 32, 0, 0, 32, F) \
+  X(w8_sqrt, 32, 0, 0, 32, F) \
+  X(w8_recpe, 32, 0, 0, 32, F) \
+  X(w8_rsqrte, 32, 0, 0, 32, F) \
+  X(w8_recps, 32, 32, 0, 32, F) \
+  X(w8_rsqrts, 32, 32, 0, 32, F) \
+  X(w8_cvtns, 32, 0, 0, 32, F) \
+  X(w8_cvtnu, 32, 0, 0, 32, F)
 
 typedef void (*neon_emu_op)(unsigned char* out, const unsigned char* a, const unsigned char* b,
                             const unsigned char* c, unsigned long n);

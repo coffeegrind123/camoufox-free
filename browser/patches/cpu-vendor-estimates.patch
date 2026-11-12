@@ -1147,7 +1147,7 @@ index 54de40498a..f1403b71c5 100644
          vst4_u8((uint8_t*)dst, SkPMSrcOver_neon8(vld4_u8((const uint8_t*)dst),
                                                   vld4_u8((const uint8_t*)src)));
 diff --git a/gfx/skia/skia/src/opts/SkRasterPipeline_opts.h b/gfx/skia/skia/src/opts/SkRasterPipeline_opts.h
-index 9a0edd9594..a8d9228d78 100644
+index 9a0edd9594..6507978c64 100644
 --- a/gfx/skia/skia/src/opts/SkRasterPipeline_opts.h
 +++ b/gfx/skia/skia/src/opts/SkRasterPipeline_opts.h
 @@ -108,7 +108,11 @@
@@ -1183,59 +1183,45 @@ index 9a0edd9594..a8d9228d78 100644
  // Notes:
  // * rcp_fast and rcp_precise both produce a reciprocal, but rcp_fast is an estimate with at least
  //   12 bits of precision while rcp_precise should be accurate for float size. For ARM rcp_precise
-@@ -594,22 +609,85 @@
+@@ -594,22 +609,71 @@
      using U16 = V<uint16_t>;
      using U8  = V<uint8_t >;
  
 +#if defined(SKRP_ARM_SEMANTICS)
-+    // The AArch64 tier's helpers (the SKRP_CPU_NEON section), on each half.
-+    SI float32x4_t arm_lo(F v) { return __builtin_shufflevector(v, v, 0, 1, 2, 3); }
-+    SI float32x4_t arm_hi(F v) { return __builtin_shufflevector(v, v, 4, 5, 6, 7); }
++    // The AArch64 tier's helpers (the SKRP_CPU_NEON section), 8 lanes at a
++    // time (SkNeonEmuWide.h).
++    SI __m256 arm_m(F v) { return sk_bit_cast<__m256>(v); }
++    SI F arm_f(__m256 v) { return sk_bit_cast<F>(v); }
++    SI F   mad(F f, F m, F a) { return arm_f(neon_emu_fma8(arm_m(a), arm_m(f), arm_m(m))); }
++    SI F  nmad(F f, F m, F a) { return arm_f(neon_emu_fms8(arm_m(a), arm_m(f), arm_m(m))); }
++    SI F   min(F a, F b)      { return arm_f(neon_emu_min8(arm_m(a), arm_m(b))); }
++    SI F   max(F a, F b)      { return arm_f(neon_emu_max8(arm_m(a), arm_m(b))); }
++    SI F   abs_(F v)          { return arm_f(neon_emu_abs8(arm_m(v))); }
++    SI F   floor_(F v)        { return arm_f(neon_emu_floor8(arm_m(v))); }
++    SI F   ceil_(F v)         { return arm_f(neon_emu_ceil8(arm_m(v))); }
++    SI F   sqrt_(F v)         { return arm_f(neon_emu_sqrt8(arm_m(v))); }
++    // rcp_approx: vrecpeq, then vrecpsq(v, e) * e; rcp_precise one more step;
++    // rsqrt_approx: vrsqrteq, then vrsqrtsq(v, e*e) * e. The products are the
++    // NEON section's generic operators.
++    SI F   rcp_approx(F v) {
++        F e = arm_f(neon_emu_recpe8(arm_m(v)));
++        return arm_f(neon_emu_recps8(arm_m(v), arm_m(e))) * e;
++    }
++    SI F   rcp_precise(F v) {
++        F e = rcp_approx(v);
++        return arm_f(neon_emu_recps8(arm_m(v), arm_m(e))) * e;
++    }
++    SI F   rsqrt_approx(F v) {
++        F e = arm_f(neon_emu_rsqrte8(arm_m(v)));
++        return arm_f(neon_emu_rsqrts8(arm_m(v), arm_m(e * e))) * e;
++    }
++    SI I32 iround(F v) { return sk_bit_cast<I32>(neon_emu_cvtns8(arm_m(v))); }
++    SI U32 round(F v)  { return sk_bit_cast<U32>(neon_emu_cvtnu8(arm_m(v))); }
 +    SI F arm_join(float32x4_t lo, float32x4_t hi) {
 +        return __builtin_shufflevector(lo, hi, 0, 1, 2, 3, 4, 5, 6, 7);
 +    }
-+    template <typename Fn> SI F arm_each(F a, Fn fn) {
-+        return arm_join(fn(arm_lo(a)), fn(arm_hi(a)));
-+    }
-+    template <typename Fn> SI F arm_each(F a, F b, Fn fn) {
-+        return arm_join(fn(arm_lo(a), arm_lo(b)), fn(arm_hi(a), arm_hi(b)));
-+    }
-+    template <typename Fn> SI F arm_each(F a, F b, F c, Fn fn) {
-+        return arm_join(fn(arm_lo(a), arm_lo(b), arm_lo(c)), fn(arm_hi(a), arm_hi(b), arm_hi(c)));
-+    }
-+    SI float32x4_t arm_rcp_approx(float32x4_t v) {
-+        auto e = vrecpeq_f32(v);
-+        return vrecpsq_f32(v, e) * e;
-+    }
-+    SI float32x4_t arm_rcp_precise(float32x4_t v) {
-+        auto e = arm_rcp_approx(v);
-+        return vrecpsq_f32(v, e) * e;
-+    }
-+    SI float32x4_t arm_rsqrt_approx(float32x4_t v) {
-+        auto e = vrsqrteq_f32(v);
-+        return vrsqrtsq_f32(v, e * e) * e;
-+    }
-+    SI F   mad(F f, F m, F a) {
-+        return arm_each(a, f, m, [](float32x4_t x, float32x4_t y, float32x4_t z) { return vfmaq_f32(x, y, z); });
-+    }
-+    SI F  nmad(F f, F m, F a) {
-+        return arm_each(a, f, m, [](float32x4_t x, float32x4_t y, float32x4_t z) { return vfmsq_f32(x, y, z); });
-+    }
-+    SI F   min(F a, F b) { return arm_each(a, b, [](float32x4_t x, float32x4_t y) { return vminq_f32(x, y); }); }
-+    SI F   max(F a, F b) { return arm_each(a, b, [](float32x4_t x, float32x4_t y) { return vmaxq_f32(x, y); }); }
-+    SI F   abs_(F v)       { return arm_each(v, [](float32x4_t x) { return vabsq_f32(x); }); }
-+    SI F   floor_(F v)     { return arm_each(v, [](float32x4_t x) { return vrndmq_f32(x); }); }
-+    SI F   ceil_(F v)      { return arm_each(v, [](float32x4_t x) { return vrndpq_f32(x); }); }
-+    SI F   sqrt_(F v)      { return arm_each(v, [](float32x4_t x) { return vsqrtq_f32(x); }); }
-+    SI F   rcp_approx(F v) { return arm_each(v, [](float32x4_t x) { return arm_rcp_approx(x); }); }
-+    SI F   rcp_precise(F v) { return arm_each(v, [](float32x4_t x) { return arm_rcp_precise(x); }); }
-+    SI F   rsqrt_approx(F v) { return arm_each(v, [](float32x4_t x) { return arm_rsqrt_approx(x); }); }
-+    SI I32 iround(F v) {
-+        return __builtin_shufflevector(vcvtnq_s32_f32(arm_lo(v)), vcvtnq_s32_f32(arm_hi(v)), 0, 1, 2, 3, 4, 5, 6, 7);
-+    }
-+    SI U32 round(F v) {
-+        return __builtin_shufflevector(vcvtnq_u32_f32(arm_lo(v)), vcvtnq_u32_f32(arm_hi(v)), 0, 1, 2, 3, 4, 5, 6, 7);
-+    }
++    SI float32x4_t arm_lo(F v) { return __builtin_shufflevector(v, v, 0, 1, 2, 3); }
++    SI float32x4_t arm_hi(F v) { return __builtin_shufflevector(v, v, 4, 5, 6, 7); }
 +    // AArch64 truncates where AVX2's packs saturate.
 +    SI U16 pack(U32 v) { return __builtin_convertvector(v, U16); }
 +    SI U8  pack(U16 v) { return __builtin_convertvector(v,  U8); }
@@ -1277,7 +1263,7 @@ index 9a0edd9594..a8d9228d78 100644
      SI F   sqrt_ (F v)       { return _mm256_sqrt_ps (v);    }
      SI F   rcp_precise (F v) {
          F e = rcp_approx(v);
-@@ -631,6 +709,13 @@
+@@ -631,6 +695,13 @@
      SI I32 if_then_else(I32 c, I32 t, I32 e) {
          return (I32)_mm256_blendv_ps((__m256)e, (__m256)t, (__m256)c);
      }
@@ -1291,7 +1277,7 @@ index 9a0edd9594..a8d9228d78 100644
  
      // NOTE: This version of 'all' only works with mask values (true == all bits set)
      SI bool any(I32 c) { return !_mm256_testz_si256((__m256i)c, _mm256_set1_epi32(-1)); }
-@@ -809,9 +894,20 @@
+@@ -809,9 +880,20 @@
  #else
      SI I32 abs_(I32 v)         { return max(v, -v); }
  #endif
@@ -1314,7 +1300,7 @@ index 9a0edd9594..a8d9228d78 100644
      SI F    sqrt_(F v)         { return _mm_sqrt_ps (v);    }
  
      SI I32 iround(F v)         { return (I32)_mm_cvtps_epi32(v); }
-@@ -1427,6 +1523,10 @@
+@@ -1427,6 +1509,10 @@
  #if defined(SKRP_CPU_NEON) && defined(SK_CPU_ARM64)
      return vcvt_f32_f16((float16x4_t)h);
  
@@ -1325,7 +1311,7 @@ index 9a0edd9594..a8d9228d78 100644
  #elif defined(SKRP_CPU_ML4)
      return _mm512_cvtph_ps((__m256i)h);
  
-@@ -1450,6 +1550,10 @@
+@@ -1450,6 +1536,10 @@
  #if defined(SKRP_CPU_NEON) && defined(SK_CPU_ARM64)
      return (U16)vcvt_f16_f32(f);
  
@@ -1336,7 +1322,7 @@ index 9a0edd9594..a8d9228d78 100644
  #elif defined(SKRP_CPU_ML4)
      return (U16)_mm512_cvtps_ph(f, _MM_FROUND_CUR_DIRECTION);
  
-@@ -5476,6 +5580,10 @@
+@@ -5476,6 +5566,10 @@
      // With NEON we can compute [2] just as fast as [3], so let's be correct.
      // First we compute v + ((v+128)>>8), then one more round of (...+128)>>8 to finish up:
      return vrshrq_n_u16(vrsraq_n_u16(v, v, 8), 8);
@@ -1347,7 +1333,7 @@ index 9a0edd9594..a8d9228d78 100644
  #else
      // Otherwise, use [3], which is never wrong by more than 1:
      return (v+255)/256;
-@@ -5486,7 +5594,7 @@
+@@ -5486,7 +5580,7 @@
   * div255_accurate guarantees the right answer on all platforms, at the expense of performance.
   */
  SI U16 div255_accurate(U16 v) {
@@ -1356,19 +1342,17 @@ index 9a0edd9594..a8d9228d78 100644
      // Our NEON implementation of div255 is already correct for all inputs:
      return div255(v);
  #else
-@@ -5600,9 +5708,24 @@
+@@ -5600,9 +5694,22 @@
  
  SI U32 trunc_(F x) { return (U32)cast<I32>(x); }
  
 +#if defined(SKRP_ARM_SEMANTICS)
-+// A 16-lane float through a 4-lane AArch64 function, a quarter at a time.
-+template <typename Fn> SI F arm_quarters(F x, Fn fn) {
-+    auto lo = __builtin_shufflevector(fn(__builtin_shufflevector(x, x, 0, 1, 2, 3)),
-+                                      fn(__builtin_shufflevector(x, x, 4, 5, 6, 7)),
-+                                      0, 1, 2, 3, 4, 5, 6, 7);
-+    auto hi = __builtin_shufflevector(fn(__builtin_shufflevector(x, x, 8, 9, 10, 11)),
-+                                      fn(__builtin_shufflevector(x, x, 12, 13, 14, 15)),
-+                                      0, 1, 2, 3, 4, 5, 6, 7);
++// A 16-lane float through an 8-lane AArch64 helper of the highp tier, a half
++// at a time.
++template <typename Fn> SI F arm_halves(F x, Fn fn) {
++    using F8 = SK_OPTS_NS::F;
++    F8 lo = fn(F8(__builtin_shufflevector(x, x, 0, 1, 2, 3, 4, 5, 6, 7))),
++       hi = fn(F8(__builtin_shufflevector(x, x, 8, 9, 10, 11, 12, 13, 14, 15)));
 +    return __builtin_shufflevector(lo, hi, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15);
 +}
 +#endif
@@ -1377,32 +1361,32 @@ index 9a0edd9594..a8d9228d78 100644
  SI F rcp_precise(F x) {
 -#if defined(SKRP_CPU_ML4)
 +#if defined(SKRP_ARM_SEMANTICS)
-+    return arm_quarters(x, [](float32x4_t v) { return SK_OPTS_NS::arm_rcp_precise(v); });
++    return arm_halves(x, [](SK_OPTS_NS::F v) { return SK_OPTS_NS::rcp_precise(v); });
 +#elif defined(SKRP_CPU_ML4)
      F e = _mm512_rcp14_ps(x);
      return _mm512_fnmadd_ps(x, e, _mm512_set1_ps(2.0f)) * e;
  #elif defined(SKRP_CPU_AVX2)
-@@ -5630,7 +5753,9 @@
+@@ -5630,7 +5737,9 @@
  #endif
  }
  SI F sqrt_(F x) {
 -#if defined(SKRP_CPU_ML4)
 +#if defined(SKRP_ARM_SEMANTICS)
-+    return arm_quarters(x, [](float32x4_t v) { return vsqrtq_f32(v); });
++    return arm_halves(x, [](SK_OPTS_NS::F v) { return SK_OPTS_NS::sqrt_(v); });
 +#elif defined(SKRP_CPU_ML4)
      return _mm512_sqrt_ps(x);
  #elif defined(SKRP_CPU_AVX2)
      __m256 lo,hi;
-@@ -5675,6 +5800,8 @@
+@@ -5675,6 +5784,8 @@
      float32x4_t lo,hi;
      split(x, &lo,&hi);
      return join<F>(vrndmq_f32(lo), vrndmq_f32(hi));
 +#elif defined(SKRP_ARM_SEMANTICS)
-+    return arm_quarters(x, [](float32x4_t v) { return vrndmq_f32(v); });
++    return arm_halves(x, [](SK_OPTS_NS::F v) { return SK_OPTS_NS::floor_(v); });
  #elif defined(SKRP_CPU_ML4)
      return _mm512_floor_ps(x);
  #elif defined(SKRP_CPU_AVX2)
-@@ -5705,7 +5832,15 @@
+@@ -5705,7 +5816,15 @@
  // The result is a number on [-1, 1).
  // Note: on neon this is a saturating multiply while the others are not.
  SI I16 scaled_mult(I16 a, I16 b) {

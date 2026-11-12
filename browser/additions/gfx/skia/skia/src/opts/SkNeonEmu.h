@@ -1217,4 +1217,5 @@ NEON_EMU_SI uint8x8_t vrev32_u8(uint8x8_t a) {
 
 #undef NEON_EMU_MAP1
 #include "src/opts/SkNeonEmuShuffle.h"
+#include "src/opts/SkNeonEmuWide.h"
 #endif  // SkNeonEmu_DEFINED

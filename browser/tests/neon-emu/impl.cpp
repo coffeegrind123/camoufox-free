@@ -185,3 +185,182 @@ extern "C" void NEON_EMU_CAT(NS, op_srcover8)(unsigned char* o, const unsigned c
 #endif
   }
 }
+
+// SkNeonEmuWide.h's 8-lane forms (fast) against the 4-lane functions on each
+// half (ref, base).
+extern "C" void NEON_EMU_CAT(NS, op_w8_fma)(unsigned char* o, const unsigned char* a,
+                                          const unsigned char* b, const unsigned char* c,
+                                          unsigned long n) {
+  for (unsigned long i = 0; i < n; i++) {
+#if NEON_EMU_FAST
+    __m256 WA = _mm256_loadu_ps((const float*)(a + i * 32));
+    __m256 WB = _mm256_loadu_ps((const float*)(b + i * 32));
+    __m256 WC = _mm256_loadu_ps((const float*)(c + i * 32));
+    _mm256_storeu_ps((float*)(o + i * 32), neon_emu_fma8(WA,WB,WC));
+#else
+    for (int h = 0; h < 2; h++) st(o + i * 32 + h * 16, vfmaq_f32(ld<float32x4_t>(a + i * 32 + h * 16), ld<float32x4_t>(b + i * 32 + h * 16), ld<float32x4_t>(c + i * 32 + h * 16)));
+#endif
+  }
+}
+extern "C" void NEON_EMU_CAT(NS, op_w8_fms)(unsigned char* o, const unsigned char* a,
+                                          const unsigned char* b, const unsigned char* c,
+                                          unsigned long n) {
+  for (unsigned long i = 0; i < n; i++) {
+#if NEON_EMU_FAST
+    __m256 WA = _mm256_loadu_ps((const float*)(a + i * 32));
+    __m256 WB = _mm256_loadu_ps((const float*)(b + i * 32));
+    __m256 WC = _mm256_loadu_ps((const float*)(c + i * 32));
+    _mm256_storeu_ps((float*)(o + i * 32), neon_emu_fms8(WA,WB,WC));
+#else
+    for (int h = 0; h < 2; h++) st(o + i * 32 + h * 16, vfmsq_f32(ld<float32x4_t>(a + i * 32 + h * 16), ld<float32x4_t>(b + i * 32 + h * 16), ld<float32x4_t>(c + i * 32 + h * 16)));
+#endif
+  }
+}
+extern "C" void NEON_EMU_CAT(NS, op_w8_min)(unsigned char* o, const unsigned char* a,
+                                          const unsigned char* b, const unsigned char* c,
+                                          unsigned long n) { (void)c;
+  for (unsigned long i = 0; i < n; i++) {
+#if NEON_EMU_FAST
+    __m256 WA = _mm256_loadu_ps((const float*)(a + i * 32));
+    __m256 WB = _mm256_loadu_ps((const float*)(b + i * 32));
+    _mm256_storeu_ps((float*)(o + i * 32), neon_emu_min8(WA,WB));
+#else
+    for (int h = 0; h < 2; h++) st(o + i * 32 + h * 16, vminq_f32(ld<float32x4_t>(a + i * 32 + h * 16), ld<float32x4_t>(b + i * 32 + h * 16)));
+#endif
+  }
+}
+extern "C" void NEON_EMU_CAT(NS, op_w8_max)(unsigned char* o, const unsigned char* a,
+                                          const unsigned char* b, const unsigned char* c,
+                                          unsigned long n) { (void)c;
+  for (unsigned long i = 0; i < n; i++) {
+#if NEON_EMU_FAST
+    __m256 WA = _mm256_loadu_ps((const float*)(a + i * 32));
+    __m256 WB = _mm256_loadu_ps((const float*)(b + i * 32));
+    _mm256_storeu_ps((float*)(o + i * 32), neon_emu_max8(WA,WB));
+#else
+    for (int h = 0; h < 2; h++) st(o + i * 32 + h * 16, vmaxq_f32(ld<float32x4_t>(a + i * 32 + h * 16), ld<float32x4_t>(b + i * 32 + h * 16)));
+#endif
+  }
+}
+extern "C" void NEON_EMU_CAT(NS, op_w8_abs)(unsigned char* o, const unsigned char* a,
+                                          const unsigned char* b, const unsigned char* c,
+                                          unsigned long n) { (void)b; (void)c;
+  for (unsigned long i = 0; i < n; i++) {
+#if NEON_EMU_FAST
+    __m256 WA = _mm256_loadu_ps((const float*)(a + i * 32));
+    _mm256_storeu_ps((float*)(o + i * 32), neon_emu_abs8(WA));
+#else
+    for (int h = 0; h < 2; h++) st(o + i * 32 + h * 16, vabsq_f32(ld<float32x4_t>(a + i * 32 + h * 16)));
+#endif
+  }
+}
+extern "C" void NEON_EMU_CAT(NS, op_w8_floor)(unsigned char* o, const unsigned char* a,
+                                          const unsigned char* b, const unsigned char* c,
+                                          unsigned long n) { (void)b; (void)c;
+  for (unsigned long i = 0; i < n; i++) {
+#if NEON_EMU_FAST
+    __m256 WA = _mm256_loadu_ps((const float*)(a + i * 32));
+    _mm256_storeu_ps((float*)(o + i * 32), neon_emu_floor8(WA));
+#else
+    for (int h = 0; h < 2; h++) st(o + i * 32 + h * 16, vrndmq_f32(ld<float32x4_t>(a + i * 32 + h * 16)));
+#endif
+  }
+}
+extern "C" void NEON_EMU_CAT(NS, op_w8_ceil)(unsigned char* o, const unsigned char* a,
+                                          const unsigned char* b, const unsigned char* c,
+                                          unsigned long n) { (void)b; (void)c;
+  for (unsigned long i = 0; i < n; i++) {
+#if NEON_EMU_FAST
+    __m256 WA = _mm256_loadu_ps((const float*)(a + i * 32));
+    _mm256_storeu_ps((float*)(o + i * 32), neon_emu_ceil8(WA));
+#else
+    for (int h = 0; h < 2; h++) st(o + i * 32 + h * 16, vrndpq_f32(ld<float32x4_t>(a + i * 32 + h * 16)));
+#endif
+  }
+}
+extern "C" void NEON_EMU_CAT(NS, op_w8_sqrt)(unsigned char* o, const unsigned char* a,
+                                          const unsigned char* b, const unsigned char* c,
+                                          unsigned long n) { (void)b; (void)c;
+  for (unsigned long i = 0; i < n; i++) {
+#if NEON_EMU_FAST
+    __m256 WA = _mm256_loadu_ps((const float*)(a + i * 32));
+    _mm256_storeu_ps((float*)(o + i * 32), neon_emu_sqrt8(WA));
+#else
+    for (int h = 0; h < 2; h++) st(o + i * 32 + h * 16, vsqrtq_f32(ld<float32x4_t>(a + i * 32 + h * 16)));
+#endif
+  }
+}
+extern "C" void NEON_EMU_CAT(NS, op_w8_recpe)(unsigned char* o, const unsigned char* a,
+                                          const unsigned char* b, const unsigned char* c,
+                                          unsigned long n) { (void)b; (void)c;
+  for (unsigned long i = 0; i < n; i++) {
+#if NEON_EMU_FAST
+    __m256 WA = _mm256_loadu_ps((const float*)(a + i * 32));
+    _mm256_storeu_ps((float*)(o + i * 32), neon_emu_recpe8(WA));
+#else
+    for (int h = 0; h < 2; h++) st(o + i * 32 + h * 16, vrecpeq_f32(ld<float32x4_t>(a + i * 32 + h * 16)));
+#endif
+  }
+}
+extern "C" void NEON_EMU_CAT(NS, op_w8_rsqrte)(unsigned char* o, const unsigned char* a,
+                                          const unsigned char* b, const unsigned char* c,
+                                          unsigned long n) { (void)b; (void)c;
+  for (unsigned long i = 0; i < n; i++) {
+#if NEON_EMU_FAST
+    __m256 WA = _mm256_loadu_ps((const float*)(a + i * 32));
+    _mm256_storeu_ps((float*)(o + i * 32), neon_emu_rsqrte8(WA));
+#else
+    for (int h = 0; h < 2; h++) st(o + i * 32 + h * 16, vrsqrteq_f32(ld<float32x4_t>(a + i * 32 + h * 16)));
+#endif
+  }
+}
+extern "C" void NEON_EMU_CAT(NS, op_w8_recps)(unsigned char* o, const unsigned char* a,
+                                          const unsigned char* b, const unsigned char* c,
+                                          unsigned long n) { (void)c;
+  for (unsigned long i = 0; i < n; i++) {
+#if NEON_EMU_FAST
+    __m256 WA = _mm256_loadu_ps((const float*)(a + i * 32));
+    __m256 WB = _mm256_loadu_ps((const float*)(b + i * 32));
+    _mm256_storeu_ps((float*)(o + i * 32), neon_emu_recps8(WA,WB));
+#else
+    for (int h = 0; h < 2; h++) st(o + i * 32 + h * 16, vrecpsq_f32(ld<float32x4_t>(a + i * 32 + h * 16), ld<float32x4_t>(b + i * 32 + h * 16)));
+#endif
+  }
+}
+extern "C" void NEON_EMU_CAT(NS, op_w8_rsqrts)(unsigned char* o, const unsigned char* a,
+                                          const unsigned char* b, const unsigned char* c,
+                                          unsigned long n) { (void)c;
+  for (unsigned long i = 0; i < n; i++) {
+#if NEON_EMU_FAST
+    __m256 WA = _mm256_loadu_ps((const float*)(a + i * 32));
+    __m256 WB = _mm256_loadu_ps((const float*)(b + i * 32));
+    _mm256_storeu_ps((float*)(o + i * 32), neon_emu_rsqrts8(WA,WB));
+#else
+    for (int h = 0; h < 2; h++) st(o + i * 32 + h * 16, vrsqrtsq_f32(ld<float32x4_t>(a + i * 32 + h * 16), ld<float32x4_t>(b + i * 32 + h * 16)));
+#endif
+  }
+}
+extern "C" void NEON_EMU_CAT(NS, op_w8_cvtns)(unsigned char* o, const unsigned char* a,
+                                          const unsigned char* b, const unsigned char* c,
+                                          unsigned long n) { (void)b; (void)c;
+  for (unsigned long i = 0; i < n; i++) {
+#if NEON_EMU_FAST
+    __m256 WA = _mm256_loadu_ps((const float*)(a + i * 32));
+    _mm256_storeu_ps((float*)(o + i * 32), _mm256_castsi256_ps(neon_emu_cvtns8(WA)));
+#else
+    for (int h = 0; h < 2; h++) st(o + i * 32 + h * 16, vcvtnq_s32_f32(ld<float32x4_t>(a + i * 32 + h * 16)));
+#endif
+  }
+}
+extern "C" void NEON_EMU_CAT(NS, op_w8_cvtnu)(unsigned char* o, const unsigned char* a,
+                                          const unsigned char* b, const unsigned char* c,
+                                          unsigned long n) { (void)b; (void)c;
+  for (unsigned long i = 0; i < n; i++) {
+#if NEON_EMU_FAST
+    __m256 WA = _mm256_loadu_ps((const float*)(a + i * 32));
+    _mm256_storeu_ps((float*)(o + i * 32), _mm256_castsi256_ps(neon_emu_cvtnu8(WA)));
+#else
+    for (int h = 0; h < 2; h++) st(o + i * 32 + h * 16, vcvtnq_u32_f32(ld<float32x4_t>(a + i * 32 + h * 16)));
+#endif
+  }
+}
