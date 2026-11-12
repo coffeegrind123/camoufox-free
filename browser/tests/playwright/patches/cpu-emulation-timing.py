@@ -50,18 +50,25 @@ BENCH = """async () => {
   g.addColorStop(0, "rgba(19,165,240,0.9)"); g.addColorStop(0.5, "rgba(240,165,19,0.6)"); g.addColorStop(1, "rgba(122,19,240,0.8)");
   sg.fillStyle = g; sg.fillRect(0, 0, N, N);
   const dst = new OffscreenCanvas(N, N), dg = dst.getContext("2d");
-  const draw = (name, setup, op, reps = 9, per = 6) => {
-    const t = [];
-    for (let r = 0; r < reps; r++) {
+  // performance.now() is clamped to 1 ms, so each sample repeats the
+  // operation until about SAMPLE_MS have passed (the count set once, from a
+  // calibration run), and reports the time per operation.
+  const SAMPLE_MS = 100;
+  const draw = (name, setup, op, reps = 7) => {
+    const run = (count) => {
       dg.setTransform(1, 0, 0, 1, 0, 0);
       dg.globalCompositeOperation = "source-over";
       dg.fillStyle = "#808080"; dg.fillRect(0, 0, N, N);
       setup();
       const a = now();
-      for (let k = 0; k < per; k++) op(k);
+      for (let k = 0; k < count; k++) op(k);
       dg.getImageData(0, 0, 1, 1);
-      t.push((now() - a) / per);
-    }
+      return now() - a;
+    };
+    let count = 1;
+    while (count < 1 << 14) { const ms = run(count); if (ms >= SAMPLE_MS / 4) { count = Math.ceil(count * SAMPLE_MS / ms); break; } count *= 4; }
+    const t = [];
+    for (let r = 0; r < reps; r++) t.push(run(count) / count);
     out[name] = median(t);
   };
   for (const mode of ["source-over", "multiply", "screen", "color-dodge", "color-burn", "soft-light",
@@ -86,7 +93,7 @@ BENCH = """async () => {
   {
     const t = [];
     for (let r = 0; r < 5; r++) {
-      const ctx = new OfflineAudioContext(2, 48000 * 2, 48000);
+      const ctx = new OfflineAudioContext(2, 48000 * 8, 48000);
       const osc = ctx.createOscillator(); osc.type = "sawtooth"; osc.frequency.value = 220;
       const bq = ctx.createBiquadFilter(); bq.frequency.value = 1200;
       const conv = ctx.createConvolver();
@@ -107,7 +114,7 @@ BENCH = """async () => {
 
   if (typeof AudioEncoder !== "undefined") {
     const t = [];
-    const frames = 48000 * 2, data = new Float32Array(frames);
+    const frames = 48000 * 8, data = new Float32Array(frames);
     for (let i = 0; i < frames; i++) data[i] = 0.5 * Math.sin(i * 0.031) + 0.3 * Math.sin(i * 0.0071 + Math.sin(i * 0.0003));
     for (let r = 0; r < 5; r++) {
       let err = null;
