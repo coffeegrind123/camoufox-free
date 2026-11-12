@@ -5,11 +5,13 @@ that spoofs device fingerprints in C++. For what Camoufox is, its features and
 how to build it, read [upstream's README](https://github.com/daijro/camoufox#readme).
 
 This fork follows upstream `main` and pins Firefox `159.0.1` / Camoufox `beta.35`
-in [`browser/upstream.sh`](browser/upstream.sh). The current release, and the
-only one published, is
-[`v159.0.1-beta.35-cg.14`](https://github.com/coffeegrind123/camoufox-free/releases/tag/v159.0.1-beta.35-cg.14),
-built from [70dbf55](https://github.com/coffeegrind123/camoufox-free/commit/70dbf558040eb9204dd77409490fd20df8c34aa9).
-Everything listed below is in it. Fixes are offered upstream when appropriate.
+in [`browser/upstream.sh`](browser/upstream.sh). The current release is
+[`v159.0.1-beta.35-cg.15`](https://github.com/coffeegrind123/camoufox-free/releases/tag/v159.0.1-beta.35-cg.15),
+built from [eedd3de](https://github.com/coffeegrind123/camoufox-free/commit/eedd3de3310e6190813a132d0304396b3f3ff620);
+`cg.14` stays published as the rollback. `main` has since merged upstream
+21fdf1c5 ([f3837ed](https://github.com/coffeegrind123/camoufox-free/commit/f3837ed9c6069c73b49ae527e71a402d4e8e4fbd)),
+whose items below reach the next release. Fixes are offered upstream when
+appropriate.
 
 > [!NOTE]
 > Under development. Test a release against your own targets before relying on it.
@@ -192,9 +194,21 @@ For an identity whose OS is not the host's. Offered upstream in
   the next sample of a mouse polled at 1 kHz, one sample's travel along the
   path (1px at 0.5 px/ms, about 15px at 15 px/ms), so the fork keeps #987's
   exit on the curve and guards it also at 105% text scale, the fractional
-  content offset #1026 was written for.
-  ([MouseDispatch.js](browser/additions/juggler/input/MouseDispatch.js), [d5945faf](https://github.com/coffeegrind123/camoufox-free/commit/d5945fafb2de243c59b82801ecab99c315a58093), guard
+  content offset #1026 was written for. A step whose planned time rounded to
+  0 ms is taken to last as long as a 14 px/ms pointer needs, the fastest stock
+  measured, so its exit stays one sample from the last move. The guard's
+  stock bounds, from XTest exits at 1 kHz, are offered upstream in
+  [#1029](https://github.com/daijro/camoufox/pull/1029).
+  ([MouseDispatch.js](browser/additions/juggler/input/MouseDispatch.js), [91b0957c](https://github.com/coffeegrind123/camoufox-free/commit/91b0957c2c3d735620dd9381e84b6672dff59423), [d5945faf](https://github.com/coffeegrind123/camoufox-free/commit/d5945fafb2de243c59b82801ecab99c315a58093), guard
   [humanize-mouse-trajectory.py](browser/tests/playwright/patches/humanize-mouse-trajectory.py))
+- **An ARM Linux identity claims llvmpipe.** Beside an ARM CPU, the only GPU
+  fpgen records from Firefox on Linux is llvmpipe, and the synthetic draw
+  skips software renderers, so `cpu={"arch": "arm"}` on Linux raised "No
+  recorded lin GPU fits". When no hardware GPU on the OS fits the claimed CPU,
+  the draw takes the software renderers that do; every other draw still
+  never claims software rendering. Python and TypeScript.
+  ([3649a60c](https://github.com/coffeegrind123/camoufox-free/commit/3649a60ccd9d3ccc0772573bdbf230d512fece69), guard
+  [cpu-vendor-estimates.py](browser/tests/playwright/patches/cpu-vendor-estimates.py))
 - **Humanized moves report like a 125 Hz mouse.** They were resampled to
   60 Hz, but `pointerrawupdate` and `getCoalescedEvents()` show every report:
   stock under a real mouse shows about two per frame, 8 ms apart, humanize one,
@@ -297,6 +311,11 @@ For an identity whose OS is not the host's. Offered upstream in
   DuckDuckGo the default, in the search service's own engine selection, where a
   page can't read it.
   ([search-default-duckduckgo.patch](browser/patches/search-default-duckduckgo.patch), [6e24feb](https://github.com/coffeegrind123/camoufox-free/commit/6e24feb8b621bfdd794d1745105f08596a907040), [2a48d607](https://github.com/coffeegrind123/camoufox-free/commit/2a48d6072738d8ac47d428e34bbac130ae0735e2))
+- **Firefox 159.0.1**, where upstream pins 159.0. None of the files 159.0.1
+  changes is touched by a patch. Offered as
+  [#1004](https://github.com/daijro/camoufox/pull/1004) and closed: version
+  bumps are the maintainers' call.
+  ([267f73a](https://github.com/coffeegrind123/camoufox-free/commit/267f73a6c41e76044ec607b1f0961ab98158d702))
 - **Linux x86_64 releases built by this repo's CI**
   ([`build.yml`](.github/workflows/build.yml)), with sha256 digests. No PyPI or
   npm packages are published, and upstream's release train doesn't run. ([b70dc6c](https://github.com/coffeegrind123/camoufox-free/commit/b70dc6c52c1605ad8bcf7c7770cf99d2235dd8a0))
