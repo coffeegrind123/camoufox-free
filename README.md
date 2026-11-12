@@ -8,7 +8,7 @@ This fork follows upstream `main` and pins Firefox `159.0.1` / Camoufox `beta.35
 in [`browser/upstream.sh`](browser/upstream.sh). The current release is
 [`v159.0.1-beta.35-cg.15`](https://github.com/coffeegrind123/camoufox-free/releases/tag/v159.0.1-beta.35-cg.15),
 built from [eedd3de](https://github.com/coffeegrind123/camoufox-free/commit/eedd3de3310e6190813a132d0304396b3f3ff620);
-`cg.14` stays published as the rollback. `main` has since merged upstream
+`main` has since merged upstream
 21fdf1c5 ([f3837ed](https://github.com/coffeegrind123/camoufox-free/commit/f3837ed9c6069c73b49ae527e71a402d4e8e4fbd)),
 whose items below reach the next release. Fixes are offered upstream when
 appropriate.
@@ -291,6 +291,15 @@ For an identity whose OS is not the host's. Offered upstream in
   timezone fallback to every process. ([b481348](https://github.com/coffeegrind123/camoufox-free/commit/b481348b58bf4a6b6bcd4f59a7f348fe32720212))
 
 ### Build, releases and defaults
+
+- **A drawn ARM CPU computes as the host until the ARM64 emulation is fast.**
+  Upstream's ARM64 emulation (`general.cpu_identity` 3) gives ARM's bits but
+  drew canvas composites 6-87x slower than native on x86-64, which a page can
+  time, and the launcher drew ARM for 59 of 60 macOS identities. The launcher
+  now sends the pref only for an ARM CPU the caller names;
+  `cpuIdentityArmWhenDrawn` in `launcher-constants.json` restores the old
+  default.
+  ([c0728275](https://github.com/coffeegrind123/camoufox-free/commit/c0728275f5bee2bc7a16c71d0a810ebb3cb114c1))
 
 - **uBlock Origin's selected filter lists are the ten in its bundle.** Upstream
   bundles uBO and stops it updating lists, but uBO still selected regional lists
