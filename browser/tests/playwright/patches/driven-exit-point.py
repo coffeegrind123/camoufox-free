@@ -59,9 +59,15 @@ def main() -> int:
         side_to = (width + 400, INSIDE[1])
         side = exits(page, side_to)
 
+    # The pointer moves in device pixels, so under a fractional drawn scale or
+    # zoom the page reads its own coordinate back to within a CSS pixel
+    # (350.2 for 350), in stock Firefox as here.
+    def near(a, b):
+        return abs(a - b) < 1
+
     for name, got, check in (
-        ("up into the toolbar", up, lambda x, y: x == UP[0] and y < 0),
-        ("off the right edge", side, lambda x, y: x >= width - 1 and y == INSIDE[1]),
+        ("up into the toolbar", up, lambda x, y: near(x, UP[0]) and y < 0),
+        ("off the right edge", side, lambda x, y: x >= width - 1 and near(y, INSIDE[1])),
     ):
         if not got:
             failures.append(f"{name}: the page saw no mouseout/pointerout")
