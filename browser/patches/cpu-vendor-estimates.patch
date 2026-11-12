@@ -1066,10 +1066,10 @@ index 54de40498a..e7c5479b5b 100644
      // SkMulDiv255Round() applied to each lane.
      static inline uint8x8_t SkMulDiv255Round_neon8(uint8x8_t x, uint8x8_t y) {
 diff --git a/gfx/skia/skia/src/opts/SkRasterPipeline_opts.h b/gfx/skia/skia/src/opts/SkRasterPipeline_opts.h
-index 9a0edd9594..711a5501b6 100644
+index 9a0edd9594..e90f6f98cd 100644
 --- a/gfx/skia/skia/src/opts/SkRasterPipeline_opts.h
 +++ b/gfx/skia/skia/src/opts/SkRasterPipeline_opts.h
-@@ -108,7 +108,11 @@ using NoCtx = const void*;
+@@ -108,7 +108,11 @@
  #if defined(SKRP_CPU_SCALAR)
      #include <math.h>
  #elif defined(SKRP_CPU_NEON)
@@ -1082,7 +1082,7 @@ index 9a0edd9594..711a5501b6 100644
  #elif defined(SKRP_CPU_LASX)
      #include <lasxintrin.h>
      #include <lsxintrin.h>
-@@ -116,6 +120,7 @@ using NoCtx = const void*;
+@@ -116,6 +120,7 @@
      #include <lsxintrin.h>
  #else
      #include <immintrin.h>
@@ -1090,50 +1090,46 @@ index 9a0edd9594..711a5501b6 100644
  #endif
  
  // Notes:
-@@ -608,8 +613,21 @@ namespace SK_OPTS_NS {
+@@ -608,8 +613,19 @@
      SI I32 abs_  (I32 v)     { return (I32)_mm256_abs_epi32((__m256i)v); }
      SI F   floor_(F v)       { return _mm256_floor_ps(v);    }
      SI F   ceil_(F v)        { return _mm256_ceil_ps(v);     }
 -    SI F   rcp_approx(F v)   { return _mm256_rcp_ps  (v);    }  // use rcp_fast instead
 -    SI F   rsqrt_approx(F v) { return _mm256_rsqrt_ps(v);    }
 +    // Another vendor's estimates, when general.cpu_identity names one (SkCpuEstimates.h).
-+    template <uint32_t (*Op)(const uint32_t*, uint32_t)>
++    template <__m256i (*Op)(const uint32_t*, __m256i)>
 +    SI F estimate_as(const uint32_t* table, F v) {
-+        U32 bits = sk_bit_cast<U32>(v);
-+        for (int i = 0; i < 8; i++) { bits[i] = Op(table, bits[i]); }
-+        return sk_bit_cast<F>(bits);
++        return sk_bit_cast<F>(Op(table, sk_bit_cast<__m256i>(v)));
 +    }
 +    SI F   rcp_approx(F v)   {  // use rcp_fast instead
-+        if (const uint32_t* table = sk_cpu_estimates()) { return estimate_as<sk_cpu_estimate_rcp>(table, v); }
++        if (const uint32_t* table = sk_cpu_estimates()) { return estimate_as<sk_cpu_estimate_rcp_avx2>(table, v); }
 +        return _mm256_rcp_ps  (v);
 +    }
 +    SI F   rsqrt_approx(F v) {
-+        if (const uint32_t* table = sk_cpu_estimates()) { return estimate_as<sk_cpu_estimate_rsqrt>(table, v); }
++        if (const uint32_t* table = sk_cpu_estimates()) { return estimate_as<sk_cpu_estimate_rsqrt_avx2>(table, v); }
 +        return _mm256_rsqrt_ps(v);
 +    }
      SI F   sqrt_ (F v)       { return _mm256_sqrt_ps (v);    }
      SI F   rcp_precise (F v) {
          F e = rcp_approx(v);
-@@ -809,9 +827,22 @@ namespace SK_OPTS_NS {
+@@ -809,9 +825,20 @@
  #else
      SI I32 abs_(I32 v)         { return max(v, -v); }
  #endif
 -    SI F   rcp_approx(F v)     { return _mm_rcp_ps  (v);    }  // use rcp_fast instead
 +    // Another vendor's estimates, when general.cpu_identity names one (SkCpuEstimates.h).
-+    template <uint32_t (*Op)(const uint32_t*, uint32_t)>
++    template <__m128i (*Op)(const uint32_t*, __m128i)>
 +    SI F estimate_as(const uint32_t* table, F v) {
-+        U32 bits = sk_bit_cast<U32>(v);
-+        for (int i = 0; i < 4; i++) { bits[i] = Op(table, bits[i]); }
-+        return sk_bit_cast<F>(bits);
++        return sk_bit_cast<F>(Op(table, sk_bit_cast<__m128i>(v)));
 +    }
 +    SI F   rcp_approx(F v)     {  // use rcp_fast instead
-+        if (const uint32_t* table = sk_cpu_estimates()) { return estimate_as<sk_cpu_estimate_rcp>(table, v); }
++        if (const uint32_t* table = sk_cpu_estimates()) { return estimate_as<sk_cpu_estimate_rcp_sse2>(table, v); }
 +        return _mm_rcp_ps  (v);
 +    }
      SI F   rcp_precise (F v)   { F e = rcp_approx(v); return e * (2.0f - v * e); }
 -    SI F   rsqrt_approx(F v)   { return _mm_rsqrt_ps(v);    }
 +    SI F   rsqrt_approx(F v)   {
-+        if (const uint32_t* table = sk_cpu_estimates()) { return estimate_as<sk_cpu_estimate_rsqrt>(table, v); }
++        if (const uint32_t* table = sk_cpu_estimates()) { return estimate_as<sk_cpu_estimate_rsqrt_sse2>(table, v); }
 +        return _mm_rsqrt_ps(v);
 +    }
      SI F    sqrt_(F v)         { return _mm_sqrt_ps (v);    }
@@ -2212,10 +2208,10 @@ index 8d6652becc..e91848971a 100644
        int len, int C, int factor, int arch);
  
 diff --git a/media/libopus/celt/x86/vq_sse2.c b/media/libopus/celt/x86/vq_sse2.c
-index 4c4ebf8e2d..848c726b22 100644
+index 4c4ebf8e2d..a4be7cbc63 100644
 --- a/media/libopus/celt/x86/vq_sse2.c
 +++ b/media/libopus/celt/x86/vq_sse2.c
-@@ -37,10 +37,26 @@
+@@ -37,10 +37,24 @@
  #include "mathops.h"
  #include "vq.h"
  #include "x86cpu.h"
@@ -2229,20 +2225,18 @@ index 4c4ebf8e2d..848c726b22 100644
 +static __m128 estimate_as(__m128 v, int rsqrt)
 +{
 +   const uint32_t *table = opus_mozilla_cpu_estimates();
-+   uint32_t b[4];
-+   int i;
++   __m128i b;
 +   if (!table)
 +      return rsqrt ? _mm_rsqrt_ps(v) : _mm_rcp_ps(v);
-+   _mm_storeu_ps((float*)(void*)b, v);
-+   for (i=0;i<4;i++)
-+      b[i] = rsqrt ? sk_cpu_estimate_rsqrt(table, b[i]) : sk_cpu_estimate_rcp(table, b[i]);
-+   return _mm_loadu_ps((float*)(void*)b);
++   b = _mm_castps_si128(v);
++   b = rsqrt ? sk_cpu_estimate_rsqrt_sse2(table, b) : sk_cpu_estimate_rcp_sse2(table, b);
++   return _mm_castsi128_ps(b);
 +}
 +
  opus_val16 op_pvq_search_sse2(celt_norm *_X, int *iy, int K, int N, int arch)
  {
     int i, j;
-@@ -105,7 +121,7 @@ opus_val16 op_pvq_search_sse2(celt_norm *_X, int *iy, int K, int N, int arch)
+@@ -105,7 +119,7 @@
           sums = _mm_set_ps1(1.f);
        }
        /* Using K+e with e < 1 guarantees we cannot get more than K pulses. */
@@ -2251,7 +2245,7 @@ index 4c4ebf8e2d..848c726b22 100644
        xy4 = yy4 = _mm_setzero_ps();
        pulses_sum = _mm_setzero_si128();
        for (j=0;j<N;j+=4)
-@@ -170,7 +186,7 @@ opus_val16 op_pvq_search_sse2(celt_norm *_X, int *iy, int K, int N, int arch)
+@@ -170,7 +184,7 @@
           y4 = _mm_loadu_ps(&y[j]);
           x4 = _mm_add_ps(x4, xy4);
           y4 = _mm_add_ps(y4, yy4);

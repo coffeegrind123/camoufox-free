@@ -5,6 +5,8 @@
  *   estimates hash V          hashes of the emulation of vendor V (1 Intel, 2 AMD)
  *   estimates check V         emulation of vendor V vs this CPU, every input
  *   estimates vendor          this CPU's vendor (1, 2, or 0 for another)
+ *   estimates vcheck V        the SSE2 and AVX2 functions vs the scalar ones for
+ *                             vendor V, every input (built with -mavx2)
  *
  * The hashes are FNV-1a over the outputs for inputs 0 .. 2^32-1. Built with
  * -DTABLES for hash/check, which need SkCpuEstimateTables.h. */
@@ -92,7 +94,44 @@ int main(int argc, char** argv) {
     }
     return bad;
   }
+#ifdef __AVX2__
+  if (argc > 2 && !strcmp(argv[1], "vcheck")) {
+    const uint32_t* t = kSkCpuEstimateTables[atoi(argv[2]) - 1];
+    uint64_t bad[4] = {0};
+    uint32_t first[4] = {0};
+    for (uint64_t x = 0; x < (1ull << 32); x += 8) {
+      uint32_t in[8], want[2][8], got[4][8];
+      for (int i = 0; i < 8; i++) {
+        in[i] = (uint32_t)(x + i);
+        want[0][i] = sk_cpu_estimate_rcp(t, in[i]);
+        want[1][i] = sk_cpu_estimate_rsqrt(t, in[i]);
+      }
+      __m256i v8 = _mm256_loadu_si256((const __m256i*)in);
+      _mm256_storeu_si256((__m256i*)got[0], sk_cpu_estimate_rcp_avx2(t, v8));
+      _mm256_storeu_si256((__m256i*)got[1], sk_cpu_estimate_rsqrt_avx2(t, v8));
+      for (int h = 0; h < 2; h++) {
+        __m128i v4 = _mm_loadu_si128((const __m128i*)(in + 4 * h));
+        _mm_storeu_si128((__m128i*)(got[2] + 4 * h), sk_cpu_estimate_rcp_sse2(t, v4));
+        _mm_storeu_si128((__m128i*)(got[3] + 4 * h), sk_cpu_estimate_rsqrt_sse2(t, v4));
+      }
+      for (int k = 0; k < 4; k++) {
+        for (int i = 0; i < 8; i++) {
+          if (got[k][i] != want[k & 1][i] && !bad[k]++) first[k] = in[i];
+        }
+      }
+    }
+    static const char* names[4] = {"avx2 rcp", "avx2 rsqrt", "sse2 rcp", "sse2 rsqrt"};
+    int failed = 0;
+    for (int k = 0; k < 4; k++) {
+      printf("%s mismatches %llu", names[k], (unsigned long long)bad[k]);
+      if (bad[k]) printf(" (first input %08x)", first[k]);
+      printf("\n");
+      failed |= bad[k] != 0;
+    }
+    return failed;
+  }
 #endif
-  fprintf(stderr, "usage: estimates dump | vendor | hash V | check V\n");
+#endif
+  fprintf(stderr, "usage: estimates dump | vendor | hash V | check V | vcheck V\n");
   return 2;
 }
