@@ -991,7 +991,7 @@ index 7ae979a931..9be36f00dc 100644
          steps.fFlags.encode) {
          return false;
 diff --git a/gfx/skia/skia/src/core/SkOpts.cpp b/gfx/skia/skia/src/core/SkOpts.cpp
-index adfbdc30f0..e752b84063 100644
+index adfbdc30f0..c179aa3505 100644
 --- a/gfx/skia/skia/src/core/SkOpts.cpp
 +++ b/gfx/skia/skia/src/core/SkOpts.cpp
 @@ -4,12 +4,15 @@
@@ -1020,10 +1020,12 @@ index adfbdc30f0..e752b84063 100644
      void Init_ml4();
      void Init_lasx();
  
-@@ -63,6 +69,21 @@
+@@ -63,6 +69,23 @@
              #endif
          #endif
  
++        // general.cpu_identity = 1 or 2: the other x86 vendor's estimates.
++        sk_cpu_estimates_init_pipeline();
 +        // general.cpu_identity = ARM64: Skia's AArch64 code, emulated; the
 +        // HSW build has the emulation's fast paths (SkNeonEmu.h).
 +        if (sk_cpu_emulates_arm64()) {
@@ -1147,7 +1149,7 @@ index 54de40498a..f1403b71c5 100644
          vst4_u8((uint8_t*)dst, SkPMSrcOver_neon8(vld4_u8((const uint8_t*)dst),
                                                   vld4_u8((const uint8_t*)src)));
 diff --git a/gfx/skia/skia/src/opts/SkRasterPipeline_opts.h b/gfx/skia/skia/src/opts/SkRasterPipeline_opts.h
-index 9a0edd9594..6507978c64 100644
+index 9a0edd9594..8bce61ef54 100644
 --- a/gfx/skia/skia/src/opts/SkRasterPipeline_opts.h
 +++ b/gfx/skia/skia/src/opts/SkRasterPipeline_opts.h
 @@ -108,7 +108,11 @@
@@ -1253,11 +1255,11 @@ index 9a0edd9594..6507978c64 100644
 +        return sk_bit_cast<F>(Op(table, sk_bit_cast<__m256i>(v)));
 +    }
 +    SI F   rcp_approx(F v)   {  // use rcp_fast instead
-+        if (const uint32_t* table = sk_cpu_estimates()) { return estimate_as<sk_cpu_estimate_rcp_avx2>(table, v); }
++        if (const uint32_t* table = sk_cpu_estimates_cached()) { return estimate_as<sk_cpu_estimate_rcp_avx2>(table, v); }
 +        return _mm256_rcp_ps  (v);
 +    }
 +    SI F   rsqrt_approx(F v) {
-+        if (const uint32_t* table = sk_cpu_estimates()) { return estimate_as<sk_cpu_estimate_rsqrt_avx2>(table, v); }
++        if (const uint32_t* table = sk_cpu_estimates_cached()) { return estimate_as<sk_cpu_estimate_rsqrt_avx2>(table, v); }
 +        return _mm256_rsqrt_ps(v);
 +    }
      SI F   sqrt_ (F v)       { return _mm256_sqrt_ps (v);    }
@@ -1288,13 +1290,13 @@ index 9a0edd9594..6507978c64 100644
 +        return sk_bit_cast<F>(Op(table, sk_bit_cast<__m128i>(v)));
 +    }
 +    SI F   rcp_approx(F v)     {  // use rcp_fast instead
-+        if (const uint32_t* table = sk_cpu_estimates()) { return estimate_as<sk_cpu_estimate_rcp_sse2>(table, v); }
++        if (const uint32_t* table = sk_cpu_estimates_cached()) { return estimate_as<sk_cpu_estimate_rcp_sse2>(table, v); }
 +        return _mm_rcp_ps  (v);
 +    }
      SI F   rcp_precise (F v)   { F e = rcp_approx(v); return e * (2.0f - v * e); }
 -    SI F   rsqrt_approx(F v)   { return _mm_rsqrt_ps(v);    }
 +    SI F   rsqrt_approx(F v)   {
-+        if (const uint32_t* table = sk_cpu_estimates()) { return estimate_as<sk_cpu_estimate_rsqrt_sse2>(table, v); }
++        if (const uint32_t* table = sk_cpu_estimates_cached()) { return estimate_as<sk_cpu_estimate_rsqrt_sse2>(table, v); }
 +        return _mm_rsqrt_ps(v);
 +    }
      SI F    sqrt_(F v)         { return _mm_sqrt_ps (v);    }

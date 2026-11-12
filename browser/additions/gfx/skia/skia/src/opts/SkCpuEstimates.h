@@ -193,6 +193,14 @@ static inline __m256i sk_cpu_estimate_rsqrt_avx2(const uint32_t* table, __m256i 
  * pref is 0, or names the CPU this runs on (SkCpuEstimates_mozilla.cpp). */
 const uint32_t* sk_cpu_estimates();
 
+/* The same, resolved once when SkOpts initialises (the moment the opts tiers
+ * are chosen too), for the raster pipeline: an inline load instead of a call,
+ * which would make every caller spill its vector registers and cost the
+ * native path time that stock Firefox does not spend. */
+extern const uint32_t* gSkCpuEstimatesForPipeline;
+void sk_cpu_estimates_init_pipeline();
+static inline const uint32_t* sk_cpu_estimates_cached() { return gSkCpuEstimatesForPipeline; }
+
 /* Whether general.cpu_identity names an ARM64 machine on this x86-64 one:
  * the opts tiers then switch to Skia's AArch64 code, built against
  * SkNeonEmu.h (the _neonemu.cpp files). */
