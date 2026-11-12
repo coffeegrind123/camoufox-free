@@ -131,6 +131,13 @@ Intel 76.86%, AMD 17.61%, Apple 5.04%). The report has no per-OS split;
 Steam's survey puts AMD far higher, so the share is a choice, kept in
 `launcher-constants.json` as `x86IntelShare`.
 
+An ARM CPU the identity drew (every Apple-GPU Mac) does not get the pref
+for now: the ARM64 emulation below runs canvas composites 6-87x slower than
+native on x86-64, which a page can time, so it computes as the host until the
+emulation is fast. An ARM CPU named through `cpu` still gets 3, and
+`cpuIdentityArmWhenDrawn` in `launcher-constants.json` restores it for drawn
+ones.
+
 On an Apple M4, stock Firefox 159 gives other values than x86-64 for every
 Web Audio node, every canvas composite operation (source-over included, not
 only the estimate-based ones), drawImage, filters and paths, the Opus and VP9
