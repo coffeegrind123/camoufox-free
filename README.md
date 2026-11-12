@@ -206,7 +206,8 @@ For an identity whose OS is not the host's. Offered upstream in
   skips software renderers, so `cpu={"arch": "arm"}` on Linux raised "No
   recorded lin GPU fits". When no hardware GPU on the OS fits the claimed CPU,
   the draw takes the software renderers that do; every other draw still
-  never claims software rendering. Python and TypeScript.
+  never claims software rendering. Python and TypeScript. Offered upstream
+  in [#1033](https://github.com/daijro/camoufox/pull/1033).
   ([3649a60c](https://github.com/coffeegrind123/camoufox-free/commit/3649a60ccd9d3ccc0772573bdbf230d512fece69), guard
   [cpu-vendor-estimates.py](browser/tests/playwright/patches/cpu-vendor-estimates.py))
 - **Humanized moves report like a 125 Hz mouse.** They were resampled to
