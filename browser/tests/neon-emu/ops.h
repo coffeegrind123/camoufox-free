@@ -1,6 +1,7 @@
 /* The SkNeonEmu.h operations with a fast path or a shuffle, as
  *   X(name, in0 bytes, in1 bytes, in2 bytes, out bytes, kind)
- * kind: F = float lanes in, U = integer lanes in, M = memory (load/store). */
+ * kind: F = float lanes in, U = integer lanes in, M = memory (load/store).
+ * An integer operation with an immediate is listed once per tested count. */
 #define NEON_EMU_OPS(X)                         \
   X(vrecpeq_f32, 16, 0, 0, 16, F)               \
   X(vrsqrteq_f32, 16, 0, 0, 16, F)              \
@@ -40,7 +41,33 @@
   X(vst2q_u16, 32, 0, 0, 32, M)                 \
   X(vst4_u16, 32, 0, 0, 32, M)                  \
   X(vst4q_u16, 64, 0, 0, 64, M)                 \
-  X(vst4q_f32, 64, 0, 0, 64, M)
+  X(vst4q_f32, 64, 0, 0, 64, M)                 \
+  X(vrshrq_n_u16_1, 16, 0, 0, 16, U)          \
+  X(vrshrq_n_u16_8, 16, 0, 0, 16, U)          \
+  X(vrshrq_n_u16_15, 16, 0, 0, 16, U)         \
+  X(vrshr_n_u8_4, 8, 0, 0, 8, U)              \
+  X(vrshrq_n_s16_7, 16, 0, 0, 16, U)          \
+  X(vrsraq_n_u16_8, 16, 16, 0, 16, U)         \
+  X(vshrn_n_u16_8, 16, 0, 0, 8, U)            \
+  X(vrshrn_n_u16_8, 16, 0, 0, 8, U)           \
+  X(vrshrn_n_u16_3, 16, 0, 0, 8, U)           \
+  X(vqrshrn_n_u16_6, 16, 0, 0, 8, U)          \
+  X(vraddhn_u16, 16, 16, 0, 8, U)             \
+  X(vaddhn_u16, 16, 16, 0, 8, U)              \
+  X(vqmovn_u16, 16, 0, 0, 8, U)               \
+  X(vmovn_u16, 16, 0, 0, 8, U)                \
+  X(vmovl_u8, 8, 0, 0, 16, U)                 \
+  X(vmovl_u16, 8, 0, 0, 16, U)                \
+  X(vqadd_u8, 8, 8, 0, 8, U)                  \
+  X(vqaddq_u8, 16, 16, 0, 16, U)              \
+  X(vqsub_u8, 8, 8, 0, 8, U)                  \
+  X(vqsubq_u8, 16, 16, 0, 16, U)              \
+  X(vmin_u8, 8, 8, 0, 8, U)                   \
+  X(vmax_u8, 8, 8, 0, 8, U)                   \
+  X(vtbl1_u8, 8, 8, 0, 8, U)                  \
+  X(vqtbl1q_u8, 16, 16, 0, 16, U)             \
+  X(vqtbl1_u8, 16, 8, 0, 8, U)                \
+  X(vrev32q_u8, 16, 0, 0, 16, U)
 
 typedef void (*neon_emu_op)(unsigned char* out, const unsigned char* a, const unsigned char* b,
                             const unsigned char* c, unsigned long n);

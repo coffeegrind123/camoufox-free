@@ -45,6 +45,9 @@
 #else
 #  define NEON_EMU_SHUFFLE 0
 #endif
+// Integer operations as whole-vector clang code (exact in the lane width),
+// in every build but the reference.
+#define NEON_EMU_VECTOR NEON_EMU_SHUFFLE
 
 #if defined(__clang__)
 #  define NEON_EMU_VEC(T, N) T __attribute__((ext_vector_type(N)))
@@ -844,14 +847,33 @@ NEON_EMU_LDN_ALL(4)
     }                                              \
     r_;                                            \
   })
-NEON_EMU_SI uint16x8_t vmovl_u8(uint8x8_t a) { return NEON_EMU_CONVERT(uint16x8_t, a); }
-NEON_EMU_SI uint32x4_t vmovl_u16(uint16x4_t a) { return NEON_EMU_CONVERT(uint32x4_t, a); }
+NEON_EMU_SI uint16x8_t vmovl_u8(uint8x8_t a) {
+#if NEON_EMU_VECTOR
+  return __builtin_convertvector(a, uint16x8_t);
+#endif
+  return NEON_EMU_CONVERT(uint16x8_t, a);
+}
+NEON_EMU_SI uint32x4_t vmovl_u16(uint16x4_t a) {
+#if NEON_EMU_VECTOR
+  return __builtin_convertvector(a, uint32x4_t);
+#endif
+  return NEON_EMU_CONVERT(uint32x4_t, a);
+}
 NEON_EMU_SI int16x8_t vmovl_s8(int8x8_t a) { return NEON_EMU_CONVERT(int16x8_t, a); }
 NEON_EMU_SI int32x4_t vmovl_s16(int16x4_t a) { return NEON_EMU_CONVERT(int32x4_t, a); }
-NEON_EMU_SI uint8x8_t vmovn_u16(uint16x8_t a) { return NEON_EMU_CONVERT(uint8x8_t, a); }
+NEON_EMU_SI uint8x8_t vmovn_u16(uint16x8_t a) {
+#if NEON_EMU_VECTOR
+  return __builtin_convertvector(a, uint8x8_t);
+#endif
+  return NEON_EMU_CONVERT(uint8x8_t, a);
+}
 NEON_EMU_SI uint16x4_t vmovn_u32(uint32x4_t a) { return NEON_EMU_CONVERT(uint16x4_t, a); }
 NEON_EMU_SI uint32x2_t vmovn_u64(uint64x2_t a) { return NEON_EMU_CONVERT(uint32x2_t, a); }
 NEON_EMU_SI uint8x8_t vqmovn_u16(uint16x8_t a) {
+#if NEON_EMU_VECTOR
+  uint16x8_t over = (uint16x8_t)(a > 0xff);
+  return __builtin_convertvector((a & ~over) | (over & 0xff), uint8x8_t);
+#endif
   return NEON_EMU_MAP1(uint8x8_t, a, a[i] > 0xff ? 0xff : a[i]);
 }
 NEON_EMU_SI uint16x4_t vqmovn_u32(uint32x4_t a) {
@@ -907,6 +929,8 @@ NEON_EMU_SI uint32x4_t vmlal_u16(uint32x4_t a, uint16x4_t b, uint16x4_t c) {
   NEON_EMU_SI V vshl_n_##SUF(V a, int n) { return a << n; }                    \
   NEON_EMU_SI V vsra_n_##SUF(V a, V b, int n) { return a + (b >> n); }         \
   NEON_EMU_SI V vrshr_n_##SUF(V a, int n) {                                    \
+    if (NEON_EMU_VECTOR && n < (int)(8 * sizeof(a[0])))                        \
+      return (a >> n) + ((a >> (n - 1)) & 1);                                  \
     return NEON_EMU_MAP1(V, a, (((W)a[i] + ((W)1 << (n - 1))) >> n));          \
   }                                                                            \
   NEON_EMU_SI V vrsra_n_##SUF(V a, V b, int n) { return a + vrshr_n_##SUF(b, n); }
@@ -915,6 +939,8 @@ NEON_EMU_SI uint32x4_t vmlal_u16(uint32x4_t a, uint16x4_t b, uint16x4_t c) {
   NEON_EMU_SI V vshlq_n_##SUF(V a, int n) { return a << n; }                   \
   NEON_EMU_SI V vsraq_n_##SUF(V a, V b, int n) { return a + (b >> n); }        \
   NEON_EMU_SI V vrshrq_n_##SUF(V a, int n) {                                   \
+    if (NEON_EMU_VECTOR && n < (int)(8 * sizeof(a[0])))                        \
+      return (a >> n) + ((a >> (n - 1)) & 1);                                  \
     return NEON_EMU_MAP1(V, a, (((W)a[i] + ((W)1 << (n - 1))) >> n));          \
   }                                                                            \
   NEON_EMU_SI V vrsraq_n_##SUF(V a, V b, int n) { return a + vrshrq_n_##SUF(b, n); }
@@ -930,6 +956,7 @@ NEON_EMU_SHIFTSQ(s32, int32x4_t, int64_t)
 #undef NEON_EMU_SHIFTS
 #undef NEON_EMU_SHIFTSQ
 NEON_EMU_SI uint8x8_t vshrn_n_u16(uint16x8_t a, int n) {
+  if (NEON_EMU_VECTOR && n < 16) return __builtin_convertvector(a >> n, uint8x8_t);
   return NEON_EMU_MAP1(uint8x8_t, a, (uint8_t)(a[i] >> n));
 }
 NEON_EMU_SI uint16x4_t vshrn_n_u32(uint32x4_t a, int n) {
@@ -939,10 +966,12 @@ NEON_EMU_SI uint32x2_t vshrn_n_u64(uint64x2_t a, int n) {
   return NEON_EMU_MAP1(uint32x2_t, a, (uint32_t)(a[i] >> n));
 }
 NEON_EMU_SI uint8x8_t vrshrn_n_u16(uint16x8_t a, int n) {
+  if (NEON_EMU_VECTOR && n < 16) return __builtin_convertvector(vrshrq_n_u16(a, n), uint8x8_t);
   return NEON_EMU_MAP1(uint8x8_t, a,
                        (uint8_t)(((uint32_t)a[i] + (1u << (n - 1))) >> n));
 }
 NEON_EMU_SI uint8x8_t vqrshrn_n_u16(uint16x8_t a, int n) {
+  if (NEON_EMU_VECTOR && n < 16) return vqmovn_u16(vrshrq_n_u16(a, n));
   return NEON_EMU_MAP1(uint8x8_t, a, ({
     uint32_t v_ = ((uint32_t)a[i] + (1u << (n - 1))) >> n;
     (uint8_t)(v_ > 0xff ? 0xff : v_);
@@ -956,10 +985,16 @@ NEON_EMU_SI uint8x8_t vqshrun_n_s16(int16x8_t a, int n) {
 }
 // RADDHN: (a + b + 2^(n-1)) >> n in the wide lane's width, high half.
 NEON_EMU_SI uint8x8_t vraddhn_u16(uint16x8_t a, uint16x8_t b) {
+#if NEON_EMU_VECTOR
+  return __builtin_convertvector((uint16x8_t)(a + b + 0x80) >> 8, uint8x8_t);
+#endif
   return NEON_EMU_MAP1(uint8x8_t, a,
                        (uint8_t)(((uint16_t)(a[i] + b[i] + 0x80u)) >> 8));
 }
 NEON_EMU_SI uint8x8_t vaddhn_u16(uint16x8_t a, uint16x8_t b) {
+#if NEON_EMU_VECTOR
+  return __builtin_convertvector((uint16x8_t)(a + b) >> 8, uint8x8_t);
+#endif
   return NEON_EMU_MAP1(uint8x8_t, a, (uint8_t)(((uint16_t)(a[i] + b[i])) >> 8));
 }
 
@@ -1005,17 +1040,31 @@ NEON_EMU_SI int32x4_t vabsq_s32(int32x4_t a) {
                        (int32_t)(a[i] < 0 ? 0u - (uint32_t)a[i] : (uint32_t)a[i]));
 }
 NEON_EMU_SI uint8x8_t vqadd_u8(uint8x8_t a, uint8x8_t b) {
+#if NEON_EMU_VECTOR
+  uint8x8_t sum = a + b;
+  return sum | (uint8x8_t)(sum < a);  // wrapped: saturate to 0xff
+#endif
   return NEON_EMU_MAP1(uint8x8_t, a,
                        (uint8_t)(a[i] + b[i] > 0xff ? 0xff : a[i] + b[i]));
 }
 NEON_EMU_SI uint8x16_t vqaddq_u8(uint8x16_t a, uint8x16_t b) {
+#if NEON_EMU_VECTOR
+  uint8x16_t sum = a + b;
+  return sum | (uint8x16_t)(sum < a);  // wrapped: saturate to 0xff
+#endif
   return NEON_EMU_MAP1(uint8x16_t, a,
                        (uint8_t)(a[i] + b[i] > 0xff ? 0xff : a[i] + b[i]));
 }
 NEON_EMU_SI uint8x8_t vqsub_u8(uint8x8_t a, uint8x8_t b) {
+#if NEON_EMU_VECTOR
+  return (a - b) & (uint8x8_t)(a > b);
+#endif
   return NEON_EMU_MAP1(uint8x8_t, a, (uint8_t)(a[i] > b[i] ? a[i] - b[i] : 0));
 }
 NEON_EMU_SI uint8x16_t vqsubq_u8(uint8x16_t a, uint8x16_t b) {
+#if NEON_EMU_VECTOR
+  return (a - b) & (uint8x16_t)(a > b);
+#endif
   return NEON_EMU_MAP1(uint8x16_t, a, (uint8_t)(a[i] > b[i] ? a[i] - b[i] : 0));
 }
 // SQRDMULH: saturate((2*a*b + 2^15) >> 16)
@@ -1085,9 +1134,17 @@ NEON_EMU_MINMAX(s16, int16x8_t)
 NEON_EMU_MINMAX(s32, int32x4_t)
 #undef NEON_EMU_MINMAX
 NEON_EMU_SI uint8x8_t vmin_u8(uint8x8_t a, uint8x8_t b) {
+#if NEON_EMU_VECTOR
+  uint8x8_t m = (uint8x8_t)(a < b);
+  return (a & m) | (b & ~m);
+#endif
   return NEON_EMU_MAP1(uint8x8_t, a, a[i] < b[i] ? a[i] : b[i]);
 }
 NEON_EMU_SI uint8x8_t vmax_u8(uint8x8_t a, uint8x8_t b) {
+#if NEON_EMU_VECTOR
+  uint8x8_t m = (uint8x8_t)(a > b);
+  return (a & m) | (b & ~m);
+#endif
   return NEON_EMU_MAP1(uint8x8_t, a, a[i] > b[i] ? a[i] : b[i]);
 }
 #define NEON_EMU_REDUCE(NAME, V, T, OP)               \
@@ -1112,15 +1169,46 @@ NEON_EMU_REDUCE(vmaxvq_u32, uint32x4_t, uint32_t, >)
 
 // table lookup: an index past the table gives 0.
 NEON_EMU_SI uint8x8_t vtbl1_u8(uint8x8_t t, uint8x8_t idx) {
+#if NEON_EMU_FAST
+  {
+    uint64_t tb, ib;
+    memcpy(&tb, &t, 8);
+    memcpy(&ib, &idx, 8);
+    // An index of 8 or more: all ones, which PSHUFB reads as zero.
+    __m128i raw = _mm_cvtsi64_si128((long long)ib);
+    __m128i i = _mm_or_si128(raw, _mm_cmpeq_epi8(_mm_max_epu8(raw, _mm_set1_epi8(8)), raw));
+    uint64_t r = (uint64_t)_mm_cvtsi128_si64(_mm_shuffle_epi8(_mm_cvtsi64_si128((long long)tb), i));
+    uint8x8_t out;
+    memcpy(&out, &r, 8);
+    return out;
+  }
+#endif
   return NEON_EMU_MAP1(uint8x8_t, t, (uint8_t)(idx[i] < 8 ? t[idx[i]] : 0));
 }
 NEON_EMU_SI uint8x16_t vqtbl1q_u8(uint8x16_t t, uint8x16_t idx) {
+#if NEON_EMU_FAST
+  return (uint8x16_t)_mm_shuffle_epi8((__m128i)t, _mm_adds_epu8((__m128i)idx, _mm_set1_epi8(0x70)));
+#endif
   return NEON_EMU_MAP1(uint8x16_t, t, (uint8_t)(idx[i] < 16 ? t[idx[i]] : 0));
 }
 NEON_EMU_SI uint8x8_t vqtbl1_u8(uint8x16_t t, uint8x8_t idx) {
+#if NEON_EMU_FAST
+  {
+    uint64_t ib;
+    memcpy(&ib, &idx, 8);
+    __m128i i = _mm_adds_epu8(_mm_cvtsi64_si128((long long)ib), _mm_set1_epi8(0x70));
+    uint64_t r = (uint64_t)_mm_cvtsi128_si64(_mm_shuffle_epi8((__m128i)t, i));
+    uint8x8_t out;
+    memcpy(&out, &r, 8);
+    return out;
+  }
+#endif
   return NEON_EMU_MAP1(uint8x8_t, idx, (uint8_t)(idx[i] < 16 ? t[idx[i]] : 0));
 }
 NEON_EMU_SI uint8x16_t vrev32q_u8(uint8x16_t a) {
+#if NEON_EMU_VECTOR
+  return __builtin_shufflevector(a, a, 3, 2, 1, 0, 7, 6, 5, 4, 11, 10, 9, 8, 15, 14, 13, 12);
+#endif
   return NEON_EMU_MAP1(uint8x16_t, a, a[(i & ~3) | (3 - (i & 3))]);
 }
 NEON_EMU_SI uint8x8_t vrev32_u8(uint8x8_t a) {
