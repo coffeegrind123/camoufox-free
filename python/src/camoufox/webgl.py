@@ -269,17 +269,28 @@ def sample_webgl_for_screen(
     drivers -- but "no consumer machine reports llvmpipe" is a live, standard
     check on a string every fingerprint script reads (sundial, 2026-09-14).
     """
-    candidates = tuple(
-        result
-        for result in _trace('gpu', target_os)
-        if not is_software_renderer(result.value['renderer'])
-        and result.value['renderer'] != _RFP_RENDERER
-        and gpu_fits_os(result.value['renderer'], target_os)
-        and gpu_fits_machine(result.value['renderer'], target_os, cores, width, height)
-        and gpu_screen_is_plausible(result.value['renderer'], width, height)
-        and (family is None or gpu_family((result.value['vendor'], result.value['renderer'])) == family)
-        and gpu_fits_cpu(result.value['renderer'], target_os, *_cpu_pair(cpu))
-    )
+    def fits(result: Any, software: bool) -> bool:
+        renderer = result.value['renderer']
+        return (
+            is_software_renderer(renderer) == software
+            and renderer != _RFP_RENDERER
+            and gpu_fits_os(renderer, target_os)
+            and gpu_fits_machine(renderer, target_os, cores, width, height)
+            and gpu_screen_is_plausible(renderer, width, height)
+            and (family is None or gpu_family((result.value['vendor'], renderer)) == family)
+            and gpu_fits_cpu(renderer, target_os, *_cpu_pair(cpu))
+        )
+
+    candidates = tuple(result for result in _trace('gpu', target_os) if fits(result, False))
+    # Beside some CPUs fpgen records no hardware GPU at all: an ARM CPU in
+    # Firefox on Linux reports only llvmpipe. Such an identity draws what that
+    # population reports rather than nothing; any other draw still skips it.
+    if not candidates and cpu and not any(
+        not is_software_renderer(r.value['renderer'])
+        and gpu_fits_cpu(r.value['renderer'], target_os, *_cpu_pair(cpu))
+        for r in _trace('gpu', target_os)
+    ):
+        candidates = tuple(result for result in _trace('gpu', target_os) if fits(result, True))
     if not candidates:
         if cpu and not any(
             gpu_fits_cpu(r.value['renderer'], target_os, *_cpu_pair(cpu)) for r in _trace('gpu', target_os)
