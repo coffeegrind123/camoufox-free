@@ -1,11 +1,10 @@
 #!/usr/bin/env python3
 """Bundle uBlock Origin, the default addon, into a build.
 
-Every package carries AMO's newest uBO release as an extracted addon under
-addons/UBO/ (Contents/Resources/addons/UBO/ on macOS), which both launchers load
-from beside the binary. So the uBO a user runs, and the filter lists it blocks
-with, is the one the release was tested with, and a new uBO release reaches users with
-the next browser release without anyone bumping a pin.
+Every package carries the committed uBO release (data/ubo.json) as an
+extracted addon under addons/UBO/ (Contents/Resources/addons/UBO/ on macOS),
+which both launchers load from beside the binary. So the uBO a user runs, and
+the filter lists it blocks with, is the one the release was tested with.
 
 The bundled copy keeps its packaged filter lists (freeze_lists), by editing
 three defaults in uBO's own source:

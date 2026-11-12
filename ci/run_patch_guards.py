@@ -49,6 +49,7 @@ GROUPS: Dict[str, Tuple[str, ...]] = {
         "context-voice-names",
         "context-voice-pool",
         "context-webgl-tables",
+        "cpu-vendor-estimates",
         "detached-window-stock-values",
         "display-scale-resolution",
         "do-not-track",

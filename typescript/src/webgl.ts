@@ -10,7 +10,7 @@ import {
 	traceWithEvidence,
 } from "fpgen-js";
 import { Random, type Seed } from "python-random";
-import { gpuFitsMachine, gpuFitsOs } from "./coherence.js";
+import { gpuFitsCpu, gpuFitsMachine, gpuFitsOs } from "./coherence.js";
 import {
 	FPGEN_OS,
 	gpuScreenIsPlausible,
@@ -24,6 +24,7 @@ import {
 	parsePyJson,
 	pyStr,
 	pyStrRepr,
+	pyTruthy,
 	ValueError,
 } from "./pycompat.js";
 
@@ -333,6 +334,14 @@ export function webglForGpu(
 	);
 }
 
+/** The claimed CPU's [cpu:arch, cpu:manufacturer] (webgl._cpu_pair). */
+function cpuPair(
+	cpu: Record<string, any> | null | undefined,
+): [unknown, unknown] {
+	const c = cpu ?? {};
+	return [c["cpu:arch"] ?? null, c["cpu:manufacturer"] ?? null];
+}
+
 /**
  * Draw a GPU for a synthetic identity, weighted as fpgen records Firefox on
  * `targetOs`, and its WebGL config. With `family`, only that vendor's GPUs are
@@ -341,7 +350,9 @@ export function webglForGpu(
  * Only GPUs the rest of the identity can stand beside are drawn: never a
  * software rasteriser, a GPU the OS cannot report, the resistFingerprinting
  * mask, a discrete GPU behind a netbook panel, or an Intel Mac GPU beside
- * cores or a panel no Intel Mac has. The screen is left alone:
+ * cores or a panel no Intel Mac has, or a GPU the claimed CPU cannot sit
+ * beside (cpu: cpu:arch and cpu:manufacturer, coherence.gpuFitsCpu). The
+ * screen is left alone:
  * it has already been reconciled with the real display and the window (#499).
  *
  * @throws ValueError when no recorded GPU fits.
@@ -353,7 +364,9 @@ export function sampleWebglForScreen(
 	seed?: Seed,
 	cores?: number | null,
 	family?: string | null,
+	cpu?: Record<string, any> | null,
 ): WebGLData {
+	const [arch, maker] = cpuPair(cpu);
 	const candidates = trace("gpu", targetOs).filter(
 		(result) =>
 			!isSoftwareRenderer(result.value.renderer) &&
@@ -362,9 +375,25 @@ export function sampleWebglForScreen(
 			gpuFitsMachine(result.value.renderer, targetOs, cores, width, height) &&
 			gpuScreenIsPlausible(result.value.renderer, width, height) &&
 			(family == null ||
-				gpuFamily([result.value.vendor, result.value.renderer]) === family),
+				gpuFamily([result.value.vendor, result.value.renderer]) === family) &&
+			gpuFitsCpu(result.value.renderer, targetOs, arch, maker),
 	);
 	if (!candidates.length) {
+		if (
+			cpu &&
+			Object.keys(cpu).length &&
+			!trace("gpu", targetOs).some((r) =>
+				gpuFitsCpu(r.value.renderer, targetOs, arch, maker),
+			)
+		) {
+			throw new ValueError(
+				`No GPU fpgen has recorded from Firefox on ${targetOs} sits beside a ` +
+					`${[maker, arch]
+						.filter((v) => pyTruthy(v))
+						.map(pyStr)
+						.join(" ")} CPU`,
+			);
+		}
 		const vendor = family ? `${family} ` : "";
 		throw new ValueError(
 			`No recorded ${targetOs} ${vendor}GPU fits a ${pyStr(width)}x${pyStr(height)} screen`,

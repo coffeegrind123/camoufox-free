@@ -16,7 +16,7 @@ from typing import Any, Dict, FrozenSet, List, Optional, Tuple
 
 import orjson
 
-from .coherence import gpu_fits_machine, gpu_fits_os
+from .coherence import gpu_fits_cpu, gpu_fits_machine, gpu_fits_os
 from .fingerprints import _FPGEN_OS, gpu_screen_is_plausible, is_software_renderer
 from .fpgen_model import load_fpgen
 from .host_rendering import gpu_family
@@ -238,6 +238,11 @@ def webgl_for_gpu(target_os: str, vendor: str, renderer: str, seed: Optional[int
     return _webgl_config(target_os, {'vendor': vendor, 'renderer': renderer}, Random(seed))
 
 
+def _cpu_pair(cpu: Optional[Dict[str, str]]) -> Tuple[Optional[str], Optional[str]]:
+    cpu = cpu or {}
+    return cpu.get('cpu:arch'), cpu.get('cpu:manufacturer')
+
+
 def sample_webgl_for_screen(
     target_os: str,
     width: Optional[int] = None,
@@ -245,6 +250,7 @@ def sample_webgl_for_screen(
     seed: Optional[int] = None,
     cores: Optional[int] = None,
     family: Optional[str] = None,
+    cpu: Optional[Dict[str, str]] = None,
 ) -> Dict[str, Any]:
     """Draw a GPU for a synthetic identity, weighted as fpgen records Firefox
     on `target_os`, and its WebGL config. With `family`, only that vendor's
@@ -254,7 +260,8 @@ def sample_webgl_for_screen(
     software rasteriser, a GPU the OS cannot report, the resistFingerprinting
     mask, a discrete GPU behind a netbook panel (see gpu_screen_is_plausible),
     or an Intel Mac GPU beside cores or a panel no Intel Mac has
-    (coherence.gpu_fits_machine).
+    (coherence.gpu_fits_machine), or a GPU the claimed CPU cannot sit beside
+    (cpu: cpu:arch and cpu:manufacturer, coherence.gpu_fits_cpu).
     The screen is left alone: it has already been reconciled with the real
     display and the window (#499).
 
@@ -271,8 +278,16 @@ def sample_webgl_for_screen(
         and gpu_fits_machine(result.value['renderer'], target_os, cores, width, height)
         and gpu_screen_is_plausible(result.value['renderer'], width, height)
         and (family is None or gpu_family((result.value['vendor'], result.value['renderer'])) == family)
+        and gpu_fits_cpu(result.value['renderer'], target_os, *_cpu_pair(cpu))
     )
     if not candidates:
+        if cpu and not any(
+            gpu_fits_cpu(r.value['renderer'], target_os, *_cpu_pair(cpu)) for r in _trace('gpu', target_os)
+        ):
+            raise ValueError(
+                f"No GPU fpgen has recorded from Firefox on {target_os} sits beside a "
+                f"{' '.join(v for v in _cpu_pair(cpu)[::-1] if v)} CPU"
+            )
         vendor = f'{family} ' if family else ''
         raise ValueError(f'No recorded {target_os} {vendor}GPU fits a {width}x{height} screen')
     rng = Random(seed)
