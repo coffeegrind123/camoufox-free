@@ -277,9 +277,6 @@ NEON_EMU_SI float32x4_t neon_emu_f(__m128 v) { return (float32x4_t)v; }
 NEON_EMU_SI int neon_emu_any_nan(__m128 v) {
   return _mm_movemask_ps(_mm_cmpunord_ps(v, v));
 }
-NEON_EMU_SI int neon_emu_any_nan2(__m128 a, __m128 b) {
-  return _mm_movemask_ps(_mm_cmpunord_ps(a, b));
-}
 // Every lane's biased exponent, 0..255.
 NEON_EMU_SI __m128i neon_emu_exp(__m128i u) {
   return _mm_and_si128(_mm_srli_epi32(u, 23), _mm_set1_epi32(0xff));
@@ -295,6 +292,47 @@ NEON_EMU_SI __m128i neon_emu_within(__m128i x, int lo, int hi) {
                    _mm_cmpgt_epi32(x, _mm_set1_epi32(hi))),
       _mm_set1_epi32(-1));
 }
+NEON_EMU_SI __m128i neon_emu_sel(__m128i m, __m128i a, __m128i b) {
+  return _mm_blendv_epi8(b, a, m);  // m ? a : b
+}
+NEON_EMU_SI __m128i neon_emu_isnan_v(__m128i u) {
+  return _mm_cmpgt_epi32(_mm_and_si128(u, _mm_set1_epi32(0x7fffffff)), _mm_set1_epi32(0x7f800000));
+}
+NEON_EMU_SI __m128i neon_emu_issnan_v(__m128i u) {
+  return _mm_andnot_si128(_mm_cmpeq_epi32(_mm_and_si128(u, _mm_set1_epi32(0x400000)), _mm_set1_epi32(0x400000)),
+                          neon_emu_isnan_v(u));
+}
+// FPProcessNaNs(3) lane-wise, as neon_emu_nans2 and neon_emu_fmla: a
+// signalling NaN first (quieted), then a quiet one, op order x, y, z. Pass
+// z = y for two operands. *any is set where any operand is a NaN.
+NEON_EMU_SI __m128i neon_emu_nans_v(__m128i x, __m128i y, __m128i z, __m128i* any) {
+  const __m128i q = _mm_set1_epi32(0x400000);
+  __m128i nx = neon_emu_isnan_v(x), ny = neon_emu_isnan_v(y), nz = neon_emu_isnan_v(z);
+  *any = _mm_or_si128(nx, _mm_or_si128(ny, nz));
+  // Lowest priority first: each later select wins.
+  __m128i r = z;
+  r = neon_emu_sel(ny, y, r);
+  r = neon_emu_sel(nx, x, r);
+  r = neon_emu_sel(neon_emu_issnan_v(z), _mm_or_si128(z, q), r);
+  r = neon_emu_sel(neon_emu_issnan_v(y), _mm_or_si128(y, q), r);
+  r = neon_emu_sel(neon_emu_issnan_v(x), _mm_or_si128(x, q), r);
+  return r;
+}
+// The x86 result where no operand was a NaN, with a NaN it made replaced by
+// the default NaN; the propagated NaN where one was.
+NEON_EMU_SI float32x4_t neon_emu_nan_rules(__m128 r, __m128i prop, __m128i any) {
+  __m128i out = neon_emu_sel(_mm_castps_si128(_mm_cmpunord_ps(r, r)), _mm_set1_epi32(0x7fc00000),
+                             _mm_castps_si128(r));
+  return (float32x4_t)neon_emu_sel(any, prop, out);
+}
+// Lanes where one of x, y is an infinity and the other a zero.
+NEON_EMU_SI __m128i neon_emu_infzero_v(__m128i x, __m128i y) {
+  const __m128i abs = _mm_set1_epi32(0x7fffffff), inf = _mm_set1_epi32(0x7f800000), zero = _mm_setzero_si128();
+  __m128i ax = _mm_and_si128(x, abs), ay = _mm_and_si128(y, abs);
+  return _mm_or_si128(_mm_and_si128(_mm_cmpeq_epi32(ax, inf), _mm_cmpeq_epi32(ay, zero)),
+                      _mm_and_si128(_mm_cmpeq_epi32(ax, zero), _mm_cmpeq_epi32(ay, inf)));
+}
+
 // FRECPE's and FRSQRTE's tables as the result's mantissa bits (byte << 15),
 // one 32-bit word per entry, for AVX2 gathers.
 struct NeonEmuEstimateWords {
@@ -350,12 +388,16 @@ NEON_EMU_SI float32x4_t vrsqrteq_f32(float32x4_t a) {
 }
 NEON_EMU_SI float32x4_t vrecpsq_f32(float32x4_t a, float32x4_t b) {
 #if NEON_EMU_FAST
-  // 2 - a*b rounded once, as FMA does, when both are finite.
-  __m128i inf = _mm_set1_epi32(0xff);
-  __m128i special = _mm_or_si128(_mm_cmpeq_epi32(neon_emu_exp(neon_emu_mi(a)), inf),
-                                 _mm_cmpeq_epi32(neon_emu_exp(neon_emu_mi(b)), inf));
-  if (!_mm_movemask_ps(_mm_castsi128_ps(special))) {
-    return neon_emu_f(_mm_fnmadd_ps(neon_emu_m(a), neon_emu_m(b), _mm_set1_ps(2.0f)));
+  // 2 - a*b rounded once, as FMA does; an infinity times anything else
+  // gives FMA's signed infinity. FRECPS negates a before its NaN rules, and
+  // infinity times zero gives 2.
+  {
+    __m128 r0 = _mm_fnmadd_ps(neon_emu_m(a), neon_emu_m(b), _mm_set1_ps(2.0f));
+    if (!neon_emu_any_nan(r0)) return neon_emu_f(r0);  // no NaN in, no inf*0
+    __m128i na = _mm_xor_si128(neon_emu_mi(a), _mm_set1_epi32((int)0x80000000u)), ub = neon_emu_mi(b), any;
+    __m128i prop = neon_emu_nans_v(na, ub, ub, &any);
+    __m128i r = neon_emu_sel(neon_emu_infzero_v(na, ub), _mm_set1_epi32(0x40000000), _mm_castps_si128(r0));
+    return (float32x4_t)neon_emu_sel(any, prop, r);
   }
 #endif
   return NEON_EMU_MAP1(float32x4_t, a, arm_frecps_f32(a[i], b[i]));
@@ -365,22 +407,42 @@ NEON_EMU_SI float32x4_t vrsqrtsq_f32(float32x4_t a, float32x4_t b) {
   // (3 - a*b) / 2 rounded once: FMA then an exact halving, when both are
   // finite and |a*b| < 2^127, so neither overflows (cancellation near 3
   // leaves at least 2^-47, never a subnormal to halve).
-  __m128i ea = neon_emu_exp(neon_emu_mi(a)), eb = neon_emu_exp(neon_emu_mi(b));
-  __m128i ok = _mm_and_si128(_mm_and_si128(neon_emu_within(ea, 0, 254), neon_emu_within(eb, 0, 254)),
-                             neon_emu_within(_mm_add_epi32(ea, eb), 0, 379));
+  // An infinity or NaN lane takes the rules below instead.
+  __m128i ua = neon_emu_mi(a), ub = neon_emu_mi(b);
+  __m128i ea = neon_emu_exp(ua), eb = neon_emu_exp(ub), ff = _mm_set1_epi32(0xff);
+  __m128i special = _mm_or_si128(_mm_cmpeq_epi32(ea, ff), _mm_cmpeq_epi32(eb, ff));
+  __m128i ok = _mm_or_si128(special, neon_emu_within(_mm_add_epi32(ea, eb), 0, 379));
   if (neon_emu_all(ok)) {
-    __m128 r = _mm_fnmadd_ps(neon_emu_m(a), neon_emu_m(b), _mm_set1_ps(3.0f));
-    return neon_emu_f(_mm_mul_ps(r, _mm_set1_ps(0.5f)));
+    __m128 r0 = _mm_fnmadd_ps(neon_emu_m(a), neon_emu_m(b), _mm_set1_ps(3.0f));
+    __m128 half = _mm_mul_ps(r0, _mm_set1_ps(0.5f));
+    if (!neon_emu_any_nan(r0)) return neon_emu_f(half);
+    __m128i na = _mm_xor_si128(ua, _mm_set1_epi32((int)0x80000000u)), any;
+    __m128i prop = neon_emu_nans_v(na, ub, ub, &any);
+    __m128i r = _mm_castps_si128(half);
+    r = neon_emu_sel(neon_emu_infzero_v(na, ub), _mm_set1_epi32(0x3fc00000), r);
+    return (float32x4_t)neon_emu_sel(any, prop, r);
   }
 #endif
   return NEON_EMU_MAP1(float32x4_t, a, arm_frsqrts_f32(a[i], b[i]));
 }
+#if NEON_EMU_FAST
+// FMLA lane-wise (neon_emu_fmla): addend + op1*op2 rounded once, with the
+// Arm NaN rules, the inf*0 rule for a quiet NaN addend first.
+NEON_EMU_SI float32x4_t neon_emu_fma_v(__m128i addend, __m128i op1, __m128i op2) {
+  __m128 r = _mm_fmadd_ps(_mm_castsi128_ps(op1), _mm_castsi128_ps(op2), _mm_castsi128_ps(addend));
+  if (!neon_emu_any_nan(r)) return neon_emu_f(r);  // no NaN in, no invalid operation
+  __m128i any;
+  __m128i prop = neon_emu_nans_v(addend, op1, op2, &any);
+  __m128i out = (__m128i)neon_emu_nan_rules(r, prop, any);
+  __m128i qnan_addend = _mm_andnot_si128(neon_emu_issnan_v(addend), neon_emu_isnan_v(addend));
+  return (float32x4_t)neon_emu_sel(_mm_and_si128(qnan_addend, neon_emu_infzero_v(op1, op2)),
+                                   _mm_set1_epi32(0x7fc00000), out);
+}
+#endif
 NEON_EMU_SI float32x4_t vfmaq_f32(float32x4_t a, float32x4_t b,
                                   float32x4_t c) {
 #if NEON_EMU_FAST
-  // No NaN out means no NaN in and no invalid operation.
-  __m128 r = _mm_fmadd_ps(neon_emu_m(b), neon_emu_m(c), neon_emu_m(a));
-  if (!neon_emu_any_nan(r)) return neon_emu_f(r);
+  return neon_emu_fma_v(neon_emu_mi(a), neon_emu_mi(b), neon_emu_mi(c));
 #endif
   return NEON_EMU_MAP1(float32x4_t, a, neon_emu_fmla(a[i], b[i], c[i]));
 }
@@ -388,8 +450,8 @@ NEON_EMU_SI float32x4_t vfmsq_f32(float32x4_t a, float32x4_t b,
                                   float32x4_t c) {
   // FMLS negates op1 (b) first, a NaN's sign included.
 #if NEON_EMU_FAST
-  __m128 r = _mm_fnmadd_ps(neon_emu_m(b), neon_emu_m(c), neon_emu_m(a));
-  if (!neon_emu_any_nan(r)) return neon_emu_f(r);
+  return neon_emu_fma_v(neon_emu_mi(a), _mm_xor_si128(neon_emu_mi(b), _mm_set1_epi32((int)0x80000000u)),
+                        neon_emu_mi(c));
 #endif
   return NEON_EMU_MAP1(
       float32x4_t, a,
@@ -400,6 +462,8 @@ NEON_EMU_SI float32x4_t vmulq_f32(float32x4_t a, float32x4_t b) {
 #if NEON_EMU_FAST
   __m128 r = _mm_mul_ps(neon_emu_m(a), neon_emu_m(b));
   if (!neon_emu_any_nan(r)) return neon_emu_f(r);
+  __m128i any, prop = neon_emu_nans_v(neon_emu_mi(a), neon_emu_mi(b), neon_emu_mi(b), &any);
+  return neon_emu_nan_rules(r, prop, any);
 #endif
   return NEON_EMU_MAP1(float32x4_t, a,
                        neon_emu_arith_nan(a[i], b[i], a[i] * b[i]));
@@ -408,6 +472,8 @@ NEON_EMU_SI float32x4_t vaddq_f32(float32x4_t a, float32x4_t b) {
 #if NEON_EMU_FAST
   __m128 r = _mm_add_ps(neon_emu_m(a), neon_emu_m(b));
   if (!neon_emu_any_nan(r)) return neon_emu_f(r);
+  __m128i any, prop = neon_emu_nans_v(neon_emu_mi(a), neon_emu_mi(b), neon_emu_mi(b), &any);
+  return neon_emu_nan_rules(r, prop, any);
 #endif
   return NEON_EMU_MAP1(float32x4_t, a,
                        neon_emu_arith_nan(a[i], b[i], a[i] + b[i]));
@@ -416,6 +482,8 @@ NEON_EMU_SI float32x4_t vsubq_f32(float32x4_t a, float32x4_t b) {
 #if NEON_EMU_FAST
   __m128 r = _mm_sub_ps(neon_emu_m(a), neon_emu_m(b));
   if (!neon_emu_any_nan(r)) return neon_emu_f(r);
+  __m128i any, prop = neon_emu_nans_v(neon_emu_mi(a), neon_emu_mi(b), neon_emu_mi(b), &any);
+  return neon_emu_nan_rules(r, prop, any);
 #endif
   return NEON_EMU_MAP1(float32x4_t, a,
                        neon_emu_arith_nan(a[i], b[i], a[i] - b[i]));
@@ -433,9 +501,10 @@ NEON_EMU_SI float32x4_t vminq_f32(float32x4_t a, float32x4_t b) {
 #if NEON_EMU_FAST
   // Equal lanes (+0 and -0 among them) take the sign rule of the reference.
   __m128 x = neon_emu_m(a), y = neon_emu_m(b);
-  if (!neon_emu_any_nan2(x, y)) {
-    return neon_emu_f(_mm_blendv_ps(_mm_min_ps(x, y), _mm_or_ps(x, y), _mm_cmpeq_ps(x, y)));
-  }
+  __m128 r = _mm_blendv_ps(_mm_min_ps(x, y), _mm_or_ps(x, y), _mm_cmpeq_ps(x, y));
+  if (!_mm_movemask_ps(_mm_cmpunord_ps(x, y))) return neon_emu_f(r);
+  __m128i any, prop = neon_emu_nans_v(neon_emu_mi(a), neon_emu_mi(b), neon_emu_mi(b), &any);
+  return (float32x4_t)neon_emu_sel(any, prop, _mm_castps_si128(r));
 #endif
   return NEON_EMU_MAP1(float32x4_t, a, neon_emu_fmin(a[i], b[i]));
 }
@@ -443,9 +512,10 @@ NEON_EMU_SI float32x4_t vmaxq_f32(float32x4_t a, float32x4_t b) {
 #if NEON_EMU_FAST
   // Equal lanes (+0 and -0 among them) take the sign rule of the reference.
   __m128 x = neon_emu_m(a), y = neon_emu_m(b);
-  if (!neon_emu_any_nan2(x, y)) {
-    return neon_emu_f(_mm_blendv_ps(_mm_max_ps(x, y), _mm_and_ps(x, y), _mm_cmpeq_ps(x, y)));
-  }
+  __m128 r = _mm_blendv_ps(_mm_max_ps(x, y), _mm_and_ps(x, y), _mm_cmpeq_ps(x, y));
+  if (!_mm_movemask_ps(_mm_cmpunord_ps(x, y))) return neon_emu_f(r);
+  __m128i any, prop = neon_emu_nans_v(neon_emu_mi(a), neon_emu_mi(b), neon_emu_mi(b), &any);
+  return (float32x4_t)neon_emu_sel(any, prop, _mm_castps_si128(r));
 #endif
   return NEON_EMU_MAP1(float32x4_t, a, neon_emu_fmax(a[i], b[i]));
 }
