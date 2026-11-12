@@ -47,6 +47,10 @@
  */
 export const kAckDeadlineMs = 5000;
 
+// The fastest stock pointer measured leaving the page, less a pixel for
+// rounding the last move and the exit (context/measure-kit/exit-from-rest).
+const kMaxPointerPxPerMs = 14;
+
 const {Helper} = ChromeUtils.importESModule('resource://gre/modules/juggler/Helper.js');
 const {setTimeout} = ChromeUtils.importESModule('resource://gre/modules/Timer.sys.mjs');
 const helper = new Helper();
@@ -451,7 +455,12 @@ export class MouseDispatch {
     const reach = (f, d, size) => d < 0 && f + d < 0 ? -f / d : d > 0 && f + d >= size ? (size - f) / d : Infinity;
     const k = Math.min(reach(from.x, dx, width), reach(from.y, dy, height));
     const at = u => ({x: from.x + u * dx, y: from.y + u * dy});
-    const span = Math.max(to.t - from.t, 1);
+    // A step's planned time is rounded to whole ms (toSteps), so one can carry
+    // 16px in 0 ms. No pointer stock measured moved faster than 15 px/ms
+    // (14.9px between the last move and the exit), so a step is taken to last
+    // at least as long as that pointer would need, with room for rounding both
+    // points.
+    const span = Math.max(to.t - from.t, 1, Math.hypot(dx, dy) / kMaxPointerPxPerMs);
     const ms = k * span;
     const sampled = Math.floor(ms);
     const clamp = (v, size) => Math.min(Math.max(Math.round(v), 0), size - 1);
