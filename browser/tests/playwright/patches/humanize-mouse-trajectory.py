@@ -106,10 +106,12 @@ async def _dest_within(page):
 ENGINES = ("cursory", "mousecrack")
 
 
-def _launch_kwargs(humanize, engine=None):
+def _launch_kwargs(humanize, engine=None, prefs=None):
     kwargs = dict(os="linux", humanize=humanize)
     if engine:
         kwargs["humanize_engine"] = engine
+    if prefs:
+        kwargs["firefox_user_prefs"] = prefs
     return launch_kwargs(**kwargs)
 
 
@@ -164,12 +166,16 @@ EDGE_RECORDER = """
 # from rest came when it left, 563-665ms after it stopped.
 STOCK_PAST_MIN_PX = 1
 STOCK_MAX_STEP_PX = 16
+# Prefs to sweep under: the defaults, and text scaled to 105%, which puts the
+# content's top at 85.5, as some hosts' toolbars do, so the page rounds the
+# exit and the last move from a fractional offset (daijro/camoufox#1026).
+EDGE_PREFS = ({}, {"ui.textScaleFactor": 105})
 
 
-async def _edge_sweeps(engine):
+async def _edge_sweeps(engine, prefs):
     """Events of humanized moves back and forth just inside the top edge, then
     the left one, and the viewport's size."""
-    async with AsyncCamoufox(**_launch_kwargs(True, engine)) as browser:
+    async with AsyncCamoufox(**_launch_kwargs(True, engine, prefs)) as browser:
         page = await browser.new_page()
         await page.set_content(BODY)
         await page.evaluate(EDGE_RECORDER)
@@ -294,22 +300,23 @@ async def _check_engine(engine) -> bool:
     # the page saw the cursor stop at the edge and reappear elsewhere with no
     # mouseout or mouseover, which a real pointer crossing into the toolbar
     # always produces.
-    events, w, h = await _edge_sweeps(engine)
-    exits = sum(1 for e in events if e[0] == "out")
-    unannounced = _unannounced_moves(events)
-    misplaced = _exits_unlike_stock(events, w, h)
-    print(f"\n=== curves leaving the viewport, {engine} ===")
-    print(f"  {EDGE_SWEEPS} moves along each of the top and left edges: {len(events)} events, {exits} document exits")
-    if exits and not unannounced and not misplaced:
-        print("  PASS: the cursor left the document at its edge and re-entered it as a real one does")
-    else:
-        passed = False
-        if not exits:
-            print("  FAIL: no curve along the edges left the document (no mouseout)")
-        if unannounced:
-            print(f"  FAIL: mousemoves after an exit with no mouseover first: {unannounced[:5]}")
-        if misplaced:
-            print(f"  FAIL: exits unlike stock's, as (last move, exit, ms apart) in {w}x{h}: {misplaced[:5]}")
+    for prefs in EDGE_PREFS:
+        events, w, h = await _edge_sweeps(engine, prefs)
+        exits = sum(1 for e in events if e[0] == "out")
+        unannounced = _unannounced_moves(events)
+        misplaced = _exits_unlike_stock(events, w, h)
+        print(f"\n=== curves leaving the viewport, {engine}, prefs {prefs} ===")
+        print(f"  {EDGE_SWEEPS} moves along each of the top and left edges: {len(events)} events, {exits} document exits")
+        if exits and not unannounced and not misplaced:
+            print("  PASS: the cursor left the document at its edge and re-entered it as a real one does")
+        else:
+            passed = False
+            if not exits:
+                print("  FAIL: no curve along the edges left the document (no mouseout)")
+            if unannounced:
+                print(f"  FAIL: mousemoves after an exit with no mouseover first: {unannounced[:5]}")
+            if misplaced:
+                print(f"  FAIL: exits unlike stock's, as (last move, exit, ms apart) in {w}x{h}: {misplaced[:5]}")
 
     moves, clicked = await _humanized_click_hits_target(engine)
     print(f"\n=== humanized click, {engine} ===")

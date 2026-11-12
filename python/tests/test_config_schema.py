@@ -39,6 +39,8 @@ MASKCONFIG_READ = re.compile(r'MaskConfig::(?:Get|Has)\w*\(\s*"([^"]+)"')
 # Juggler: a key nothing reads does nothing, silently.
 NOT_READ_BY_THE_BROWSER = {
     "locale:script": "the launcher joins it with locale:language/region into the UI locale",
+    "cpu:arch": "the launcher applies it as general.cpu_identity (cpu-vendor-estimates.patch)",
+    "cpu:manufacturer": "the launcher applies it as general.cpu_identity (cpu-vendor-estimates.patch)",
 }
 
 # How Juggler and the patches name a key: a quoted string literal.
