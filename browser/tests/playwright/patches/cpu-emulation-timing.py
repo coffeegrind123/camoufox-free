@@ -21,6 +21,7 @@ SLOWER_FACTOR times the host's and at least MIN_GAP_MS more.
     python browser/tests/playwright/patches/cpu-emulation-timing.py
 """
 
+import json
 import platform
 import statistics
 import sys
@@ -33,8 +34,12 @@ LAUNCHES = 3
 SLOWER_FACTOR = {"x86 vendor": 1.3, "arm64": 1.5}
 MIN_GAP_MS = 0.3
 PAGE = "https://cpu-emulation-timing.test/"
+PAGE_TIMEOUT_MS = 240_000
 
-# Each entry: ms per operation, median of the repetitions in one launch.
+# Each entry: ms per operation, median of the repetitions in one launch. It
+# runs as the page's own script: Playwright's isolated world may not touch
+# typed-array data (AudioBuffer.getChannelData), so the result comes back as
+# JSON on <html data-bench>.
 BENCH = """async () => {
   const now = () => performance.now();
   const median = (a) => a.slice().sort((x, y) => x - y)[a.length >> 1];
@@ -133,15 +138,25 @@ def host_vendor() -> str:
     return ""
 
 
+HTML = """<!doctype html><p>x</p><script>
+(%s)().then(r => { document.documentElement.dataset.bench = JSON.stringify(r); },
+            e => { document.documentElement.dataset.bench = JSON.stringify({error: String(e)}); });
+</script>""" % BENCH
+
+
 def measure(pref: int) -> dict:
     from camoufox.sync_api import Camoufox
 
     with Camoufox(**launch_kwargs(os="linux", firefox_user_prefs={"general.cpu_identity": pref})) as browser:
         page = browser.new_page()
         # WebCodecs needs a secure context; about:blank is not one.
-        page.route(PAGE, lambda route: route.fulfill(body="<p>x</p>", content_type="text/html"))
+        page.route(PAGE, lambda route: route.fulfill(body=HTML, content_type="text/html"))
         page.goto(PAGE)
-        return page.evaluate(BENCH)
+        page.wait_for_function("document.documentElement.dataset.bench", timeout=PAGE_TIMEOUT_MS)
+        result = json.loads(page.evaluate("document.documentElement.dataset.bench"))
+    if "error" in result:
+        raise RuntimeError(f"general.cpu_identity {pref}: the bench threw {result['error']}")
+    return result
 
 
 def main() -> int:
