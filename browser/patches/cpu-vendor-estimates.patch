@@ -645,10 +645,10 @@ index 3bd802d715..2a51a8f759 100644
      SOURCES["AudioNodeEngineSSE2.cpp"].flags += CONFIG["SSE2_FLAGS"]
      if CONFIG["SSE4_2_FLAGS"]:
 diff --git a/gfx/skia/moz.build b/gfx/skia/moz.build
-index 7c81493630..9a217dcfb3 100644
+index 7c81493630..ad174bb53d 100644
 --- a/gfx/skia/moz.build
 +++ b/gfx/skia/moz.build
-@@ -508,6 +508,7 @@ SOURCES += [
+@@ -508,6 +508,7 @@
      'skia/src/pdf/SkPDFDevice.cpp',
      'skia/src/pdf/SkPDFFont.cpp',
      'skia/src/pdf/SkPDFType1Font.cpp',
@@ -656,7 +656,7 @@ index 7c81493630..9a217dcfb3 100644
      'skia/src/sksl/SkSLLexer.cpp',
      'skia/src/utils/SkParse.cpp',
      'skia/src/utils/SkParsePath.cpp',
-@@ -583,6 +584,18 @@ if CONFIG['INTEL_ARCHITECTURE']:
+@@ -583,6 +584,26 @@
      ]
      SOURCES['skia/modules/skcms/src/skcms_TransformHsw.cc'].flags += skia_opt_flags
      SOURCES['skia/src/opts/SkOpts_ml3.cpp'].flags += skia_opt_flags
@@ -672,11 +672,19 @@ index 7c81493630..9a217dcfb3 100644
 +    SOURCES += skia_neonemu_sources
 +    for f in skia_neonemu_sources:
 +        SOURCES[f].flags += skia_opt_flags
++    # The same files built for AVX2, FMA and F16C (SkCpu ML3), where
++    # SkNeonEmu.h runs its fast paths; chosen over them on such a CPU.
++    skia_neonemu_hsw_sources = [f.replace('_neonemu.cpp', '_neonemu_hsw.cpp')
++                                for f in skia_neonemu_sources]
++    SOURCES += skia_neonemu_hsw_sources
++    for f in skia_neonemu_hsw_sources:
++        SOURCES[f].flags += skia_opt_flags + ['-Dskvx=skvx_neonemu_hsw', '-mavx2',
++                                              '-mf16c', '-mfma']
  
  
  # We allow warnings for third-party code that can be updated from upstream.
 diff --git a/gfx/skia/skia/src/core/SkBitmapProcState_opts.cpp b/gfx/skia/skia/src/core/SkBitmapProcState_opts.cpp
-index 58cbdda37b..9d7feeef26 100644
+index 58cbdda37b..80de2ffefa 100644
 --- a/gfx/skia/skia/src/core/SkBitmapProcState_opts.cpp
 +++ b/gfx/skia/skia/src/core/SkBitmapProcState_opts.cpp
 @@ -5,6 +5,7 @@
@@ -687,25 +695,29 @@ index 58cbdda37b..9d7feeef26 100644
  #include "include/private/base/SkFeatures.h"
  #include "src/core/SkBitmapProcState.h"
  #include "src/core/SkCpu.h"
-@@ -22,6 +23,7 @@ namespace SkOpts {
+@@ -22,6 +23,8 @@
      DEFINE_DEFAULT(S32_alpha_D32_filter_DXDY);
  
      void Init_BitmapProcState_ssse3();
 +    void Init_BitmapProcState_neonemu();
++    void Init_BitmapProcState_neonemu_hsw();
      void Init_BitmapProcState_lasx();
  
      static bool init() {
-@@ -31,6 +33,8 @@ namespace SkOpts {
+@@ -31,6 +34,11 @@
          #if SK_CPU_X64_LEVEL < SK_CPU_X64_LEVEL_SSSE3
              if (SkCpu::Supports(SkX64::SSSE3)) { Init_BitmapProcState_ssse3(); }
          #endif
-+        // general.cpu_identity = ARM64: Skia's AArch64 code, emulated.
-+        if (sk_cpu_emulates_arm64()) { Init_BitmapProcState_neonemu(); }
++        // general.cpu_identity = ARM64: Skia's AArch64 code, emulated; the
++        // HSW build has the emulation's fast paths (SkNeonEmu.h).
++        if (sk_cpu_emulates_arm64()) {
++            if (SkCpu::Supports(SkX64::ML3)) { Init_BitmapProcState_neonemu_hsw(); } else { Init_BitmapProcState_neonemu(); }
++        }
      #elif defined(SK_CPU_LOONGARCH)
          #if SK_CPU_LSX_LEVEL < SK_CPU_LSX_LEVEL_LASX
              if (SkCpu::Supports(SkLoongArch::ASX)) { Init_BitmapProcState_lasx(); }
 diff --git a/gfx/skia/skia/src/core/SkBlitMask_opts.cpp b/gfx/skia/skia/src/core/SkBlitMask_opts.cpp
-index f98993139e..f761e13ab8 100644
+index f98993139e..37eb46a949 100644
 --- a/gfx/skia/skia/src/core/SkBlitMask_opts.cpp
 +++ b/gfx/skia/skia/src/core/SkBlitMask_opts.cpp
 @@ -5,6 +5,7 @@
@@ -716,36 +728,42 @@ index f98993139e..f761e13ab8 100644
  #include "include/private/base/SkFeatures.h"
  #include "src/core/SkBlitMask.h"
  #include "src/core/SkCpu.h"
-@@ -21,6 +22,7 @@ namespace SkOpts {
+@@ -21,6 +22,8 @@
      DEFINE_DEFAULT(blit_mask_d32_a8);
  
      void Init_BlitMask_ssse3();
 +    void Init_BlitMask_neonemu();
++    void Init_BlitMask_neonemu_hsw();
  
      static bool init() {
      #if defined(SK_ENABLE_OPTIMIZE_SIZE)
-@@ -29,6 +31,8 @@ namespace SkOpts {
+@@ -29,6 +32,11 @@
          #if SK_CPU_X64_LEVEL < SK_CPU_X64_LEVEL_SSSE3
              if (SkCpu::Supports(SkX64::SSSE3)) { Init_BlitMask_ssse3(); }
          #endif
-+        // general.cpu_identity = ARM64: Skia's AArch64 code, emulated.
-+        if (sk_cpu_emulates_arm64()) { Init_BlitMask_neonemu(); }
++        // general.cpu_identity = ARM64: Skia's AArch64 code, emulated; the
++        // HSW build has the emulation's fast paths (SkNeonEmu.h).
++        if (sk_cpu_emulates_arm64()) {
++            if (SkCpu::Supports(SkX64::ML3)) { Init_BlitMask_neonemu_hsw(); } else { Init_BlitMask_neonemu(); }
++        }
      #endif
        return true;
      }
 diff --git a/gfx/skia/skia/src/core/SkBlitRow_D32.cpp b/gfx/skia/skia/src/core/SkBlitRow_D32.cpp
-index 27f0b4d229..36e9c2db2a 100644
+index 27f0b4d229..dff105f5c4 100644
 --- a/gfx/skia/skia/src/core/SkBlitRow_D32.cpp
 +++ b/gfx/skia/skia/src/core/SkBlitRow_D32.cpp
-@@ -12,6 +12,7 @@
+@@ -11,7 +11,9 @@
+ #include "src/core/SkBlitRow.h"
  #include "src/core/SkColorData.h"
  #include "src/core/SkColorPriv.h"
++#include "src/core/SkCpu.h"
  #include "src/core/SkMemset.h"
 +#include "src/opts/SkCpuEstimates.h"
  
  #include <cstring>
  #include <iterator>
-@@ -155,128 +156,7 @@ static void blit_row_s32_opaque(SkPMColor* dst,
+@@ -155,128 +157,7 @@
  
  #elif defined(SK_ARM_HAS_NEON)
      #include <arm_neon.h>
@@ -875,7 +893,7 @@ index 27f0b4d229..36e9c2db2a 100644
  #elif SK_CPU_LSX_LEVEL >= SK_CPU_LSX_LEVEL_LASX
      #include <lasxintrin.h>
  
-@@ -537,6 +417,14 @@ static void blit_row_s32_opaque(SkPMColor* dst,
+@@ -537,6 +418,17 @@
      }
  #endif
  
@@ -884,19 +902,26 @@ index 27f0b4d229..36e9c2db2a 100644
 +    // SkBlitRow_opts_neonemu.cpp
 +    void neonemu_blit_row_s32_blend(SkPMColor*, const SkPMColor*, int, U8CPU);
 +    void neonemu_blit_row_s32a_blend(SkPMColor*, const SkPMColor*, int, U8CPU);
++    // SkBlitRow_opts_neonemu_hsw.cpp
++    void neonemu_blit_row_s32_blend_hsw(SkPMColor*, const SkPMColor*, int, U8CPU);
++    void neonemu_blit_row_s32a_blend_hsw(SkPMColor*, const SkPMColor*, int, U8CPU);
 +}  // namespace SkOpts
 +#endif
 +
  SkBlitRow::Proc32 SkBlitRow::Factory32(unsigned flags) {
      static const SkBlitRow::Proc32 kProcs[] = {
          blit_row_s32_opaque,
-@@ -548,6 +436,14 @@ SkBlitRow::Proc32 SkBlitRow::Factory32(unsigned flags) {
+@@ -548,6 +440,18 @@
      SkASSERT(flags < std::size(kProcs));
      flags &= std::size(kProcs) - 1;  // just to be safe
  
 +#if defined(SK_CPU_X86) && !defined(SK_ENABLE_OPTIMIZE_SIZE)
 +    // general.cpu_identity = ARM64: the NEON blends, emulated.
 +    if (sk_cpu_emulates_arm64() && (flags == 1 || flags == 3)) {
++        if (SkCpu::Supports(SkX64::ML3)) {
++            return flags == 1 ? SkOpts::neonemu_blit_row_s32_blend_hsw
++                              : SkOpts::neonemu_blit_row_s32a_blend_hsw;
++        }
 +        return flags == 1 ? SkOpts::neonemu_blit_row_s32_blend
 +                          : SkOpts::neonemu_blit_row_s32a_blend;
 +    }
@@ -906,7 +931,7 @@ index 27f0b4d229..36e9c2db2a 100644
  }
  
 diff --git a/gfx/skia/skia/src/core/SkBlitRow_opts.cpp b/gfx/skia/skia/src/core/SkBlitRow_opts.cpp
-index da48a55d0c..70ff96b165 100644
+index da48a55d0c..78e47ccb32 100644
 --- a/gfx/skia/skia/src/core/SkBlitRow_opts.cpp
 +++ b/gfx/skia/skia/src/core/SkBlitRow_opts.cpp
 @@ -5,6 +5,7 @@
@@ -917,20 +942,24 @@ index da48a55d0c..70ff96b165 100644
  #include "include/private/base/SkFeatures.h"
  #include "src/core/SkBlitRow.h"
  #include "src/core/SkCpu.h"
-@@ -22,6 +23,7 @@ namespace SkOpts {
+@@ -22,6 +23,8 @@
      DEFINE_DEFAULT(blit_row_s32a_opaque);
  
      void Init_BlitRow_ml3();
 +    void Init_BlitRow_neonemu();
++    void Init_BlitRow_neonemu_hsw();
      void Init_BlitRow_lasx();
  
      static bool init() {
-@@ -31,6 +33,8 @@ namespace SkOpts {
+@@ -31,6 +34,11 @@
          #if SK_CPU_X64_LEVEL < SK_CPU_X64_LEVEL_AVX2
              if (SkCpu::Supports(SkX64::ML3)) { Init_BlitRow_ml3(); }
          #endif
-+        // general.cpu_identity = ARM64: Skia's AArch64 code, emulated.
-+        if (sk_cpu_emulates_arm64()) { Init_BlitRow_neonemu(); }
++        // general.cpu_identity = ARM64: Skia's AArch64 code, emulated; the
++        // HSW build has the emulation's fast paths (SkNeonEmu.h).
++        if (sk_cpu_emulates_arm64()) {
++            if (SkCpu::Supports(SkX64::ML3)) { Init_BlitRow_neonemu_hsw(); } else { Init_BlitRow_neonemu(); }
++        }
      #elif defined(SK_CPU_LOONGARCH)
          #if SK_CPU_LSX_LEVEL < SK_CPU_LSX_LEVEL_LASX
              if (SkCpu::Supports(SkLoongArch::ASX)) { Init_BlitRow_lasx(); }
@@ -957,7 +986,7 @@ index 7ae979a931..9be36f00dc 100644
          steps.fFlags.encode) {
          return false;
 diff --git a/gfx/skia/skia/src/core/SkOpts.cpp b/gfx/skia/skia/src/core/SkOpts.cpp
-index adfbdc30f0..667b7884fe 100644
+index adfbdc30f0..55f498f7c3 100644
 --- a/gfx/skia/skia/src/core/SkOpts.cpp
 +++ b/gfx/skia/skia/src/core/SkOpts.cpp
 @@ -4,6 +4,7 @@
@@ -968,25 +997,29 @@ index adfbdc30f0..667b7884fe 100644
  #include "src/core/SkOpts.h"
  
  #include "include/private/base/SkFeatures.h"
-@@ -45,6 +46,7 @@ namespace SkOpts {
+@@ -45,6 +46,8 @@
  
      // Each Init_foo() is defined in src/opts/SkOpts_foo.cpp.
      void Init_ml3();
 +    void Init_neonemu();
++    void Init_neonemu_hsw();
      void Init_ml4();
      void Init_lasx();
  
-@@ -63,6 +65,8 @@ namespace SkOpts {
+@@ -63,6 +66,11 @@
              #endif
          #endif
  
-+        // general.cpu_identity = ARM64: Skia's AArch64 code, emulated.
-+        if (sk_cpu_emulates_arm64()) { Init_neonemu(); }
++        // general.cpu_identity = ARM64: Skia's AArch64 code, emulated; the
++        // HSW build has the emulation's fast paths (SkNeonEmu.h).
++        if (sk_cpu_emulates_arm64()) {
++            if (SkCpu::Supports(SkX64::ML3)) { Init_neonemu_hsw(); } else { Init_neonemu(); }
++        }
      #elif defined(SK_CPU_LOONGARCH)
          #if SK_CPU_LSX_LEVEL < SK_CPU_LSX_LEVEL_LASX
              if (SkCpu::Supports(SkLoongArch::ASX)) { Init_lasx(); }
 diff --git a/gfx/skia/skia/src/core/SkSwizzler_opts.cpp b/gfx/skia/skia/src/core/SkSwizzler_opts.cpp
-index 6d37af434f..7c9758d446 100644
+index 6d37af434f..2e2b5921bb 100644
 --- a/gfx/skia/skia/src/core/SkSwizzler_opts.cpp
 +++ b/gfx/skia/skia/src/core/SkSwizzler_opts.cpp
 @@ -5,6 +5,7 @@
@@ -997,20 +1030,24 @@ index 6d37af434f..7c9758d446 100644
  #include "include/private/base/SkFeatures.h"
  #include "src/core/SkCpu.h"
  #include "src/core/SkOptsTargets.h"
-@@ -32,6 +33,7 @@ namespace SkOpts {
+@@ -32,6 +33,8 @@
      DEFINE_DEFAULT(inverted_CMYK_to_BGR1);
  
      void Init_Swizzler_ssse3();
 +    void Init_Swizzler_neonemu();
++    void Init_Swizzler_neonemu_hsw();
      void Init_Swizzler_ml3();
      void Init_Swizzler_lasx();
  
-@@ -46,6 +48,8 @@ namespace SkOpts {
+@@ -46,6 +49,11 @@
          #if SK_CPU_X64_LEVEL < SK_CPU_X64_LEVEL_AVX2
              if (SkCpu::Supports(SkX64::ML3)) { Init_Swizzler_ml3(); }
          #endif
-+        // general.cpu_identity = ARM64: Skia's AArch64 code, emulated.
-+        if (sk_cpu_emulates_arm64()) { Init_Swizzler_neonemu(); }
++        // general.cpu_identity = ARM64: Skia's AArch64 code, emulated; the
++        // HSW build has the emulation's fast paths (SkNeonEmu.h).
++        if (sk_cpu_emulates_arm64()) {
++            if (SkCpu::Supports(SkX64::ML3)) { Init_Swizzler_neonemu_hsw(); } else { Init_Swizzler_neonemu(); }
++        }
      #elif defined(SK_CPU_LOONGARCH)
          #if SK_CPU_LSX_LEVEL < SK_CPU_LSX_LEVEL_LASX
              if (SkCpu::Supports(SkLoongArch::ASX)) { Init_Swizzler_lasx(); }

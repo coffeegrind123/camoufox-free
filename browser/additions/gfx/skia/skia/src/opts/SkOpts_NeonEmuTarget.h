@@ -3,7 +3,9 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 // Switches the rest of an x86-64 translation unit to Skia's AArch64 code,
-// built against SkNeonEmu.h, in namespace neonemu. The _neonemu.cpp files
+// built against SkNeonEmu.h, in namespace neonemu (neonemu_hsw in the
+// _neonemu_hsw.cpp builds, which define SK_NEON_EMU_HSW; SK_NEON_EMU_NAME
+// gives their entry points the _hsw suffix). The _neonemu.cpp files
 // include every header the opts code needs first, under the host's own
 // settings, then this, then the opts code. Each such file is the whole of
 // its translation unit, so nothing has to be switched back.
@@ -19,5 +21,11 @@
 #define SK_ARM_HAS_NEON 1
 #define SK_CPU_ARM64 1
 #define SK_NEON_EMU 1
-#define SK_OPTS_NS neonemu
+#if defined(SK_NEON_EMU_HSW)
+    #define SK_OPTS_NS neonemu_hsw
+    #define SK_NEON_EMU_NAME(name) name##_hsw
+#else
+    #define SK_OPTS_NS neonemu
+    #define SK_NEON_EMU_NAME(name) name
+#endif
 #define DEFINE_DEFAULT(name)  // only the default tier defines the pointers
