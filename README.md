@@ -180,12 +180,20 @@ For an identity whose OS is not the host's. Offered upstream in
 - **A page's first humanized move comes in from the toolbar.** Every page's
   first trajectory left from (0, 0), so each one swept out of the same corner.
   It now starts just inside the top edge, within a quarter viewport of its
-  destination, on a path that stays on the page. Upstream's
-  [#987](https://github.com/daijro/camoufox/pull/987) exit model runs on top of
-  it, with the fork's unawaited intermediate steps; the guard's check that moves
+  destination, on a path that stays on the page. The fork's exit point (below)
+  runs on top of it, with unawaited intermediate steps; the guard's check that moves
   arrive at refresh ticks is offered upstream in
   [#978](https://github.com/daijro/camoufox/pull/978).
   ([PageHandler.js](browser/additions/juggler/protocol/PageHandler.js), guard
+  [humanize-mouse-trajectory.py](browser/tests/playwright/patches/humanize-mouse-trajectory.py))
+- **A humanized curve leaves the page on its next sample.** Upstream's
+  [#1026](https://github.com/daijro/camoufox/pull/1026) puts every exit 3px
+  straight across the edge from the last move, at any speed. Stock's exit is
+  the next sample of a mouse polled at 1 kHz, one sample's travel along the
+  path (1px at 0.5 px/ms, about 15px at 15 px/ms), so the fork keeps #987's
+  exit on the curve and guards it also at 105% text scale, the fractional
+  content offset #1026 was written for.
+  ([MouseDispatch.js](browser/additions/juggler/input/MouseDispatch.js), [d5945faf](https://github.com/coffeegrind123/camoufox-free/commit/d5945fafb2de243c59b82801ecab99c315a58093), guard
   [humanize-mouse-trajectory.py](browser/tests/playwright/patches/humanize-mouse-trajectory.py))
 - **Humanized moves report like a 125 Hz mouse.** They were resampled to
   60 Hz, but `pointerrawupdate` and `getCoalescedEvents()` show every report:
@@ -276,12 +284,6 @@ For an identity whose OS is not the host's. Offered upstream in
   loaded. `fetch-ubo.py` turns off that regional selection in the bundled
   uBO. Ported from lang315.
   ([fetch-ubo.py](browser/scripts/fetch-ubo.py), [9ec4708](https://github.com/coffeegrind123/camoufox-free/commit/9ec47080a87288f1227945ccc71170df07b3ce94), [2a48d607](https://github.com/coffeegrind123/camoufox-free/commit/2a48d6072738d8ac47d428e34bbac130ae0735e2))
-- **The bundled uBlock Origin is a committed release.** Upstream bundles AMO's
-  newest at build time. uBO 1.76.0 changed the global order of every page
-  after the first (`RegExp`), where stock and 1.75.4 do not, so
-  [`data/ubo.json`](browser/scripts/data/ubo.json) pins the release by
-  sha256 and a bump is a reviewed commit. Offered upstream in
-  [#1012](https://github.com/daijro/camoufox/pull/1012). ([73921940](https://github.com/coffeegrind123/camoufox-free/commit/739219402277874bec6326ad80bce4c5c9587327))
 - **The release build checks uBO as a user that owns no file.** Every guard
   ran as the owner on the unpackaged build, so none saw a zip that hid uBO
   from another user. The build now unzips the release and installs the
