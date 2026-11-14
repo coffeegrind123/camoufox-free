@@ -77,12 +77,38 @@ static inline uint32_t sk_cpu_estimate_rsqrt(const uint32_t* table, uint32_t b) 
 
 /*
  * The same two functions on whole vectors, for the raster pipeline's SSE and
- * HSW tiers: one table load per lane and the special cases as selects, applied
- * in the reverse order of the scalar code's branches so the earliest branch
- * wins. Every input gives the scalar functions' bits; estimates.c `vcheck`
- * compares them over all 2^32 inputs. Out-of-range lanes (NaN, infinity, zero,
+ * HSW tiers. Every input gives the scalar functions' bits; estimates.c
+ * `vcheck` compares them over all 2^32 inputs.
+ *
+ * The _full forms take every input: one table load per lane and the special
+ * cases as selects, applied in the reverse order of the scalar code's branches
+ * so the earliest branch wins. Out-of-range lanes (NaN, infinity, zero,
  * denormals) still index the table with their own mantissa, always in range.
+ *
+ * The inline forms are what the pipeline calls. They cost what one table load
+ * per lane must, and little more: a blend calls rcp three times per pixel, and
+ * PR #40's timing guard measured the _full forms drawing color-dodge, color-burn
+ * and the non-separable modes 1.8-2.9x slower than the native instruction.
+ * Every recorded output is 2^-1 * 1.m (rcp) or 2^-1 * 1.m and 2^0 * 1.m
+ * (rsqrt), so the result's exponent is an integer add on the table word:
+ *
+ *   rcp:   2^-e        x  2^-1 * 1.t  =  (t - (e << 23)) + (127 << 23)
+ *   rsqrt: 2^-(e-p)/2  x  2^k  * 1.t  =  t - ((e - 127 - p) << 22)
+ *
+ * with e the input's unbiased-by-127 exponent field and p its parity bit. Zeros
+ * and denormals (exponent field 0) are a select; the inputs whose result needs
+ * the special rules (rcp: exponent field 253 and up, so infinity, NaN and the
+ * results that flush to zero; rsqrt: infinity, NaN and every negative input)
+ * go to the _full form for the whole vector. Canvas content never makes them;
+ * a lane of 0 (rcp of sa - s where s == sa, clip_color's l - mn) does.
  */
+#if defined(__GNUC__) || defined(__clang__)
+#define SK_CPU_ESTIMATE_COLD static __attribute__((noinline, cold, unused))
+#define SK_CPU_ESTIMATE_LIKELY(x) __builtin_expect(!!(x), 1)
+#else
+#define SK_CPU_ESTIMATE_COLD static __declspec(noinline)
+#define SK_CPU_ESTIMATE_LIKELY(x) (x)
+#endif
 #if defined(__SSE2__)
 #include <emmintrin.h>
 
@@ -96,7 +122,7 @@ static inline __m128i sk_cpu_estimate_lookup_sse2(const uint32_t* table, __m128i
   return _mm_setr_epi32((int)table[i[0]], (int)table[i[1]], (int)table[i[2]], (int)table[i[3]]);
 }
 
-static inline __m128i sk_cpu_estimate_rcp_sse2(const uint32_t* table, __m128i b) {
+SK_CPU_ESTIMATE_COLD __m128i sk_cpu_estimate_rcp_sse2_full(const uint32_t* table, __m128i b) {
   const __m128i sign = _mm_set1_epi32((int)0x80000000u), mant = _mm_set1_epi32(0x7fffff),
                 byte = _mm_set1_epi32(0xff);
   __m128i s = _mm_and_si128(b, sign), e = _mm_and_si128(_mm_srli_epi32(b, 23), byte),
@@ -114,7 +140,7 @@ static inline __m128i sk_cpu_estimate_rcp_sse2(const uint32_t* table, __m128i b)
   return sk_cpu_estimate_select_sse2(_mm_cmpeq_epi32(e, byte), special, r);
 }
 
-static inline __m128i sk_cpu_estimate_rsqrt_sse2(const uint32_t* table, __m128i b) {
+SK_CPU_ESTIMATE_COLD __m128i sk_cpu_estimate_rsqrt_sse2_full(const uint32_t* table, __m128i b) {
   const __m128i sign = _mm_set1_epi32((int)0x80000000u), mant = _mm_set1_epi32(0x7fffff),
                 byte = _mm_set1_epi32(0xff), one = _mm_set1_epi32(1),
                 dnan = _mm_set1_epi32((int)0xffc00000u), zero = _mm_setzero_si128();
@@ -137,12 +163,46 @@ static inline __m128i sk_cpu_estimate_rsqrt_sse2(const uint32_t* table, __m128i 
                                                 _mm_or_si128(b, _mm_set1_epi32(0x400000)));
   return sk_cpu_estimate_select_sse2(_mm_cmpeq_epi32(e, byte), special, r);
 }
+static inline __m128i sk_cpu_estimate_rcp_sse2(const uint32_t* table, __m128i b) {
+  const __m128i expo = _mm_set1_epi32(0x7f800000);
+  __m128i x = _mm_and_si128(b, expo);
+  if (SK_CPU_ESTIMATE_LIKELY(!_mm_movemask_epi8(_mm_cmpgt_epi32(x, _mm_set1_epi32(252 << 23))))) {
+    __m128i t = sk_cpu_estimate_lookup_sse2(
+        table, _mm_and_si128(_mm_srli_epi32(b, 23 - SK_CPU_ESTIMATE_BITS),
+                             _mm_set1_epi32(SK_CPU_ESTIMATE_ENTRIES - 1)));
+    __m128i r = _mm_add_epi32(_mm_sub_epi32(t, x), _mm_set1_epi32(127 << 23));
+    r = sk_cpu_estimate_select_sse2(_mm_cmpeq_epi32(x, _mm_setzero_si128()), expo, r);
+    return _mm_or_si128(r, _mm_andnot_si128(_mm_set1_epi32(0x7fffffff), b));
+  }
+  return sk_cpu_estimate_rcp_sse2_full(table, b);
+}
+
+static inline __m128i sk_cpu_estimate_rsqrt_sse2(const uint32_t* table, __m128i b) {
+  const __m128i expo = _mm_set1_epi32(0x7f800000), bias = _mm_set1_epi32((int)0x80000000u);
+  /* b >= 0x7f800000 unsigned: infinity, NaN, or negative. */
+  if (SK_CPU_ESTIMATE_LIKELY(!_mm_movemask_epi8(
+          _mm_cmpgt_epi32(_mm_xor_si128(b, bias), _mm_set1_epi32((int)(0x7f7fffffu ^ 0x80000000u)))))) {
+    const __m128i half = _mm_set1_epi32(SK_CPU_ESTIMATE_ENTRIES);
+    /* (exponent parity, top mantissa bits) -> the 1.m or 2.m half */
+    __m128i idx = _mm_add_epi32(
+        _mm_xor_si128(_mm_and_si128(_mm_srli_epi32(b, 23 - SK_CPU_ESTIMATE_BITS),
+                                    _mm_set1_epi32(2 * SK_CPU_ESTIMATE_ENTRIES - 1)),
+                      half),
+        half);
+    __m128i x = _mm_and_si128(b, expo), y = _mm_srli_epi32(x, 1);
+    __m128i t = sk_cpu_estimate_lookup_sse2(table, idx);
+    __m128i r = _mm_add_epi32(_mm_sub_epi32(_mm_sub_epi32(t, y), _mm_and_si128(y, _mm_set1_epi32(1 << 22))),
+                              _mm_set1_epi32(128 << 22));
+    return sk_cpu_estimate_select_sse2(_mm_cmpeq_epi32(x, _mm_setzero_si128()), expo, r);
+  }
+  return sk_cpu_estimate_rsqrt_sse2_full(table, b);
+}
 #endif
 
 #if defined(__AVX2__)
 #include <immintrin.h>
 
-static inline __m256i sk_cpu_estimate_rcp_avx2(const uint32_t* table, __m256i b) {
+SK_CPU_ESTIMATE_COLD __m256i sk_cpu_estimate_rcp_avx2_full(const uint32_t* table, __m256i b) {
   const __m256i mant = _mm256_set1_epi32(0x7fffff), byte = _mm256_set1_epi32(0xff),
                 zero = _mm256_setzero_si256();
   __m256i s = _mm256_and_si256(b, _mm256_set1_epi32((int)0x80000000u)),
@@ -162,7 +222,7 @@ static inline __m256i sk_cpu_estimate_rcp_avx2(const uint32_t* table, __m256i b)
   return _mm256_blendv_epi8(r, special, _mm256_cmpeq_epi32(e, byte));
 }
 
-static inline __m256i sk_cpu_estimate_rsqrt_avx2(const uint32_t* table, __m256i b) {
+SK_CPU_ESTIMATE_COLD __m256i sk_cpu_estimate_rsqrt_avx2_full(const uint32_t* table, __m256i b) {
   const __m256i mant = _mm256_set1_epi32(0x7fffff), byte = _mm256_set1_epi32(0xff),
                 one = _mm256_set1_epi32(1), dnan = _mm256_set1_epi32((int)0xffc00000u),
                 zero = _mm256_setzero_si256();
@@ -184,6 +244,45 @@ static inline __m256i sk_cpu_estimate_rsqrt_avx2(const uint32_t* table, __m256i 
   __m256i special = _mm256_blendv_epi8(_mm256_or_si256(b, _mm256_set1_epi32(0x400000)), inf,
                                        _mm256_cmpeq_epi32(m, zero));
   return _mm256_blendv_epi8(r, special, _mm256_cmpeq_epi32(e, byte));
+}
+static inline __m256i sk_cpu_estimate_rcp_avx2(const uint32_t* table, __m256i b) {
+  const __m256i expo = _mm256_set1_epi32(0x7f800000);
+  __m256i x = _mm256_and_si256(b, expo);
+  if (SK_CPU_ESTIMATE_LIKELY(_mm256_testz_si256(_mm256_cmpgt_epi32(x, _mm256_set1_epi32(252 << 23)),
+                                                _mm256_cmpgt_epi32(x, _mm256_set1_epi32(252 << 23))))) {
+    __m256i t = _mm256_i32gather_epi32(
+        (const int*)table,
+        _mm256_and_si256(_mm256_srli_epi32(b, 23 - SK_CPU_ESTIMATE_BITS),
+                         _mm256_set1_epi32(SK_CPU_ESTIMATE_ENTRIES - 1)),
+        4);
+    __m256i r = _mm256_add_epi32(_mm256_sub_epi32(t, x), _mm256_set1_epi32(127 << 23));
+    r = _mm256_blendv_epi8(r, expo, _mm256_cmpeq_epi32(x, _mm256_setzero_si256()));
+    return _mm256_or_si256(r, _mm256_andnot_si256(_mm256_set1_epi32(0x7fffffff), b));
+  }
+  return sk_cpu_estimate_rcp_avx2_full(table, b);
+}
+
+static inline __m256i sk_cpu_estimate_rsqrt_avx2(const uint32_t* table, __m256i b) {
+  const __m256i expo = _mm256_set1_epi32(0x7f800000), bias = _mm256_set1_epi32((int)0x80000000u);
+  /* b >= 0x7f800000 unsigned: infinity, NaN, or negative. */
+  __m256i bad = _mm256_cmpgt_epi32(_mm256_xor_si256(b, bias),
+                                   _mm256_set1_epi32((int)(0x7f7fffffu ^ 0x80000000u)));
+  if (SK_CPU_ESTIMATE_LIKELY(_mm256_testz_si256(bad, bad))) {
+    const __m256i half = _mm256_set1_epi32(SK_CPU_ESTIMATE_ENTRIES);
+    /* (exponent parity, top mantissa bits) -> the 1.m or 2.m half */
+    __m256i idx = _mm256_add_epi32(
+        _mm256_xor_si256(_mm256_and_si256(_mm256_srli_epi32(b, 23 - SK_CPU_ESTIMATE_BITS),
+                                          _mm256_set1_epi32(2 * SK_CPU_ESTIMATE_ENTRIES - 1)),
+                         half),
+        half);
+    __m256i x = _mm256_and_si256(b, expo), y = _mm256_srli_epi32(x, 1);
+    __m256i t = _mm256_i32gather_epi32((const int*)table, idx, 4);
+    __m256i r = _mm256_add_epi32(
+        _mm256_sub_epi32(_mm256_sub_epi32(t, y), _mm256_and_si256(y, _mm256_set1_epi32(1 << 22))),
+        _mm256_set1_epi32(128 << 22));
+    return _mm256_blendv_epi8(r, expo, _mm256_cmpeq_epi32(x, _mm256_setzero_si256()));
+  }
+  return sk_cpu_estimate_rsqrt_avx2_full(table, b);
 }
 #endif
 
