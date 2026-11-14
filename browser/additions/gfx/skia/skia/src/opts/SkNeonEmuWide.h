@@ -76,10 +76,13 @@ NEON_EMU_SI __m256 neon_emu_nan_rules8(__m256 r, __m256i prop, __m256i any) {
   return _mm256_castsi256_ps(neon_emu_sel8(any, prop, out));
 }
 
+// The slow paths are out of line and cold, so each inlined helper is the x86
+// instruction, a compare and a branch: a stage with dozens of helpers keeps
+// its vectors in registers.
+#define NEON_EMU_COLD static __attribute__((noinline, cold, unused))
+
 // FMLA: addend + op1*op2 (neon_emu_fma_v).
-NEON_EMU_SI __m256 neon_emu_fma8(__m256 addend, __m256 op1, __m256 op2) {
-  __m256 r = _mm256_fmadd_ps(op1, op2, addend);
-  if (!neon_emu_any_nan8(r)) return r;
+NEON_EMU_COLD __m256 neon_emu_fma8_nan(__m256 r, __m256 addend, __m256 op1, __m256 op2) {
   __m256i a = _mm256_castps_si256(addend), b = _mm256_castps_si256(op1), c = _mm256_castps_si256(op2), any;
   __m256i prop = neon_emu_nans8(a, b, c, &any);
   __m256 out = neon_emu_nan_rules8(r, prop, any);
@@ -87,22 +90,33 @@ NEON_EMU_SI __m256 neon_emu_fma8(__m256 addend, __m256 op1, __m256 op2) {
   return _mm256_castsi256_ps(neon_emu_sel8(_mm256_and_si256(qnan_addend, neon_emu_infzero8(b, c)),
                                            _mm256_set1_epi32(0x7fc00000), _mm256_castps_si256(out)));
 }
+NEON_EMU_SI __m256 neon_emu_fma8(__m256 addend, __m256 op1, __m256 op2) {
+  __m256 r = _mm256_fmadd_ps(op1, op2, addend);
+  if (__builtin_expect(!neon_emu_any_nan8(r), 1)) return r;
+  return neon_emu_fma8_nan(r, addend, op1, op2);
+}
 // FMLS: op1 negated first, a NaN's sign included.
 NEON_EMU_SI __m256 neon_emu_fms8(__m256 addend, __m256 op1, __m256 op2) {
   return neon_emu_fma8(addend, _mm256_xor_ps(op1, _mm256_castsi256_ps(_mm256_set1_epi32((int)0x80000000u))), op2);
 }
 // FMIN / FMAX: equal lanes (+0 and -0) take the sign rule; NaN lanes FPProcessNaNs.
+NEON_EMU_COLD __m256 neon_emu_min8_nan(__m256 r, __m256 x, __m256 y) {
+  __m256i any, prop = neon_emu_nans8(_mm256_castps_si256(x), _mm256_castps_si256(y), _mm256_castps_si256(y), &any);
+  return _mm256_castsi256_ps(neon_emu_sel8(any, prop, _mm256_castps_si256(r)));
+}
 NEON_EMU_SI __m256 neon_emu_min8(__m256 x, __m256 y) {
   __m256 r = _mm256_blendv_ps(_mm256_min_ps(x, y), _mm256_or_ps(x, y), _mm256_cmp_ps(x, y, _CMP_EQ_OQ));
-  if (!_mm256_movemask_ps(_mm256_cmp_ps(x, y, _CMP_UNORD_Q))) return r;
+  if (__builtin_expect(!_mm256_movemask_ps(_mm256_cmp_ps(x, y, _CMP_UNORD_Q)), 1)) return r;
+  return neon_emu_min8_nan(r, x, y);
+}
+NEON_EMU_COLD __m256 neon_emu_max8_nan(__m256 r, __m256 x, __m256 y) {
   __m256i any, prop = neon_emu_nans8(_mm256_castps_si256(x), _mm256_castps_si256(y), _mm256_castps_si256(y), &any);
   return _mm256_castsi256_ps(neon_emu_sel8(any, prop, _mm256_castps_si256(r)));
 }
 NEON_EMU_SI __m256 neon_emu_max8(__m256 x, __m256 y) {
   __m256 r = _mm256_blendv_ps(_mm256_max_ps(x, y), _mm256_and_ps(x, y), _mm256_cmp_ps(x, y, _CMP_EQ_OQ));
-  if (!_mm256_movemask_ps(_mm256_cmp_ps(x, y, _CMP_UNORD_Q))) return r;
-  __m256i any, prop = neon_emu_nans8(_mm256_castps_si256(x), _mm256_castps_si256(y), _mm256_castps_si256(y), &any);
-  return _mm256_castsi256_ps(neon_emu_sel8(any, prop, _mm256_castps_si256(r)));
+  if (__builtin_expect(!_mm256_movemask_ps(_mm256_cmp_ps(x, y, _CMP_UNORD_Q)), 1)) return r;
+  return neon_emu_max8_nan(r, x, y);
 }
 NEON_EMU_SI __m256 neon_emu_abs8(__m256 x) {
   return _mm256_and_ps(x, _mm256_castsi256_ps(_mm256_set1_epi32(0x7fffffff)));
@@ -110,15 +124,24 @@ NEON_EMU_SI __m256 neon_emu_abs8(__m256 x) {
 // FRINTM / FRINTP: a NaN comes back quieted, as ROUNDPS gives it.
 NEON_EMU_SI __m256 neon_emu_floor8(__m256 x) { return _mm256_floor_ps(x); }
 NEON_EMU_SI __m256 neon_emu_ceil8(__m256 x) { return _mm256_ceil_ps(x); }
+NEON_EMU_COLD __m256 neon_emu_sqrt8_slow(__m256 x) {
+  return neon_emu_join8(vsqrtq_f32(neon_emu_lo8(x)), vsqrtq_f32(neon_emu_hi8(x)));
+}
 NEON_EMU_SI __m256 neon_emu_sqrt8(__m256 x) {
   if (!_mm256_movemask_ps(_mm256_or_ps(_mm256_cmp_ps(x, x, _CMP_UNORD_Q),
                                        _mm256_cmp_ps(x, _mm256_setzero_ps(), _CMP_LT_OQ)))) {
     return _mm256_sqrt_ps(x);
   }
-  return neon_emu_join8(vsqrtq_f32(neon_emu_lo8(x)), vsqrtq_f32(neon_emu_hi8(x)));
+  return neon_emu_sqrt8_slow(x);
 }
 
 // FRECPE / FRSQRTE: the table, for normal inputs whose result is normal.
+NEON_EMU_COLD __m256 neon_emu_recpe8_slow(__m256 a) {
+  return neon_emu_join8(vrecpeq_f32(neon_emu_lo8(a)), vrecpeq_f32(neon_emu_hi8(a)));
+}
+NEON_EMU_COLD __m256 neon_emu_rsqrte8_slow(__m256 a) {
+  return neon_emu_join8(vrsqrteq_f32(neon_emu_lo8(a)), vrsqrteq_f32(neon_emu_hi8(a)));
+}
 NEON_EMU_SI __m256 neon_emu_recpe8(__m256 a) {
   __m256i u = _mm256_castps_si256(a), e = neon_emu_exp8(u);
   if (neon_emu_all8(neon_emu_within8(e, 1, 252))) {
@@ -128,7 +151,7 @@ NEON_EMU_SI __m256 neon_emu_recpe8(__m256 a) {
     __m256i sign = _mm256_and_si256(u, _mm256_set1_epi32((int)0x80000000u));
     return _mm256_castsi256_ps(_mm256_or_si256(_mm256_or_si256(sign, re), f));
   }
-  return neon_emu_join8(vrecpeq_f32(neon_emu_lo8(a)), vrecpeq_f32(neon_emu_hi8(a)));
+  return neon_emu_recpe8_slow(a);
 }
 NEON_EMU_SI __m256 neon_emu_rsqrte8(__m256 a) {
   __m256i u = _mm256_castps_si256(a), e = neon_emu_exp8(u);
@@ -142,19 +165,22 @@ NEON_EMU_SI __m256 neon_emu_rsqrte8(__m256 a) {
     __m256i re = _mm256_slli_epi32(_mm256_srli_epi32(_mm256_sub_epi32(_mm256_set1_epi32(380), e), 1), 23);
     return _mm256_castsi256_ps(_mm256_or_si256(re, f));
   }
-  return neon_emu_join8(vrsqrteq_f32(neon_emu_lo8(a)), vrsqrteq_f32(neon_emu_hi8(a)));
+  return neon_emu_rsqrte8_slow(a);
 }
 // FRECPS: 2 - a*b rounded once; FRSQRTS: (3 - a*b) / 2 (see vrecpsq_f32).
-NEON_EMU_SI __m256 neon_emu_recps8(__m256 a, __m256 b) {
-  __m256 r0 = _mm256_fnmadd_ps(a, b, _mm256_set1_ps(2.0f));
-  if (!neon_emu_any_nan8(r0)) return r0;
+NEON_EMU_COLD __m256 neon_emu_recps8_nan(__m256 r0, __m256 a, __m256 b) {
   __m256i na = _mm256_xor_si256(_mm256_castps_si256(a), _mm256_set1_epi32((int)0x80000000u)),
           ub = _mm256_castps_si256(b), any;
   __m256i prop = neon_emu_nans8(na, ub, ub, &any);
   __m256i r = neon_emu_sel8(neon_emu_infzero8(na, ub), _mm256_set1_epi32(0x40000000), _mm256_castps_si256(r0));
   return _mm256_castsi256_ps(neon_emu_sel8(any, prop, r));
 }
-NEON_EMU_SI __m256 neon_emu_rsqrts8(__m256 a, __m256 b) {
+NEON_EMU_SI __m256 neon_emu_recps8(__m256 a, __m256 b) {
+  __m256 r0 = _mm256_fnmadd_ps(a, b, _mm256_set1_ps(2.0f));
+  if (__builtin_expect(!neon_emu_any_nan8(r0), 1)) return r0;
+  return neon_emu_recps8_nan(r0, a, b);
+}
+NEON_EMU_COLD __m256 neon_emu_rsqrts8_slow(__m256 a, __m256 b) {
   __m256i ua = _mm256_castps_si256(a), ub = _mm256_castps_si256(b);
   __m256i ea = neon_emu_exp8(ua), eb = neon_emu_exp8(ub), ff = _mm256_set1_epi32(0xff);
   __m256i special = _mm256_or_si256(_mm256_cmpeq_epi32(ea, ff), _mm256_cmpeq_epi32(eb, ff));
@@ -171,22 +197,40 @@ NEON_EMU_SI __m256 neon_emu_rsqrts8(__m256 a, __m256 b) {
   __m256i r = neon_emu_sel8(neon_emu_infzero8(na, ub), _mm256_set1_epi32(0x3fc00000), _mm256_castps_si256(half));
   return _mm256_castsi256_ps(neon_emu_sel8(any, prop, r));
 }
+// The common case first: biased exponents summing to 379 or less (a*b well
+// below overflow; an infinity times a small finite stays an exact infinity),
+// and no NaN made.
+NEON_EMU_SI __m256 neon_emu_rsqrts8(__m256 a, __m256 b) {
+  __m256i e = _mm256_add_epi32(neon_emu_exp8(_mm256_castps_si256(a)), neon_emu_exp8(_mm256_castps_si256(b)));
+  __m256 r0 = _mm256_fnmadd_ps(a, b, _mm256_set1_ps(3.0f));
+  __m256i bad = _mm256_or_si256(_mm256_cmpgt_epi32(e, _mm256_set1_epi32(379)),
+                                _mm256_castps_si256(_mm256_cmp_ps(r0, r0, _CMP_UNORD_Q)));
+  if (__builtin_expect(_mm256_testz_si256(bad, bad), 1)) return _mm256_mul_ps(r0, _mm256_set1_ps(0.5f));
+  return neon_emu_rsqrts8_slow(a, b);
+}
 
 // FCVTNS / FCVTNU: CVTPS2DQ (round to nearest even) for lanes in range.
+NEON_EMU_COLD __m256i neon_emu_cvtns8_slow(__m256 x) {
+  return neon_emu_join8i((__m128i)vcvtnq_s32_f32(neon_emu_lo8(x)), (__m128i)vcvtnq_s32_f32(neon_emu_hi8(x)));
+}
 NEON_EMU_SI __m256i neon_emu_cvtns8(__m256 x) {
   if (_mm256_movemask_ps(_mm256_and_ps(_mm256_cmp_ps(x, _mm256_set1_ps(-2147483648.0f), _CMP_GE_OQ),
                                        _mm256_cmp_ps(x, _mm256_set1_ps(2147483648.0f), _CMP_LT_OQ))) == 0xff) {
     return _mm256_cvtps_epi32(x);
   }
-  return neon_emu_join8i((__m128i)vcvtnq_s32_f32(neon_emu_lo8(x)), (__m128i)vcvtnq_s32_f32(neon_emu_hi8(x)));
+  return neon_emu_cvtns8_slow(x);
+}
+NEON_EMU_COLD __m256i neon_emu_cvtnu8_slow(__m256 x) {
+  return neon_emu_join8i((__m128i)vcvtnq_u32_f32(neon_emu_lo8(x)), (__m128i)vcvtnq_u32_f32(neon_emu_hi8(x)));
 }
 NEON_EMU_SI __m256i neon_emu_cvtnu8(__m256 x) {
   if (_mm256_movemask_ps(_mm256_and_ps(_mm256_cmp_ps(x, _mm256_setzero_ps(), _CMP_GE_OQ),
                                        _mm256_cmp_ps(x, _mm256_set1_ps(2147483648.0f), _CMP_LT_OQ))) == 0xff) {
     return _mm256_cvtps_epi32(x);
   }
-  return neon_emu_join8i((__m128i)vcvtnq_u32_f32(neon_emu_lo8(x)), (__m128i)vcvtnq_u32_f32(neon_emu_hi8(x)));
+  return neon_emu_cvtnu8_slow(x);
 }
 
+#undef NEON_EMU_COLD
 #endif  // NEON_EMU_FAST
 #endif  // SkNeonEmuWide_DEFINED
