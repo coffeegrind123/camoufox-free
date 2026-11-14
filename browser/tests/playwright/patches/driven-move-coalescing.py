@@ -85,15 +85,9 @@ def main() -> int:
         failures.append(f"{len(moves)} pointermoves for {STEPS} moves at 125 Hz: stock dispatches one per frame")
     if sorted(lens)[len(lens) // 2] < 2:
         failures.append(f"coalesced lengths {lens}: stock carries 2 to 4 per frame")
-    # The pointer moves in device pixels, so under a fractional drawn scale or
-    # zoom the page reads its own coordinate back to within a CSS pixel
-    # (415.2 for 415), in stock Firefox as here.
-    def at(point, x, y):
-        return abs(point[0] - x) <= 1 and abs(point[1] - y) <= 1
-
-    if not moves or not at(moves[-1][1:], 100 + STEPS * 5, 100 + STEPS * 2):
+    if not moves or moves[-1][1:] != [100 + STEPS * 5, 100 + STEPS * 2]:
         failures.append(f"the page's last move is {moves[-1] if moves else None} when move() returned")
-    if not at(last[1:], 700, 500):
+    if last[1:] != [700, 500]:
         failures.append(f"after move(700, 500) returned, the page's last move is {last}")
     for failure in failures:
         print(f"FAIL: {failure}")
