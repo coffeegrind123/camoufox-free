@@ -3,6 +3,10 @@
 Check SkCpuEstimates.h with the shipped tables against real CPUs.
 
     python3 browser/tests/cpu-estimates/check.py
+    python3 browser/tests/cpu-estimates/check.py --bench
+
+--bench only times the native instructions against both vendors' emulation
+(ns per vector, data in L1), and needs an AVX2 host.
 
 On an Intel or AMD host, the emulation of the host's vendor must give the
 native RCPPS/RSQRTPS bits for every one of the 2^32 inputs. For both vendors,
@@ -30,7 +34,19 @@ def host_has_avx2():
         return False
 
 
+def bench():
+    if not host_has_avx2():
+        sys.exit("--bench needs an AVX2 host")
+    vexe = build(tables=True, avx2=True)
+    for index, vendor in VENDORS.items():
+        print(f"{vendor} emulation:", flush=True)
+        subprocess.run([vexe, "bench", index], check=True)
+
+
 def main():
+    if "--bench" in sys.argv[1:]:
+        bench()
+        return
     exe = build(tables=True)
     prov = json.loads(PROVENANCE.read_text())
     failed = False

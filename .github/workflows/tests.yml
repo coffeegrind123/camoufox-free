@@ -291,6 +291,13 @@ jobs:
         # browser-level check is the cpu-vendor-estimates patch guard.
         run: python3 browser/tests/neon-emu/check.py
 
+      - name: Other x86 vendor's estimates, speed
+        # ns per vector of RCPPS/RSQRTPS against SkCpuEstimates.h's emulation
+        # of each vendor, data in L1. The bit-exact comparison runs in
+        # ci/tests (test_cpu_estimates); the browser-level timing check is
+        # the cpu-emulation-timing patch guard.
+        run: python3 browser/tests/cpu-estimates/check.py --bench
+
       - name: Juggler input planners and pacing
         # The cursor and wheel planners, the pacer and the delays are plain ES
         # modules, so they run under Node without a browser build.
