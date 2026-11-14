@@ -28,6 +28,18 @@ opus_val32 celt_deemphasis_neonemu(opus_res *y, const opus_val32 *x,
       opus_val16 coef, opus_val32 m, int N);
 void deemphasis_stereo_simple_neonemu(celt_sig *in[], opus_res *pcm, int N,
       opus_val16 coef, celt_sig *mem);
+
+/* The kernels built for AVX2 and FMA (celt_neonemu_fma.c,
+   celt_tx_neonemu_fma.c), where a fused multiply-add is one instruction
+   rather than a libm call; the same bits. Each kernel of the baseline build
+   hands over to its twin when this says the CPU has them (x86cpu.c). */
+int celt_neonemu_use_fma(void);
+opus_val32 celt_inner_prod_neonemu_fma(const opus_val16 *x, const opus_val16 *y, int N);
+void dual_inner_prod_neonemu_fma(const opus_val16 *x, const opus_val16 *y01, const opus_val16 *y02, int N, opus_val32 *xy1, opus_val32 *xy2);
+void celt_pitch_xcorr_neonemu_fma(const opus_val16 *_x, const opus_val16 *_y, opus_val32 *xcorr, int len, int max_pitch);
+void comb_filter_const_neonemu_fma(opus_val32 *y, opus_val32 *x, int T, int N, opus_val16 g10, opus_val16 g11, opus_val16 g12);
+opus_val32 celt_deemphasis_neonemu_fma(opus_res *y, const opus_val32 *x, opus_val16 coef, opus_val32 m, int N);
+void deemphasis_stereo_simple_neonemu_fma(celt_sig *in[], opus_res *pcm, int N, opus_val16 coef, celt_sig *mem);
 #endif
 
 #endif

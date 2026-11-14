@@ -34,7 +34,7 @@
 #include "src/opts/SkRasterPipeline_opts.h"
 
 namespace SkOpts {
-    void Init_neonemu() {
+    void SK_NEON_EMU_NAME(Init_neonemu)() {
         raster_pipeline_lowp_stride  = SK_OPTS_NS::raster_pipeline_lowp_stride();
         raster_pipeline_highp_stride = SK_OPTS_NS::raster_pipeline_highp_stride();
 

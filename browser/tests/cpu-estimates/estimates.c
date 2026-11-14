@@ -5,10 +5,16 @@
  *   estimates hash V          hashes of the emulation of vendor V (1 Intel, 2 AMD)
  *   estimates check V         emulation of vendor V vs this CPU, every input
  *   estimates vendor          this CPU's vendor (1, 2, or 0 for another)
+ *   estimates vcheck V        the SSE2 and AVX2 functions vs the scalar ones for
+ *                             vendor V, every input (built with -mavx2)
+ *   estimates bench V         ns per vector of the native instructions and of the
+ *                             SSE2 and AVX2 emulation of vendor V (built with -mavx2)
  *
  * The hashes are FNV-1a over the outputs for inputs 0 .. 2^32-1. Built with
  * -DTABLES for hash/check, which need SkCpuEstimateTables.h. */
+#define _POSIX_C_SOURCE 199309L /* clock_gettime under -std=c99 */
 #include <cpuid.h>
+#include <time.h>
 #include <immintrin.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -40,6 +46,37 @@ static int host_vendor(void) {
   if (!strcmp(id, "AuthenticAMD")) return SK_CPU_VENDOR_AMD;
   return 0;
 }
+
+#if defined(TABLES) && defined(__AVX2__)
+static double now_ns(void) {
+  struct timespec ts;
+  clock_gettime(CLOCK_MONOTONIC, &ts);
+  return ts.tv_sec * 1e9 + ts.tv_nsec;
+}
+
+/* What a blend feeds rcp: values on (0, 1], one lane in eight 0 (sa - s where
+ * s == sa). The buffer stays in L1, so this times the arithmetic, not memory. */
+#define BENCH_N 1024
+#define BENCH_REPS 20000
+static uint32_t bench_in[BENCH_N], bench_out[BENCH_N];
+
+#define BENCH(label, W, LOAD, STORE, EXPR)                                        \
+  do {                                                                           \
+    double best = 1e30;                                                          \
+    for (int rep = 0; rep < 5; rep++) {                                          \
+      double t0 = now_ns();                                                      \
+      for (int k = 0; k < BENCH_REPS; k++) {                                     \
+        for (int i = 0; i < BENCH_N; i += W) {                                   \
+          STORE(bench_out + i, EXPR(LOAD(bench_in + i)));                        \
+        }                                                                        \
+        __asm__ volatile("" ::: "memory"); /* no hoisting the repeats */         \
+      }                                                                          \
+      double dt = (now_ns() - t0) / ((double)BENCH_REPS * BENCH_N / W);          \
+      best = dt < best ? dt : best;                                              \
+    }                                                                            \
+    printf("  %-12s %6.2f ns/vector of %d\n", label, best, W);                   \
+  } while (0)
+#endif
 
 #define FNV0 1469598103934665603ull
 #define FNV(h, x) ((h) = ((h) ^ (x)) * 1099511628211ull)
@@ -92,7 +129,78 @@ int main(int argc, char** argv) {
     }
     return bad;
   }
+#ifdef __AVX2__
+  if (argc > 2 && !strcmp(argv[1], "vcheck")) {
+    const uint32_t* t = kSkCpuEstimateTables[atoi(argv[2]) - 1];
+    uint64_t bad[4] = {0};
+    uint32_t first[4] = {0};
+    for (uint64_t x = 0; x < (1ull << 32); x += 8) {
+      uint32_t in[8], want[2][8], got[4][8];
+      for (int i = 0; i < 8; i++) {
+        in[i] = (uint32_t)(x + i);
+        want[0][i] = sk_cpu_estimate_rcp(t, in[i]);
+        want[1][i] = sk_cpu_estimate_rsqrt(t, in[i]);
+      }
+      __m256i v8 = _mm256_loadu_si256((const __m256i*)in);
+      _mm256_storeu_si256((__m256i*)got[0], sk_cpu_estimate_rcp_avx2(t, v8));
+      _mm256_storeu_si256((__m256i*)got[1], sk_cpu_estimate_rsqrt_avx2(t, v8));
+      for (int h = 0; h < 2; h++) {
+        __m128i v4 = _mm_loadu_si128((const __m128i*)(in + 4 * h));
+        _mm_storeu_si128((__m128i*)(got[2] + 4 * h), sk_cpu_estimate_rcp_sse2(t, v4));
+        _mm_storeu_si128((__m128i*)(got[3] + 4 * h), sk_cpu_estimate_rsqrt_sse2(t, v4));
+      }
+      for (int k = 0; k < 4; k++) {
+        for (int i = 0; i < 8; i++) {
+          if (got[k][i] != want[k & 1][i] && !bad[k]++) first[k] = in[i];
+        }
+      }
+    }
+    static const char* names[4] = {"avx2 rcp", "avx2 rsqrt", "sse2 rcp", "sse2 rsqrt"};
+    int failed = 0;
+    for (int k = 0; k < 4; k++) {
+      printf("%s mismatches %llu", names[k], (unsigned long long)bad[k]);
+      if (bad[k]) printf(" (first input %08x)", first[k]);
+      printf("\n");
+      failed |= bad[k] != 0;
+    }
+    return failed;
+  }
+  if (argc > 2 && !strcmp(argv[1], "bench")) {
+    const uint32_t* t = kSkCpuEstimateTables[atoi(argv[2]) - 1];
+    uint64_t x = 88172645463325252ull;
+    for (int i = 0; i < BENCH_N; i++) {
+      x ^= x << 13, x ^= x >> 7, x ^= x << 17;
+      float f = (i & 7) == 3 ? 0.0f : (float)((x >> 40) + 1) / (float)(1 << 24);
+      memcpy(&bench_in[i], &f, 4);
+    }
+#define LD4(p) _mm_loadu_si128((const __m128i*)(const void*)(p))
+#define ST4(p, v) _mm_storeu_si128((__m128i*)(void*)(p), (v))
+#define LD8(p) _mm256_loadu_si256((const __m256i*)(const void*)(p))
+#define ST8(p, v) _mm256_storeu_si256((__m256i*)(void*)(p), (v))
+#define NRCP4(v) _mm_castps_si128(_mm_rcp_ps(_mm_castsi128_ps(v)))
+#define NRSQ4(v) _mm_castps_si128(_mm_rsqrt_ps(_mm_castsi128_ps(v)))
+#define NRCP8(v) _mm256_castps_si256(_mm256_rcp_ps(_mm256_castsi256_ps(v)))
+#define NRSQ8(v) _mm256_castps_si256(_mm256_rsqrt_ps(_mm256_castsi256_ps(v)))
+#define ERCP4(v) sk_cpu_estimate_rcp_sse2(t, v)
+#define ERSQ4(v) sk_cpu_estimate_rsqrt_sse2(t, v)
+#define ERCP8(v) sk_cpu_estimate_rcp_avx2(t, v)
+#define ERSQ8(v) sk_cpu_estimate_rsqrt_avx2(t, v)
+#define FRCP8(v) sk_cpu_estimate_rcp_avx2_full(t, v)
+#define FRSQ8(v) sk_cpu_estimate_rsqrt_avx2_full(t, v)
+    BENCH("native rcp", 8, LD8, ST8, NRCP8);
+    BENCH("avx2 rcp", 8, LD8, ST8, ERCP8);
+    BENCH("full rcp", 8, LD8, ST8, FRCP8);
+    BENCH("native rsqrt", 8, LD8, ST8, NRSQ8);
+    BENCH("avx2 rsqrt", 8, LD8, ST8, ERSQ8);
+    BENCH("full rsqrt", 8, LD8, ST8, FRSQ8);
+    BENCH("native rcp", 4, LD4, ST4, NRCP4);
+    BENCH("sse2 rcp", 4, LD4, ST4, ERCP4);
+    BENCH("native rsqrt", 4, LD4, ST4, NRSQ4);
+    BENCH("sse2 rsqrt", 4, LD4, ST4, ERSQ4);
+    return 0;
+  }
 #endif
-  fprintf(stderr, "usage: estimates dump | vendor | hash V | check V\n");
+#endif
+  fprintf(stderr, "usage: estimates dump | vendor | hash V | check V | vcheck V | bench V\n");
   return 2;
 }

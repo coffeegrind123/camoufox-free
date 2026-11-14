@@ -34,9 +34,9 @@
 #include "src/opts/SkBitmapProcState_opts.h"
 
 namespace SkOpts {
-    void Init_BitmapProcState_neonemu() {
-        S32_alpha_D32_filter_DX   = neonemu::S32_alpha_D32_filter_DX;
-        S32_alpha_D32_filter_DXDY = neonemu::S32_alpha_D32_filter_DXDY;
+    void SK_NEON_EMU_NAME(Init_BitmapProcState_neonemu)() {
+        S32_alpha_D32_filter_DX   = SK_OPTS_NS::S32_alpha_D32_filter_DX;
+        S32_alpha_D32_filter_DXDY = SK_OPTS_NS::S32_alpha_D32_filter_DXDY;
     }
 }  // namespace SkOpts
 

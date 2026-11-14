@@ -55,9 +55,17 @@ bool sk_cpu_emulates_arm64() {
   return mozilla::StaticPrefs::general_cpu_identity() == SK_CPU_IDENTITY_ARM64;
 }
 
+const uint32_t* gSkCpuEstimatesForPipeline = nullptr;
+
+void sk_cpu_estimates_init_pipeline() { gSkCpuEstimatesForPipeline = sk_cpu_estimates(); }
+
 #else
 
 const uint32_t* sk_cpu_estimates() { return nullptr; }
+
+const uint32_t* gSkCpuEstimatesForPipeline = nullptr;
+
+void sk_cpu_estimates_init_pipeline() {}
 
 bool sk_cpu_emulates_arm64() { return false; }
 

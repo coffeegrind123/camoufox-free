@@ -34,19 +34,19 @@
 #include "src/opts/SkSwizzler_opts.inc"
 
 namespace SkOpts {
-    void Init_Swizzler_neonemu() {
-        RGBA_to_BGRA          = neonemu::RGBA_to_BGRA;
-        RGBA_to_rgbA          = neonemu::RGBA_to_rgbA;
-        RGBA_to_bgrA          = neonemu::RGBA_to_bgrA;
-        rgbA_to_RGBA          = neonemu::rgbA_to_RGBA;
-        rgbA_to_BGRA          = neonemu::rgbA_to_BGRA;
-        RGB_to_RGB1           = neonemu::RGB_to_RGB1;
-        RGB_to_BGR1           = neonemu::RGB_to_BGR1;
-        gray_to_RGB1          = neonemu::gray_to_RGB1;
-        grayA_to_RGBA         = neonemu::grayA_to_RGBA;
-        grayA_to_rgbA         = neonemu::grayA_to_rgbA;
-        inverted_CMYK_to_RGB1 = neonemu::inverted_CMYK_to_RGB1;
-        inverted_CMYK_to_BGR1 = neonemu::inverted_CMYK_to_BGR1;
+    void SK_NEON_EMU_NAME(Init_Swizzler_neonemu)() {
+        RGBA_to_BGRA          = SK_OPTS_NS::RGBA_to_BGRA;
+        RGBA_to_rgbA          = SK_OPTS_NS::RGBA_to_rgbA;
+        RGBA_to_bgrA          = SK_OPTS_NS::RGBA_to_bgrA;
+        rgbA_to_RGBA          = SK_OPTS_NS::rgbA_to_RGBA;
+        rgbA_to_BGRA          = SK_OPTS_NS::rgbA_to_BGRA;
+        RGB_to_RGB1           = SK_OPTS_NS::RGB_to_RGB1;
+        RGB_to_BGR1           = SK_OPTS_NS::RGB_to_BGR1;
+        gray_to_RGB1          = SK_OPTS_NS::gray_to_RGB1;
+        grayA_to_RGBA         = SK_OPTS_NS::grayA_to_RGBA;
+        grayA_to_rgbA         = SK_OPTS_NS::grayA_to_rgbA;
+        inverted_CMYK_to_RGB1 = SK_OPTS_NS::inverted_CMYK_to_RGB1;
+        inverted_CMYK_to_BGR1 = SK_OPTS_NS::inverted_CMYK_to_BGR1;
     }
 }  // namespace SkOpts
 

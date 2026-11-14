@@ -33,23 +33,23 @@
 
 #include "src/opts/SkBlitRow_opts.h"
 
-namespace neonemu_d32 {
+namespace SK_NEON_EMU_NAME(neonemu_d32) {
 #include "src/core/SkBlitRow_D32_neon.inc"
-}  // namespace neonemu_d32
+}  // namespace SK_NEON_EMU_NAME(neonemu_d32)
 
 namespace SkOpts {
-    void neonemu_blit_row_s32_blend(SkPMColor* dst, const SkPMColor* src, int count,
+    void SK_NEON_EMU_NAME(neonemu_blit_row_s32_blend)(SkPMColor* dst, const SkPMColor* src, int count,
                                     U8CPU alpha) {
-        neonemu_d32::blit_row_s32_blend(dst, src, count, alpha);
+        SK_NEON_EMU_NAME(neonemu_d32)::blit_row_s32_blend(dst, src, count, alpha);
     }
-    void neonemu_blit_row_s32a_blend(SkPMColor* dst, const SkPMColor* src, int count,
+    void SK_NEON_EMU_NAME(neonemu_blit_row_s32a_blend)(SkPMColor* dst, const SkPMColor* src, int count,
                                      U8CPU alpha) {
-        neonemu_d32::blit_row_s32a_blend(dst, src, count, alpha);
+        SK_NEON_EMU_NAME(neonemu_d32)::blit_row_s32a_blend(dst, src, count, alpha);
     }
 
-    void Init_BlitRow_neonemu() {
-        blit_row_color32     = neonemu::blit_row_color32;
-        blit_row_s32a_opaque = neonemu::blit_row_s32a_opaque;
+    void SK_NEON_EMU_NAME(Init_BlitRow_neonemu)() {
+        blit_row_color32     = SK_OPTS_NS::blit_row_color32;
+        blit_row_s32a_opaque = SK_OPTS_NS::blit_row_s32a_opaque;
     }
 }  // namespace SkOpts
 
