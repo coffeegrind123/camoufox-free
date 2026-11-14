@@ -1610,13 +1610,16 @@ index adfbdc30f0..6245760d93 100644
      void Init_ml4();
      void Init_lasx();
  
-@@ -63,6 +65,11 @@ namespace SkOpts {
+@@ -63,6 +65,15 @@ namespace SkOpts {
              #endif
          #endif
  
++        // The vendor table the raster pipeline reads (sk_cpu_estimates_cached).
++        sk_cpu_estimates_init_pipeline();
 +        // general.cpu_identity = ARM64: Skia's AArch64 code, emulated.
 +        if (sk_cpu_emulates_arm64()) { Init_neonemu(); }
 +    #elif defined(SK_CPU_ARM64)
++        sk_cpu_estimates_init_pipeline();
 +        // general.cpu_identity = Intel or AMD: Skia's x86-64 code, emulated.
 +        if (sk_cpu_emulates_x86()) { Init_ml3(); }
      #elif defined(SK_CPU_LOONGARCH)
@@ -1784,7 +1787,7 @@ diff --git a/gfx/skia/skia/src/opts/SkCpuEstimates.h b/gfx/skia/skia/src/opts/Sk
 index ff13bd4b14..002e4e0519 100644
 --- a/gfx/skia/skia/src/opts/SkCpuEstimates.h
 +++ b/gfx/skia/skia/src/opts/SkCpuEstimates.h
-@@ -85,6 +85,11 @@ const uint32_t* sk_cpu_estimates();
+@@ -94,6 +94,11 @@ bool sk_cpu_emulates_arm64();
   * the opts tiers then switch to Skia's AArch64 code, built against
   * SkNeonEmu.h (the _neonemu.cpp files). */
  bool sk_cpu_emulates_arm64();
@@ -1935,11 +1938,11 @@ index 9a0edd9594..711a5501b6 100644
 +        return sk_bit_cast<F>(bits);
 +    }
 +    SI F   rcp_approx(F v)   {  // use rcp_fast instead
-+        if (const uint32_t* table = sk_cpu_estimates()) { return estimate_as<sk_cpu_estimate_rcp>(table, v); }
++        if (const uint32_t* table = sk_cpu_estimates_cached()) { return estimate_as<sk_cpu_estimate_rcp>(table, v); }
 +        return _mm256_rcp_ps  (v);
 +    }
 +    SI F   rsqrt_approx(F v) {
-+        if (const uint32_t* table = sk_cpu_estimates()) { return estimate_as<sk_cpu_estimate_rsqrt>(table, v); }
++        if (const uint32_t* table = sk_cpu_estimates_cached()) { return estimate_as<sk_cpu_estimate_rsqrt>(table, v); }
 +        return _mm256_rsqrt_ps(v);
 +    }
      SI F   sqrt_ (F v)       { return _mm256_sqrt_ps (v);    }
@@ -1958,13 +1961,13 @@ index 9a0edd9594..711a5501b6 100644
 +        return sk_bit_cast<F>(bits);
 +    }
 +    SI F   rcp_approx(F v)     {  // use rcp_fast instead
-+        if (const uint32_t* table = sk_cpu_estimates()) { return estimate_as<sk_cpu_estimate_rcp>(table, v); }
++        if (const uint32_t* table = sk_cpu_estimates_cached()) { return estimate_as<sk_cpu_estimate_rcp>(table, v); }
 +        return _mm_rcp_ps  (v);
 +    }
      SI F   rcp_precise (F v)   { F e = rcp_approx(v); return e * (2.0f - v * e); }
 -    SI F   rsqrt_approx(F v)   { return _mm_rsqrt_ps(v);    }
 +    SI F   rsqrt_approx(F v)   {
-+        if (const uint32_t* table = sk_cpu_estimates()) { return estimate_as<sk_cpu_estimate_rsqrt>(table, v); }
++        if (const uint32_t* table = sk_cpu_estimates_cached()) { return estimate_as<sk_cpu_estimate_rsqrt>(table, v); }
 +        return _mm_rsqrt_ps(v);
 +    }
      SI F    sqrt_(F v)         { return _mm_sqrt_ps (v);    }
@@ -1988,7 +1991,7 @@ index e5c506b55e..695820d10b 100644
      #include <lasxintrin.h>
  #elif SK_CPU_LSX_LEVEL >= SK_CPU_LSX_LEVEL_LSX
 diff --git a/gfx/skia/skia/src/ports/SkCpuEstimates_mozilla.cpp b/gfx/skia/skia/src/ports/SkCpuEstimates_mozilla.cpp
-index 4408a74d1f..cdf1742f52 100644
+index d4abf0697c..bd75fbd848 100644
 --- a/gfx/skia/skia/src/ports/SkCpuEstimates_mozilla.cpp
 +++ b/gfx/skia/skia/src/ports/SkCpuEstimates_mozilla.cpp
 @@ -5,7 +5,8 @@
@@ -2001,7 +2004,7 @@ index 4408a74d1f..cdf1742f52 100644
  
  #include "include/core/SkTypes.h"
  
-@@ -55,10 +56,35 @@ bool sk_cpu_emulates_arm64() {
+@@ -55,12 +56,37 @@
    return mozilla::StaticPrefs::general_cpu_identity() == SK_CPU_IDENTITY_ARM64;
  }
  
@@ -2037,6 +2040,8 @@ index 4408a74d1f..cdf1742f52 100644
 +bool sk_cpu_emulates_x86() { return false; }
 +
  #endif
+ 
+ // Every architecture's sk_cpu_estimates() above, resolved for the pipeline.
 diff --git a/js/public/Initialization.h b/js/public/Initialization.h
 index 26578b6efd..2e87dec987 100644
 --- a/js/public/Initialization.h
