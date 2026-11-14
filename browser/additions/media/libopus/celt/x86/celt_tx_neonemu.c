@@ -24,11 +24,21 @@
 
 #if defined(OPUS_X86_NEONEMU)
 
+#if defined(__SSE2__) || defined(_M_X64)
+#include <immintrin.h>
+#define NEONEMU_SSE 1
+#else
+#define NEONEMU_SSE 0
+#endif
+
 typedef union {
     float f[4];
     uint32_t s[4];
     uint64_t d[2];
     uint8_t b[16];
+#if NEONEMU_SSE
+    __m128 m;
+#endif
 } NV;
 
 typedef struct {
@@ -39,6 +49,41 @@ typedef struct {
 static const uint8_t kRodata[96] __attribute__((aligned(16))) = {0, 0, 128, 191, 0, 0, 128, 63, 0, 0, 128, 191, 0, 0, 128, 63, 243, 4, 53, 63, 243, 4, 53, 191, 243, 4, 53, 191, 243, 4, 53, 63, 94, 131, 108, 191, 94, 131, 108, 63, 21, 239, 195, 190, 21, 239, 195, 62, 21, 239, 195, 62, 21, 239, 195, 62, 94, 131, 108, 63, 94, 131, 108, 63, 0, 0, 128, 63, 0, 0, 128, 63, 243, 4, 53, 63, 243, 4, 53, 63, 0, 0, 128, 63, 0, 0, 128, 63, 0, 0, 128, 191, 0, 0, 128, 191};
 
 #define LANES4(expr) { NV r_; for (int i = 0; i < 4; i++) r_.f[i] = (expr); return r_; }
+#if NEONEMU_SSE
+/* Each packed operation gives every lane what the scalar C gives it. */
+#define NEONEMU_SIGN _mm_castsi128_ps(_mm_set1_epi32((int)0x80000000u))
+static inline NV nv_(__m128 v) { NV r_; r_.m = v; return r_; }
+static inline NV fadd_4s(NV d, NV n, NV m) { return nv_(_mm_add_ps(n.m, m.m)); }
+static inline NV fsub_4s(NV d, NV n, NV m) { return nv_(_mm_sub_ps(n.m, m.m)); }
+static inline NV fmul_4s(NV d, NV n, NV m) { return nv_(_mm_mul_ps(n.m, m.m)); }
+#if defined(__FMA__)
+static inline NV fmla_4s(NV d, NV n, NV m) { return nv_(_mm_fmadd_ps(n.m, m.m, d.m)); }
+/* fmaf(-n, m, d): the operand is negated first, as FMLS does. */
+static inline NV fmls_4s(NV d, NV n, NV m) { return nv_(_mm_fmadd_ps(_mm_xor_ps(n.m, NEONEMU_SIGN), m.m, d.m)); }
+#else
+static inline NV fmla_4s(NV d, NV n, NV m) LANES4(__builtin_fmaf(n.f[i], m.f[i], d.f[i]))
+static inline NV fmls_4s(NV d, NV n, NV m) LANES4(__builtin_fmaf(-n.f[i], m.f[i], d.f[i]))
+#endif
+static inline NV fneg_4s(NV n) { return nv_(_mm_xor_ps(n.m, NEONEMU_SIGN)); }
+static inline NV fneg_2s(NV n) {
+    __m128 low = _mm_castsi128_ps(_mm_set_epi32(0, 0, -1, -1));
+    return nv_(_mm_and_ps(_mm_xor_ps(n.m, NEONEMU_SIGN), low));
+}
+static inline NV rev64_4s(NV n) { return nv_(_mm_shuffle_ps(n.m, n.m, _MM_SHUFFLE(2, 3, 0, 1))); }
+/* {n0, m0, n2, m2} and {n1, m1, n3, m3} */
+static inline NV trn1_4s(NV d, NV n, NV m) {
+    __m128 t = _mm_shuffle_ps(n.m, m.m, _MM_SHUFFLE(2, 0, 2, 0));
+    return nv_(_mm_shuffle_ps(t, t, _MM_SHUFFLE(3, 1, 2, 0)));
+}
+static inline NV trn2_4s(NV d, NV n, NV m) {
+    __m128 t = _mm_shuffle_ps(n.m, m.m, _MM_SHUFFLE(3, 1, 3, 1));
+    return nv_(_mm_shuffle_ps(t, t, _MM_SHUFFLE(3, 1, 2, 0)));
+}
+static inline NV zip1_2d(NV d, NV n, NV m) { return nv_(_mm_movelh_ps(n.m, m.m)); }
+static inline NV zip2_2d(NV d, NV n, NV m) { return nv_(_mm_movehl_ps(m.m, n.m)); }
+static inline NV uzp1_2d(NV d, NV n, NV m) { return nv_(_mm_movelh_ps(n.m, m.m)); }
+static inline NV uzp2_2d(NV d, NV n, NV m) { return nv_(_mm_movehl_ps(m.m, n.m)); }
+#else
 static inline NV fadd_4s(NV d, NV n, NV m) LANES4(n.f[i] + m.f[i])
 static inline NV fsub_4s(NV d, NV n, NV m) LANES4(n.f[i] - m.f[i])
 static inline NV fmul_4s(NV d, NV n, NV m) LANES4(n.f[i] * m.f[i])
@@ -53,6 +98,7 @@ static inline NV zip1_2d(NV d, NV n, NV m) { NV r_; r_.d[0] = n.d[0]; r_.d[1] = 
 static inline NV zip2_2d(NV d, NV n, NV m) { NV r_; r_.d[0] = n.d[1]; r_.d[1] = m.d[1]; return r_; }
 static inline NV uzp1_2d(NV d, NV n, NV m) { NV r_; r_.d[0] = n.d[0]; r_.d[1] = m.d[0]; return r_; }
 static inline NV uzp2_2d(NV d, NV n, NV m) { NV r_; r_.d[0] = n.d[1]; r_.d[1] = m.d[1]; return r_; }
+#endif
 static inline NV ext16(NV n, NV m, int k) { NV r_; for (int i = 0; i < 16; i++) r_.b[i] = i + k < 16 ? n.b[i + k] : m.b[i + k - 16]; return r_; }
 
 #define LANES2(expr) { NV r_; for (int i = 0; i < 2; i++) r_.f[i] = (expr); r_.d[1] = 0; return r_; }
