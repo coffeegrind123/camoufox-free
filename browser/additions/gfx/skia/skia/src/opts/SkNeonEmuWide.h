@@ -87,9 +87,10 @@ NEON_EMU_SI __m256 neon_emu_nan_rules8(__m256 r, __m256i prop, __m256i any) {
 }
 
 // The rare paths (the 4-lane fallbacks for subnormal and out-of-range lanes)
-// are out of line and cold. The NaN rules stay inline: Skia's blends make NaN
-// lanes routinely (clip_color's 0/0), and a call there cost the
-// non-separable modes 20-35% (PR #40, an AMD runner, against inline).
+// are out of line and cold. The NaN lanes Skia's blends make routinely
+// (clip_color's 0/0) are handled inline: a call there cost the non-separable
+// modes 20-35% (PR #40, an AMD runner, against inline). Only lanes with two or
+// more NaN operands, which those blends do not make, call the full rules.
 #define NEON_EMU_COLD static __attribute__((noinline, cold, unused))
 
 // FMLA: addend + op1*op2 (neon_emu_fma_v).
