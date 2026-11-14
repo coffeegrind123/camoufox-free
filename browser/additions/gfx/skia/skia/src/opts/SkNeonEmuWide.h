@@ -103,19 +103,23 @@ NEON_EMU_COLD __m256 neon_emu_fma8_nan_full(__m256 r, __m256 addend, __m256 op1,
                                            _mm256_set1_epi32(0x7fc00000), _mm256_castps_si256(out)));
 }
 // The NaN lanes Skia's blends make (clip_color's l * 1/0 fed to a mad) carry
-// at most one NaN operand, or none. Then VFMADD and FMLA agree: one NaN
-// operand comes back quieted on both; the exceptions are a NaN made from
-// numbers (x86's default NaN is negative, Arm's positive) and a quiet NaN
-// addend with infinity times zero (Arm gives the default NaN). Those two are
-// selects here. A lane with two or more NaN operands, where the two ISAs'
-// priorities differ, takes the full rules, out of line.
+// at most one NaN operand, or none. One NaN operand gives that operand
+// quieted; it is taken from the operand, not from r, because the compiler
+// folds FMLS's negation into VFNMADD, which returns an operand NaN unnegated.
+// A NaN made from numbers is Arm's default NaN (x86's is negative), and a
+// quiet NaN addend with infinity times zero gives it too. A lane with two or
+// more NaN operands, where priorities decide, takes the full rules, out of line.
 NEON_EMU_SI __m256 neon_emu_fma8_nan(__m256 r, __m256 addend, __m256 op1, __m256 op2) {
   __m256 na = _mm256_cmp_ps(addend, addend, _CMP_UNORD_Q), nb = _mm256_cmp_ps(op1, op1, _CMP_UNORD_Q),
          nc = _mm256_cmp_ps(op2, op2, _CMP_UNORD_Q);
   __m256 multi = _mm256_or_ps(_mm256_and_ps(na, nb), _mm256_and_ps(_mm256_or_ps(na, nb), nc));
   if (__builtin_expect(_mm256_movemask_ps(multi) != 0, 0)) return neon_emu_fma8_nan_full(r, addend, op1, op2);
-  __m256 made = _mm256_andnot_ps(_mm256_or_ps(_mm256_or_ps(na, nb), nc), _mm256_cmp_ps(r, r, _CMP_UNORD_Q));
+  __m256 in = _mm256_or_ps(_mm256_or_ps(na, nb), nc);
+  __m256 one = _mm256_or_ps(_mm256_blendv_ps(_mm256_blendv_ps(op2, op1, nb), addend, na),
+                            _mm256_castsi256_ps(_mm256_set1_epi32(0x400000)));
+  __m256 made = _mm256_andnot_ps(in, _mm256_cmp_ps(r, r, _CMP_UNORD_Q));
   __m256i out = neon_emu_sel8(_mm256_castps_si256(made), _mm256_set1_epi32(0x7fc00000), _mm256_castps_si256(r));
+  out = neon_emu_sel8(_mm256_castps_si256(in), _mm256_castps_si256(one), out);
   if (_mm256_movemask_ps(na)) {
     __m256i a = _mm256_castps_si256(addend);
     __m256i qnan_addend = _mm256_andnot_si256(neon_emu_issnan8i(a), neon_emu_isnan8i(a));
