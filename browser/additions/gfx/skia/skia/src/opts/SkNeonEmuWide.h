@@ -63,6 +63,16 @@ NEON_EMU_SI __m256i neon_emu_nans8(__m256i x, __m256i y, __m256i z, __m256i* any
   r = neon_emu_sel8(neon_emu_issnan8i(x), _mm256_or_si256(x, q), r);
   return r;
 }
+// The same for two operands: four selects instead of six.
+NEON_EMU_SI __m256i neon_emu_nans8_2(__m256i x, __m256i y, __m256i* any) {
+  const __m256i q = _mm256_set1_epi32(0x400000);
+  __m256i nx = neon_emu_isnan8i(x), ny = neon_emu_isnan8i(y);
+  *any = _mm256_or_si256(nx, ny);
+  __m256i r = neon_emu_sel8(nx, x, y);
+  r = neon_emu_sel8(neon_emu_issnan8i(y), _mm256_or_si256(y, q), r);
+  r = neon_emu_sel8(neon_emu_issnan8i(x), _mm256_or_si256(x, q), r);
+  return r;
+}
 NEON_EMU_SI __m256i neon_emu_infzero8(__m256i x, __m256i y) {
   const __m256i abs = _mm256_set1_epi32(0x7fffffff), inf = _mm256_set1_epi32(0x7f800000),
                 zero = _mm256_setzero_si256();
@@ -76,13 +86,14 @@ NEON_EMU_SI __m256 neon_emu_nan_rules8(__m256 r, __m256i prop, __m256i any) {
   return _mm256_castsi256_ps(neon_emu_sel8(any, prop, out));
 }
 
-// The slow paths are out of line and cold, so each inlined helper is the x86
-// instruction, a compare and a branch: a stage with dozens of helpers keeps
-// its vectors in registers.
+// The rare paths (the 4-lane fallbacks for subnormal and out-of-range lanes)
+// are out of line and cold. The NaN rules stay inline: Skia's blends make NaN
+// lanes routinely (clip_color's 0/0), and a call there cost the
+// non-separable modes 20-35% (PR #40, an AMD runner, against inline).
 #define NEON_EMU_COLD static __attribute__((noinline, cold, unused))
 
 // FMLA: addend + op1*op2 (neon_emu_fma_v).
-NEON_EMU_COLD __m256 neon_emu_fma8_nan(__m256 r, __m256 addend, __m256 op1, __m256 op2) {
+NEON_EMU_SI __m256 neon_emu_fma8_nan(__m256 r, __m256 addend, __m256 op1, __m256 op2) {
   __m256i a = _mm256_castps_si256(addend), b = _mm256_castps_si256(op1), c = _mm256_castps_si256(op2), any;
   __m256i prop = neon_emu_nans8(a, b, c, &any);
   __m256 out = neon_emu_nan_rules8(r, prop, any);
@@ -100,8 +111,8 @@ NEON_EMU_SI __m256 neon_emu_fms8(__m256 addend, __m256 op1, __m256 op2) {
   return neon_emu_fma8(addend, _mm256_xor_ps(op1, _mm256_castsi256_ps(_mm256_set1_epi32((int)0x80000000u))), op2);
 }
 // FMIN / FMAX: equal lanes (+0 and -0) take the sign rule; NaN lanes FPProcessNaNs.
-NEON_EMU_COLD __m256 neon_emu_min8_nan(__m256 r, __m256 x, __m256 y) {
-  __m256i any, prop = neon_emu_nans8(_mm256_castps_si256(x), _mm256_castps_si256(y), _mm256_castps_si256(y), &any);
+NEON_EMU_SI __m256 neon_emu_min8_nan(__m256 r, __m256 x, __m256 y) {
+  __m256i any, prop = neon_emu_nans8_2(_mm256_castps_si256(x), _mm256_castps_si256(y), &any);
   return _mm256_castsi256_ps(neon_emu_sel8(any, prop, _mm256_castps_si256(r)));
 }
 NEON_EMU_SI __m256 neon_emu_min8(__m256 x, __m256 y) {
@@ -109,8 +120,8 @@ NEON_EMU_SI __m256 neon_emu_min8(__m256 x, __m256 y) {
   if (__builtin_expect(!_mm256_movemask_ps(_mm256_cmp_ps(x, y, _CMP_UNORD_Q)), 1)) return r;
   return neon_emu_min8_nan(r, x, y);
 }
-NEON_EMU_COLD __m256 neon_emu_max8_nan(__m256 r, __m256 x, __m256 y) {
-  __m256i any, prop = neon_emu_nans8(_mm256_castps_si256(x), _mm256_castps_si256(y), _mm256_castps_si256(y), &any);
+NEON_EMU_SI __m256 neon_emu_max8_nan(__m256 r, __m256 x, __m256 y) {
+  __m256i any, prop = neon_emu_nans8_2(_mm256_castps_si256(x), _mm256_castps_si256(y), &any);
   return _mm256_castsi256_ps(neon_emu_sel8(any, prop, _mm256_castps_si256(r)));
 }
 NEON_EMU_SI __m256 neon_emu_max8(__m256 x, __m256 y) {
@@ -168,10 +179,10 @@ NEON_EMU_SI __m256 neon_emu_rsqrte8(__m256 a) {
   return neon_emu_rsqrte8_slow(a);
 }
 // FRECPS: 2 - a*b rounded once; FRSQRTS: (3 - a*b) / 2 (see vrecpsq_f32).
-NEON_EMU_COLD __m256 neon_emu_recps8_nan(__m256 r0, __m256 a, __m256 b) {
+NEON_EMU_SI __m256 neon_emu_recps8_nan(__m256 r0, __m256 a, __m256 b) {
   __m256i na = _mm256_xor_si256(_mm256_castps_si256(a), _mm256_set1_epi32((int)0x80000000u)),
           ub = _mm256_castps_si256(b), any;
-  __m256i prop = neon_emu_nans8(na, ub, ub, &any);
+  __m256i prop = neon_emu_nans8_2(na, ub, &any);
   __m256i r = neon_emu_sel8(neon_emu_infzero8(na, ub), _mm256_set1_epi32(0x40000000), _mm256_castps_si256(r0));
   return _mm256_castsi256_ps(neon_emu_sel8(any, prop, r));
 }
