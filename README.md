@@ -17,27 +17,6 @@ appropriate.
 
 ## What this fork adds
 
-### Rendering as the claimed OS
-
-For an identity whose OS is not the host's. Offered upstream in
-[#896](https://github.com/daijro/camoufox/pull/896).
-
-- **Per-script font fallback** follows the claimed OS's tables and `font.*`
-  defaults, so Thai, emoji, Mongolian and other scripts draw with the faces
-  stock Firefox uses there. Where stock's Windows table names a face Windows 10
-  and 11 no longer ship (Lao UI, Euphemia), the face Windows' own system
-  fallback draws follows it (Leelawadee UI, Gadugi). ([7c8e6a9](https://github.com/coffeegrind123/camoufox-free/commit/7c8e6a9d8b3312846c26fe8e31984c10a1d3d6c6))
-- **DirectWrite line metrics** for a Windows identity (`fonts:metrics`), so
-  line boxes match Windows instead of FreeType. ([c8cd204](https://github.com/coffeegrind123/camoufox-free/commit/c8cd20423c9640bbb381fc33a293c33ccbbddadf), [6023d01](https://github.com/coffeegrind123/camoufox-free/commit/6023d01bd194ad38e1fae7a3660c0c02d5c200fa))
-- **Subpixel glyph positions** for a Windows or macOS identity, so text and
-  form-control widths match those OSes. ([806329a](https://github.com/coffeegrind123/camoufox-free/commit/806329ab64dcf271802b672b57cae1ca7ac34ec6))
-- **macOS UCS4 cmaps** are read for a macOS identity, so Geneva, Apple Symbols
-  and Heiti render instead of sitting unused in the font list. ([82092da](https://github.com/coffeegrind123/camoufox-free/commit/82092dac9937b7d87fd62cd64c84a4197f32ee0b))
-- **Codecs:** `canPlayType()` and `mediaCapabilities.decodingInfo()` both
-  answer as the claimed OS, with Windows' hardware codecs. ([8fa6bd8](https://github.com/coffeegrind123/camoufox-free/commit/8fa6bd86d751734ce2bd209aab4e01392aa7580e))
-- **Windows system colours** (Highlight, AccentColor, dialog) instead of the
-  host's GTK theme. ([51dfed2](https://github.com/coffeegrind123/camoufox-free/commit/51dfed22ff39a1bca9e1ab982b97b8c44292c534))
-
 ### Other browser fixes
 
 - **Large per-context values cross content processes.** Firefox does not sync a
@@ -160,13 +139,13 @@ For an identity whose OS is not the host's. Offered upstream in
   XWayland, with the content 43,149 into the window, where stock Firefox on
   Windows measures 16x93 and 8,85. A page now reads the real content area plus
   the claimed OS's frame at its display scale, in a cross-site iframe too, and
-  no frame in fullscreen. A Windows identity drawn maximized gets stock's
-  maximized geometry (outer the available area plus the borders, at minus the
-  border), and a window maximized later goes back to the identity's size. The
-  frame follows the window's state: maximized while the real window is or its
-  content fills the available area, the normal frame once a resize leaves it
-  (it kept the maximized frame at -8,-8 at any size), and no frame at 0,0 in
-  fullscreen. ([patch](browser/patches/window-sizing-claimed-os.patch),
+  no frame in fullscreen. A Windows identity drawn maximized reports the
+  maximized outer size (the available area plus the borders, at minus the
+  border), and a window maximized later goes back to the identity's size.
+  Not yet stock at 100% display scale: maximized, the frame measures 16x93
+  where stock's is 16x101, and a resize out of it stays at -8,-8 where stock
+  is at 0,0 (open in
+  [#41](https://github.com/coffeegrind123/camoufox-free/pull/41)). ([patch](browser/patches/window-sizing-claimed-os.patch),
   [zz-window-presentation.patch](browser/patches/zz-window-presentation.patch),
   [3924094](https://github.com/coffeegrind123/camoufox-free/commit/39240942ecd1e20088209001414b64a1d621d4b5), guard
   [window-sizing-claimed-os.py](browser/tests/playwright/patches/window-sizing-claimed-os.py))
@@ -209,6 +188,12 @@ For an identity whose OS is not the host's. Offered upstream in
   in [#1033](https://github.com/daijro/camoufox/pull/1033).
   ([3649a60c](https://github.com/coffeegrind123/camoufox-free/commit/3649a60ccd9d3ccc0772573bdbf230d512fece69), guard
   [cpu-vendor-estimates.py](browser/tests/playwright/patches/cpu-vendor-estimates.py))
+- **The x86-64 build compiles upstream's X86NaN away.** Upstream's
+  [#1034](https://github.com/daijro/camoufox/pull/1034) wraps interpreter and
+  `Math` operations in an `X86NaN` check of `EmulateX86` in every build, though
+  only an ARM64 build can set it. On x86-64 the check is now a compile-time
+  no-op, so those paths do no work stock Firefox does not.
+  ([863b196e](https://github.com/coffeegrind123/camoufox-free/commit/863b196e241a8dbede44bafbae1e389b05b9ea0d))
 - **Humanized moves report like a 125 Hz mouse.** They were resampled to
   60 Hz, but `pointerrawupdate` and `getCoalescedEvents()` show every report:
   stock under a real mouse shows about two per frame, 8 ms apart, humanize one,
@@ -253,6 +238,31 @@ For an identity whose OS is not the host's. Offered upstream in
   region-less engine list and the DoH rollout never decided. ([2723224](https://github.com/coffeegrind123/camoufox-free/commit/2723224cbc9bcee2e156042f203a7a8154450d95))
 
 ### Kept here after upstream declined
+
+#### Rendering as the claimed OS
+
+For an identity whose OS is not the host's. Declined in
+[#896](https://github.com/daijro/camoufox/pull/896): upstream's stated reason
+is that rendering text, colours and codecs as an OS other than the host's is
+out of scope for that repository.
+
+- **Per-script font fallback** follows the claimed OS's tables and `font.*`
+  defaults, so Thai, emoji, Mongolian and other scripts draw with the faces
+  stock Firefox uses there. Where stock's Windows table names a face Windows 10
+  and 11 no longer ship (Lao UI, Euphemia), the face Windows' own system
+  fallback draws follows it (Leelawadee UI, Gadugi). ([7c8e6a9](https://github.com/coffeegrind123/camoufox-free/commit/7c8e6a9d8b3312846c26fe8e31984c10a1d3d6c6))
+- **DirectWrite line metrics** for a Windows identity (`fonts:metrics`), so
+  line boxes match Windows instead of FreeType. ([c8cd204](https://github.com/coffeegrind123/camoufox-free/commit/c8cd20423c9640bbb381fc33a293c33ccbbddadf), [6023d01](https://github.com/coffeegrind123/camoufox-free/commit/6023d01bd194ad38e1fae7a3660c0c02d5c200fa))
+- **Subpixel glyph positions** for a Windows or macOS identity, so text and
+  form-control widths match those OSes. ([806329a](https://github.com/coffeegrind123/camoufox-free/commit/806329ab64dcf271802b672b57cae1ca7ac34ec6))
+- **macOS UCS4 cmaps** are read for a macOS identity, so Geneva, Apple Symbols
+  and Heiti render instead of sitting unused in the font list. ([82092da](https://github.com/coffeegrind123/camoufox-free/commit/82092dac9937b7d87fd62cd64c84a4197f32ee0b))
+- **Codecs:** `canPlayType()` and `mediaCapabilities.decodingInfo()` both
+  answer as the claimed OS, with Windows' hardware codecs. ([8fa6bd8](https://github.com/coffeegrind123/camoufox-free/commit/8fa6bd86d751734ce2bd209aab4e01392aa7580e))
+- **Windows system colours** (Highlight, AccentColor, dialog) instead of the
+  host's GTK theme. ([51dfed2](https://github.com/coffeegrind123/camoufox-free/commit/51dfed22ff39a1bca9e1ab982b97b8c44292c534))
+
+#### Other declined changes
 
 - **`gpu_passthrough=True`.** A Linux container on Windows can render on the
   host's real GPU through WSL's D3D12 driver while claiming Windows Firefox on
@@ -328,6 +338,9 @@ For an identity whose OS is not the host's. Offered upstream in
 - **Linux x86_64 releases built by this repo's CI**
   ([`build.yml`](.github/workflows/build.yml)), with sha256 digests. No PyPI or
   npm packages are published, and upstream's release train doesn't run. ([b70dc6c](https://github.com/coffeegrind123/camoufox-free/commit/b70dc6c52c1605ad8bcf7c7770cf99d2235dd8a0))
+  Upstream's tests of its `release.yml` (from
+  [#1038](https://github.com/daijro/camoufox/pull/1038)) are dropped, since
+  that file is not here. ([a0b9c5f7](https://github.com/coffeegrind123/camoufox-free/commit/a0b9c5f7823fce58f8a2d4f6329de63431f4792b))
 - **Releases are tag-driven and do not wait for Tests.** Pushing a matching
   `v<version>-<release>-cg.<n>` tag starts the release workflow; pushing to
   `main` does not create a release. The release workflow fails before building
