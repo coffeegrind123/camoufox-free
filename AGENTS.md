@@ -228,6 +228,16 @@ is in it, and they will not ask what a file was for.
   `README.md` in the same pull request, with implementation links and the
   relevant test or guard. Remove it or move it to the declined-upstream section
   when upstream absorbs or rejects it; never leave the list stale.
+- **Check the record and the open pull requests at fixed points.** Changes that
+  arrive outside a pull request of this fork leave it stale too: re-check the
+  README's fork delta after every upstream sync, whenever one of this fork's
+  upstream pull requests is opened, merged or closed, and before every release.
+  The check: nothing behind `up/main` before a release; every commit in
+  `git log --no-merges up/main..main` listed or covered; `ci.upstream_pr_drift`
+  resolved; every behaviour the README states still true (a failing guard or a
+  contradicting measurement rewords the item until the fix lands). Every open
+  pull request's description matches its branch, it is brought up to date when
+  `main` moves under it, and a failing one says why in a comment.
 
 ## Code
 
