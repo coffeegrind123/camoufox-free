@@ -400,7 +400,7 @@ index 097d202297..e3b714f7fd 100644
 +    // while every call compared it with all 31 (getter-cost-parity, 2026-11-15).
 +    const auto payStockFetch = [&] {
 +      switch (pname) {
-++      case LOCAL_GL_MAX_COLOR_ATTACHMENTS:
++      case LOCAL_GL_MAX_COLOR_ATTACHMENTS:
 +      case LOCAL_GL_MAX_COMBINED_FRAGMENT_UNIFORM_COMPONENTS:
 +      case LOCAL_GL_MAX_COMBINED_UNIFORM_BLOCKS:
 +      case LOCAL_GL_MAX_COMBINED_VERTEX_UNIFORM_COMPONENTS:
