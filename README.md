@@ -179,6 +179,21 @@ appropriate.
   [#1029](https://github.com/daijro/camoufox/pull/1029).
   ([MouseDispatch.js](browser/additions/juggler/input/MouseDispatch.js), [91b0957c](https://github.com/coffeegrind123/camoufox-free/commit/91b0957c2c3d735620dd9381e84b6672dff59423), [d5945faf](https://github.com/coffeegrind123/camoufox-free/commit/d5945fafb2de243c59b82801ecab99c315a58093), guard
   [humanize-mouse-trajectory.py](browser/tests/playwright/patches/humanize-mouse-trajectory.py))
+- **A spoofed WebGL limit costs what stock's does.** Upstream's #997 code
+  fetched the context's tables and scanned the 31 limits stock asks the host for
+  on every `getParameter` of a limit, so `MAX_TEXTURE_SIZE` took 12 ns against
+  stock's 8 ns in every session, 0.36 of an untouched getter against stock's
+  0.25. A cached answer now returns first, and the host-fetched limits are a
+  switch. ([PR #47](https://github.com/coffeegrind123/camoufox-free/pull/47), [1538445d](https://github.com/coffeegrind123/camoufox-free/commit/1538445d7eefc5c3270cd8b49588f3e5a2180f9e), [1849de26](https://github.com/coffeegrind123/camoufox-free/commit/1849de26e87dde339678b9d1ea7aec8e53b96d46))
+- **The estimate blends' native path costs what stock's does.** Upstream's
+  [#1024](https://github.com/daijro/camoufox/pull/1024) made every `rcp` and
+  `rsqrt` in Skia's raster pipeline call out of line to find the other
+  vendor's table, which spills the stage's vector registers, for every
+  identity, the host's own included. The table is resolved once when Skia
+  initialises and read inline: under the host's own identity, color-dodge,
+  color-burn and the non-separable blends draw 9-22% faster than cg.16 did
+  (one runner, interleaved launches).
+  ([PR #44](https://github.com/coffeegrind123/camoufox-free/pull/44))
 - **An ARM Linux identity claims llvmpipe.** Beside an ARM CPU, the only GPU
   fpgen records from Firefox on Linux is llvmpipe, and the synthetic draw
   skips software renderers, so `cpu={"arch": "arm"}` on Linux raised "No
