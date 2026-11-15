@@ -333,6 +333,12 @@ For an identity whose OS is not the host's. Offered upstream in
   `main` does not create a release. The release workflow fails before building
   unless the tag names the pinned browser and its commit is on `main` with a
   successful `All tests passed` check.
+- **No preflight of other targets.** Upstream's
+  [#1055](https://github.com/daijro/camoufox/pull/1055) compiles the patched
+  sources for five more targets (Windows, macOS, ARM64) on every pull request
+  that changes the browser. This fork releases linux x86_64 only, so its pull
+  requests build that one target, through the same `ci.run_build` command its
+  release (`build.yml`) runs.
 - **Link Preview stays on, as stock ships it.** Upstream's #966 turned
   `browser.ml.linkPreview.enabled` off. On stock 159.0 a long press on a link
   fetches the link target anonymously with `x-firefox-ai: 1`; with the feature

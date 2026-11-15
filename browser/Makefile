@@ -6,7 +6,7 @@ ff_source_tarball := firefox-$(version).source.tar.xz
 
 .PHONY: help fetch setup-minimal setup ff-dbg revert fetch-fonts fonts-extract fonts-check \
         fonts-clean dir set-target mozbootstrap setup-macos-sdk bootstrap diff first-checkpoint \
-        checkpoint clean distclean build package-linux package-macos package-windows run edit-cfg \
+        checkpoint clean distclean build preflight package-linux package-macos package-windows run edit-cfg \
         check-arg grep patch unpatch workspace tests stage-fonts stage-ubo unbusy path \
         generate-assets-car sync build-js build-cpp verify-patches
 
@@ -26,6 +26,7 @@ help:
 	@echo "  build-js            - Sync, then rebuild JS, prefs and Juggler (mach build faster)"
 	@echo "  build-cpp           - Rebuild compiled code (mach build binaries)"
 	@echo "  verify-patches      - Replay the patch stack without preparing the source tree"
+	@echo "  preflight           - Check that BUILD_TARGET builds, without building it"
 	@echo "  set-target          - Change the build target with BUILD_TARGET"
 	@echo "  setup-macos-sdk     - Download the macOS SDK for cross-compilation"
 	@echo "  fetch-fonts         - Download and verify the font bundle"
@@ -186,6 +187,11 @@ build-cpp:
 
 verify-patches:
 	python3 scripts/patchstack.py verify $(if $(filter true,$(compare)),--compare,)
+preflight:
+	@if [ ! -f $(cf_source_dir)/_READY ]; then \
+		make dir; \
+	fi
+	python3 scripts/preflight.py $(cf_source_dir)
 
 package-linux: fonts-extract
 	python3 scripts/package.py linux \
