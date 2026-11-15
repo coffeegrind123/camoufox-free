@@ -333,6 +333,16 @@ For an identity whose OS is not the host's. Offered upstream in
   `main` does not create a release. The release workflow fails before building
   unless the tag names the pinned browser and its commit is on `main` with a
   successful `All tests passed` check.
+- **The renderer strings' cost is held to stock's, both ways.** Upstream's
+  [#1039](https://github.com/daijro/camoufox/pull/1039) and
+  [#1042](https://github.com/daijro/camoufox/pull/1042) stopped failing a
+  slower `getParameter(RENDERER)` and fail a faster one only under 1/10 of
+  stock's, from two CI readings that each took a session's fastest round.
+  Measured over ten alternating launches each, the two browsers' session
+  medians differ by 4%, and resampling them never went outside 0.58-1.97x;
+  the guard takes the median round and fails beyond 2.5x either way.
+  ([450a0a23](https://github.com/coffeegrind123/camoufox-free/commit/450a0a23fc7871467f387715955965b8b5ae52cf), guard
+  [getter-cost-parity.py](browser/tests/playwright/patches/getter-cost-parity.py))
 - **No preflight of other targets.** Upstream's
   [#1055](https://github.com/daijro/camoufox/pull/1055) compiles the patched
   sources for five more targets (Windows, macOS, ARM64) on every pull request
