@@ -1024,6 +1024,41 @@ def test_every_build_is_optimized_like_stock():
                 assert marker not in text, f"{path.name}" + explain("builds-are-optimized-like-stock")
 
 
+def test_patches_never_edit_additions():
+    """Rule: patches-never-edit-additions."""
+    additions = BROWSER / "additions"
+    provided = {str(f.relative_to(additions)) for f in additions.rglob("*") if f.is_file()}
+    edited = [
+        f"{patch.relative_to(BROWSER)}: {target}"
+        for patch in sorted((BROWSER / "patches").rglob("*.patch"))
+        for target in re.findall(r"^\+\+\+ b/(\S+)", patch.read_text(encoding="utf-8", errors="replace"), re.M)
+        if target in provided
+    ]
+    assert not edited, "\n".join(edited) + explain("patches-never-edit-additions")
+
+
+def test_one_build_entry_point():
+    """Rule: one-build-entry-point."""
+    # This fork releases from build.yml, linux x86_64 only: no release.yml and
+    # no preflight of other targets.
+    builds = {
+        ("tests.yml", "build"): "python3 -m ci.run_build",
+        ("build.yml", "build"): "python3 -m ci.run_build --target ${{ matrix.target }} --arch ${{ matrix.arch }}",
+    }
+    import yaml
+
+    for (workflow, job), command in builds.items():
+        steps = yaml.safe_load((REPO_ROOT / ".github" / "workflows" / workflow).read_text(encoding="utf-8"))["jobs"][job]["steps"]
+        lines = [line.strip() for step in steps for line in (step.get("run") or "").splitlines()
+                 if not line.lstrip().startswith("#")]
+        assert command in lines, f"{workflow}:{job} does not run `{command}`" + explain("one-build-entry-point")
+        for direct in ("multibuild.py", "make build", "make -C browser build", "mach build", "make set-target"):
+            assert not any(direct in line for line in lines), (
+                f"{workflow}:{job} runs `{direct}` itself" + explain("one-build-entry-point"))
+    assert '"multibuild.py", "--target", args.target, "--arch", args.arch' in (
+        REPO_ROOT / "ci" / "run_build.py").read_text(encoding="utf-8"), explain("one-build-entry-point")
+
+
 # ---------------------------------------------------------------------------
 # juggler
 # ---------------------------------------------------------------------------
