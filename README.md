@@ -185,7 +185,10 @@ appropriate.
   on every `getParameter` of a limit, so `MAX_TEXTURE_SIZE` took 12 ns against
   stock's 8 ns in every session, 0.36 of an untouched getter against stock's
   0.25. A cached answer now returns first, and the host-fetched limits are a
-  switch. Offered
+  switch; the cache holds the finished value and whether stock asks the host,
+  so nothing is decided per call. On one runner: stock 12-13 ns, cg.17 15-16,
+  now 14-15, the same ~2 ns every getter costs over stock there (0.27 of an
+  untouched getter against stock's 0.25). Offered
   upstream in [#1062](https://github.com/daijro/camoufox/pull/1062). ([PR #47](https://github.com/coffeegrind123/camoufox-free/pull/47), [1538445d](https://github.com/coffeegrind123/camoufox-free/commit/1538445d7eefc5c3270cd8b49588f3e5a2180f9e), [1849de26](https://github.com/coffeegrind123/camoufox-free/commit/1849de26e87dde339678b9d1ea7aec8e53b96d46))
 - **The estimate blends' native path costs what stock's does.** Upstream's
   [#1024](https://github.com/daijro/camoufox/pull/1024) made every `rcp` and
