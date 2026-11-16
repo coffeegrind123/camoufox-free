@@ -84,7 +84,9 @@ appropriate.
 - **Network and automation protocol fixes.** UA, Accept-Language and
   per-scheme Accept-Encoding stay coherent; DNT and context locale are stable
   across navigation. A failed promise-reaction attach rejects immediately
-  instead of leaving Juggler hanging.
+  instead of leaving Juggler hanging. Upstream attaches through the Xray in a
+  window; the worker path is offered upstream in
+  [#1067](https://github.com/daijro/camoufox/pull/1067).
   ([3cebf99](https://github.com/coffeegrind123/camoufox-free/commit/3cebf99c8f486c211a5502099c9ecfdc91164813))
 - **Per-context locale follows every scope.** A context's locale reaches
   `Intl`, `navigator.languages`, Accept-Language q-values, isolated worlds,
