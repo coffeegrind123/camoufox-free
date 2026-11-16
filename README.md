@@ -45,7 +45,8 @@ appropriate.
   context and none for the launch, connections no page owns (the push
   websocket, media plugin update checks) went out direct from the host's
   address. They now take a proxied context's proxy; a page's own request keeps
-  its context's. ([58e3760](https://github.com/coffeegrind123/camoufox-free/commit/58e3760a83d04efa30982288f5ff00c61da0af1e), guard
+  its context's. Offered
+  upstream in [#1065](https://github.com/daijro/camoufox/pull/1065). ([58e3760](https://github.com/coffeegrind123/camoufox-free/commit/58e3760a83d04efa30982288f5ff00c61da0af1e), guard
   [context-proxy-browser-traffic.py](browser/tests/playwright/patches/context-proxy-browser-traffic.py))
 - **Authenticated SOCKS5 proxies fail closed.** Upstream passes SOCKS5
   credentials to Juggler (`CAMOU_PROXY_AUTH`, and a per-context init script).
@@ -184,7 +185,8 @@ appropriate.
   on every `getParameter` of a limit, so `MAX_TEXTURE_SIZE` took 12 ns against
   stock's 8 ns in every session, 0.36 of an untouched getter against stock's
   0.25. A cached answer now returns first, and the host-fetched limits are a
-  switch. ([PR #47](https://github.com/coffeegrind123/camoufox-free/pull/47), [1538445d](https://github.com/coffeegrind123/camoufox-free/commit/1538445d7eefc5c3270cd8b49588f3e5a2180f9e), [1849de26](https://github.com/coffeegrind123/camoufox-free/commit/1849de26e87dde339678b9d1ea7aec8e53b96d46))
+  switch. Offered
+  upstream in [#1062](https://github.com/daijro/camoufox/pull/1062). ([PR #47](https://github.com/coffeegrind123/camoufox-free/pull/47), [1538445d](https://github.com/coffeegrind123/camoufox-free/commit/1538445d7eefc5c3270cd8b49588f3e5a2180f9e), [1849de26](https://github.com/coffeegrind123/camoufox-free/commit/1849de26e87dde339678b9d1ea7aec8e53b96d46))
 - **The estimate blends' native path costs what stock's does.** Upstream's
   [#1024](https://github.com/daijro/camoufox/pull/1024) made every `rcp` and
   `rsqrt` in Skia's raster pipeline call out of line to find the other
@@ -192,7 +194,8 @@ appropriate.
   identity, the host's own included. The table is resolved once when Skia
   initialises and read inline: under the host's own identity, color-dodge,
   color-burn and the non-separable blends draw 9-22% faster than cg.16 did
-  (one runner, interleaved launches).
+  (one runner, interleaved launches). Offered
+  upstream in [#1061](https://github.com/daijro/camoufox/pull/1061).
   ([PR #44](https://github.com/coffeegrind123/camoufox-free/pull/44))
 - **An ARM Linux identity claims llvmpipe.** Beside an ARM CPU, the only GPU
   fpgen records from Firefox on Linux is llvmpipe, and the synthetic draw
@@ -207,7 +210,8 @@ appropriate.
   [#1034](https://github.com/daijro/camoufox/pull/1034) wraps interpreter and
   `Math` operations in an `X86NaN` check of `EmulateX86` in every build, though
   only an ARM64 build can set it. On x86-64 the check is now a compile-time
-  no-op, so those paths do no work stock Firefox does not.
+  no-op, so those paths do no work stock Firefox does not. Offered
+  upstream in [#1063](https://github.com/daijro/camoufox/pull/1063).
   ([863b196e](https://github.com/coffeegrind123/camoufox-free/commit/863b196e241a8dbede44bafbae1e389b05b9ea0d))
 - **Humanized moves report like a 125 Hz mouse.** They were resampled to
   60 Hz, but `pointerrawupdate` and `getCoalescedEvents()` show every report:
@@ -250,7 +254,8 @@ appropriate.
   claimed OS. ([09b5fc6](https://github.com/coffeegrind123/camoufox-free/commit/09b5fc6bf897143eedd57d73b8b8e0a936d2ad1d))
 - **The search region follows the locale's region.** Stock learns it from a
   network lookup the launch turns off; unset, every identity got the
-  region-less engine list and the DoH rollout never decided. ([2723224](https://github.com/coffeegrind123/camoufox-free/commit/2723224cbc9bcee2e156042f203a7a8154450d95))
+  region-less engine list and the DoH rollout never decided. Offered
+  upstream in [#1066](https://github.com/daijro/camoufox/pull/1066). ([2723224](https://github.com/coffeegrind123/camoufox-free/commit/2723224cbc9bcee2e156042f203a7a8154450d95))
 
 ### Kept here after upstream declined
 
@@ -368,7 +373,8 @@ out of scope for that repository.
   stock's, from two CI readings that each took a session's fastest round.
   Measured over ten alternating launches each, the two browsers' session
   medians differ by 4%, and resampling them never went outside 0.58-1.97x;
-  the guard takes the median round and fails beyond 2.5x either way.
+  the guard takes the median round and fails beyond 2.5x either way. Offered
+  upstream in [#1064](https://github.com/daijro/camoufox/pull/1064).
   ([450a0a23](https://github.com/coffeegrind123/camoufox-free/commit/450a0a23fc7871467f387715955965b8b5ae52cf), guard
   [getter-cost-parity.py](browser/tests/playwright/patches/getter-cost-parity.py))
 - **No preflight of other targets.** Upstream's
