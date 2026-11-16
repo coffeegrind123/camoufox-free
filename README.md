@@ -6,9 +6,9 @@ how to build it, read [upstream's README](https://github.com/daijro/camoufox#rea
 
 This fork follows upstream `main` and pins Firefox `159.0.1` / Camoufox `beta.35`
 in [`browser/upstream.sh`](browser/upstream.sh). The current release is
-[`v159.0.1-beta.35-cg.16`](https://github.com/coffeegrind123/camoufox-free/releases/tag/v159.0.1-beta.35-cg.16),
-built from [16ae94e](https://github.com/coffeegrind123/camoufox-free/commit/16ae94e5eec7eaac9784c3a282e073fb20600505),
-which includes upstream 21fdf1c5; `cg.15` stays published as the rollback.
+[`v159.0.1-beta.35-cg.17`](https://github.com/coffeegrind123/camoufox-free/releases/tag/v159.0.1-beta.35-cg.17),
+built from [832676e](https://github.com/coffeegrind123/camoufox-free/commit/832676e31f62c30a94988c538e6ba1a0e9c7ad8e),
+which includes upstream d737a02d; `cg.16` stays published as the rollback.
 Fixes are offered upstream when
 appropriate.
 
