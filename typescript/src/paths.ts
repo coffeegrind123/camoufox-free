@@ -107,6 +107,7 @@ export interface LauncherConstants {
 	appleSiliconCores: number[];
 	x86IntelShare: number;
 	cpuIdentityPref: Record<"x86/intel" | "x86/amd" | "arm", number>;
+	cpuIdentityArmWhenDrawn: boolean;
 	cpuManufacturers: Record<
 		"mac" | "windows" | "linux",
 		Record<"x86" | "arm", string[]>

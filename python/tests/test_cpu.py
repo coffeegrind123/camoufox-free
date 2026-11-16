@@ -12,8 +12,11 @@ import pytest
 from camoufox import coherence
 from camoufox.fingerprints import X86_INTEL_SHARE, is_software_renderer, set_cpu_default
 from camoufox.pkgman import LAUNCHER_CONSTANTS
-from camoufox.utils import _os_for_cpu, cpu_identity_pref, vpx_realtime_only
+from camoufox import utils
+from camoufox.utils import _os_for_cpu, cpu_identity_pref, launch_cpu_identity_pref, vpx_realtime_only
 from camoufox.webgl import sample_webgl_for_screen
+
+from test_identity_salt import config_of, host
 
 WIN_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:159.0) Gecko/20100101 Firefox/159.0"
 NVIDIA = "ANGLE (NVIDIA, NVIDIA GeForce GTX 980 Direct3D11 vs_5_0 ps_5_0), or similar"
@@ -212,6 +215,62 @@ def test_the_pref_values_are_the_patchs():
     assert cpu_identity_pref({"cpu:arch": "arm", "cpu:manufacturer": "apple"}) == 3
     assert cpu_identity_pref({"cpu:arch": "arm"}) == 3
     assert cpu_identity_pref({}) == 0
+
+
+APPLE_ARM = {"cpu:arch": "arm", "cpu:manufacturer": "apple"}
+
+
+def test_a_drawn_arm_cpu_computes_as_the_host():
+    # The ARM64 emulation is 6-87x slower than native, a timing tell, so the
+    # launcher does not choose it on its own until it is fast.
+    assert LAUNCHER_CONSTANTS["cpuIdentityArmWhenDrawn"] is False
+    assert launch_cpu_identity_pref(APPLE_ARM, caller_named_cpu=False) == 0
+    assert launch_cpu_identity_pref(APPLE_ARM, caller_named_cpu=True) == 3
+
+
+def test_a_drawn_x86_vendor_is_still_sent():
+    for maker, pref in (("intel", 1), ("amd", 2)):
+        assert launch_cpu_identity_pref({"cpu:arch": "x86", "cpu:manufacturer": maker}, caller_named_cpu=False) == pref
+    assert launch_cpu_identity_pref({}, caller_named_cpu=False) == 0
+
+
+def test_the_switch_restores_the_arm_emulation(monkeypatch):
+    monkeypatch.setitem(LAUNCHER_CONSTANTS, "cpuIdentityArmWhenDrawn", True)
+    assert launch_cpu_identity_pref(APPLE_ARM, caller_named_cpu=False) == 3
+
+
+def _launch(**kwargs):
+    kwargs.setdefault("headless", True)
+    kwargs.setdefault("i_know_what_im_doing", True)
+    with host("159.0.1"):
+        options = utils.launch_options(**kwargs)
+    return config_of(options), options["firefox_user_prefs"]
+
+
+def test_a_drawn_mac_launches_without_the_arm_emulation():
+    arm = 0
+    for _ in range(6):
+        config, prefs = _launch(os="macos")
+        if config.get("cpu:arch") != "arm":
+            continue
+        arm += 1
+        assert "general.cpu_identity" not in prefs
+    assert arm, "no ARM Mac drawn in 6 launches (59 of 60 are)"
+
+
+@pytest.mark.parametrize("kwargs", [
+    {"cpu": {"arch": "arm"}},
+    {"cpu": {"manufacturer": "apple"}},
+])
+def test_a_named_arm_cpu_launches_with_the_arm_emulation(kwargs):
+    config, prefs = _launch(os="macos", **kwargs)
+    assert config["cpu:arch"] == "arm"
+    assert prefs["general.cpu_identity"] == 3
+
+
+def test_a_callers_pref_wins_over_the_default():
+    _, prefs = _launch(os="macos", firefox_user_prefs={"general.cpu_identity": 3})
+    assert prefs["general.cpu_identity"] == 3
 
 
 def test_vpx_is_realtime_only_on_arm_windows_and_linux():

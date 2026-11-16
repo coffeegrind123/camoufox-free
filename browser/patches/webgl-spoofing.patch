@@ -313,7 +313,7 @@ index 097d202297..e3b714f7fd 100644
    result.mAlpha.Construct(options.alpha);
    result.mDepth = options.depth;
    result.mStencil = options.stencil;
-@@ -2179,6 +2264,180 @@ void ClientWebGLContext::GetParameter(JSContext* cx, GLenum pname,
+@@ -2179,6 +2264,191 @@ void ClientWebGLContext::GetParameter(JSContext* cx, GLenum pname,
    const auto& state = State();
  
    // -
@@ -385,13 +385,70 @@ index 097d202297..e3b714f7fd 100644
 +  // The context's own GPU's tables, else the launch's. Only looked up for a
 +  // limit, once per WebGL context (CamouWebGLTables): every other pname costs
 +  // what it did.
-+  const MaskConfig::WebGLTables* const tables =
-+      slot >= 0 ? CamouWebGLTables() : nullptr;
++  const MaskConfig::WebGLTables* tables = nullptr;
 +  std::optional<
 +      std::variant<int64_t, bool, double, std::string, std::nullptr_t>>
 +      data;
 +  if (slot >= 0) {
 +    auto& cached = mSpoofedParams[slot];
++    // Camoufox: these limits stock does not keep client-side; it asks the
++    // host with a synchronous Msg_GetNumber on every call. A spoofed answer
++    // still makes that round trip and discards it, so the page's stopwatch
++    // reads stock's cost, not a table lookup's (getParameter vs isEnabled:
++    // stock ~1000x, table answer ~1x). A switch, not a scan: a limit stock
++    // answers client-side (MAX_TEXTURE_SIZE) took 12 ns against stock's 8 ns
++    // while every call compared it with all 31 (getter-cost-parity, 2026-11-15).
++    const auto payStockFetch = [&] {
++      switch (pname) {
++      case LOCAL_GL_MAX_COLOR_ATTACHMENTS:
++      case LOCAL_GL_MAX_COMBINED_FRAGMENT_UNIFORM_COMPONENTS:
++      case LOCAL_GL_MAX_COMBINED_UNIFORM_BLOCKS:
++      case LOCAL_GL_MAX_COMBINED_VERTEX_UNIFORM_COMPONENTS:
++      case LOCAL_GL_MAX_DRAW_BUFFERS:
++      case LOCAL_GL_MAX_ELEMENTS_INDICES:
++      case LOCAL_GL_MAX_ELEMENTS_VERTICES:
++      case LOCAL_GL_MAX_ELEMENT_INDEX:
++      case LOCAL_GL_MAX_FRAGMENT_INPUT_COMPONENTS:
++      case LOCAL_GL_MAX_FRAGMENT_UNIFORM_BLOCKS:
++      case LOCAL_GL_MAX_FRAGMENT_UNIFORM_COMPONENTS:
++      case LOCAL_GL_MAX_FRAGMENT_UNIFORM_VECTORS:
++      case LOCAL_GL_MAX_PROGRAM_TEXEL_OFFSET:
++      case LOCAL_GL_MAX_RENDERBUFFER_SIZE:
++      case LOCAL_GL_MAX_SAMPLES:
++      case LOCAL_GL_MAX_SERVER_WAIT_TIMEOUT:
++      case LOCAL_GL_MAX_TEXTURE_IMAGE_UNITS:
++      case LOCAL_GL_MAX_TEXTURE_LOD_BIAS:
++      case LOCAL_GL_MAX_TEXTURE_MAX_ANISOTROPY:
++      case LOCAL_GL_MAX_TRANSFORM_FEEDBACK_INTERLEAVED_COMPONENTS:
++      case LOCAL_GL_MAX_TRANSFORM_FEEDBACK_SEPARATE_COMPONENTS:
++      case LOCAL_GL_MAX_UNIFORM_BLOCK_SIZE:
++      case LOCAL_GL_MAX_VARYING_COMPONENTS:
++      case LOCAL_GL_MAX_VARYING_VECTORS:
++      case LOCAL_GL_MAX_VERTEX_OUTPUT_COMPONENTS:
++      case LOCAL_GL_MAX_VERTEX_TEXTURE_IMAGE_UNITS:
++      case LOCAL_GL_MAX_VERTEX_UNIFORM_BLOCKS:
++      case LOCAL_GL_MAX_VERTEX_UNIFORM_COMPONENTS:
++      case LOCAL_GL_MAX_VERTEX_UNIFORM_VECTORS:
++      case LOCAL_GL_MIN_PROGRAM_TEXEL_OFFSET:
++      case LOCAL_GL_SUBPIXEL_BITS:
++        (void)GetNumber(pname);
++        break;
++      default:
++        break;
++      }
++    };
++    // A cached answer is returned before anything else is looked up.
++    if (cached.kind == SpoofedParamKind::Number) {
++      payStockFetch();
++      retval.set(JS::NumberValue(cached.value));
++      return;
++    }
++    if (cached.kind == SpoofedParamKind::Boolean) {
++      payStockFetch();
++      retval.set(JS::BooleanValue(cached.value != 0));
++      return;
++    }
++    tables = CamouWebGLTables();
 +    if (cached.kind == SpoofedParamKind::Unread) {
 +      const auto value = MaskConfig::GLParam(pname, mIsWebGL2, tables);
 +      if (!value || std::holds_alternative<std::nullptr_t>(*value)) {
@@ -406,52 +463,6 @@ index 097d202297..e3b714f7fd 100644
 +        cached.kind = SpoofedParamKind::Other;
 +      }
 +    }
-+    // Camoufox: these limits stock does not keep client-side; it asks the
-+    // host with a synchronous Msg_GetNumber on every call. A spoofed answer
-+    // still makes that round trip and discards it, so the page's stopwatch
-+    // reads stock's cost, not a table lookup's (getParameter vs isEnabled:
-+    // stock ~1000x, table answer ~1x).
-+    static constexpr GLenum kStockFetchedLimits[] = {
-+        LOCAL_GL_MAX_COLOR_ATTACHMENTS,
-+        LOCAL_GL_MAX_COMBINED_FRAGMENT_UNIFORM_COMPONENTS,
-+        LOCAL_GL_MAX_COMBINED_UNIFORM_BLOCKS,
-+        LOCAL_GL_MAX_COMBINED_VERTEX_UNIFORM_COMPONENTS,
-+        LOCAL_GL_MAX_DRAW_BUFFERS,
-+        LOCAL_GL_MAX_ELEMENTS_INDICES,
-+        LOCAL_GL_MAX_ELEMENTS_VERTICES,
-+        LOCAL_GL_MAX_ELEMENT_INDEX,
-+        LOCAL_GL_MAX_FRAGMENT_INPUT_COMPONENTS,
-+        LOCAL_GL_MAX_FRAGMENT_UNIFORM_BLOCKS,
-+        LOCAL_GL_MAX_FRAGMENT_UNIFORM_COMPONENTS,
-+        LOCAL_GL_MAX_FRAGMENT_UNIFORM_VECTORS,
-+        LOCAL_GL_MAX_PROGRAM_TEXEL_OFFSET,
-+        LOCAL_GL_MAX_RENDERBUFFER_SIZE,
-+        LOCAL_GL_MAX_SAMPLES,
-+        LOCAL_GL_MAX_SERVER_WAIT_TIMEOUT,
-+        LOCAL_GL_MAX_TEXTURE_IMAGE_UNITS,
-+        LOCAL_GL_MAX_TEXTURE_LOD_BIAS,
-+        LOCAL_GL_MAX_TEXTURE_MAX_ANISOTROPY,
-+        LOCAL_GL_MAX_TRANSFORM_FEEDBACK_INTERLEAVED_COMPONENTS,
-+        LOCAL_GL_MAX_TRANSFORM_FEEDBACK_SEPARATE_COMPONENTS,
-+        LOCAL_GL_MAX_UNIFORM_BLOCK_SIZE,
-+        LOCAL_GL_MAX_VARYING_COMPONENTS,
-+        LOCAL_GL_MAX_VARYING_VECTORS,
-+        LOCAL_GL_MAX_VERTEX_OUTPUT_COMPONENTS,
-+        LOCAL_GL_MAX_VERTEX_TEXTURE_IMAGE_UNITS,
-+        LOCAL_GL_MAX_VERTEX_UNIFORM_BLOCKS,
-+        LOCAL_GL_MAX_VERTEX_UNIFORM_COMPONENTS,
-+        LOCAL_GL_MAX_VERTEX_UNIFORM_VECTORS,
-+        LOCAL_GL_MIN_PROGRAM_TEXEL_OFFSET,
-+        LOCAL_GL_SUBPIXEL_BITS,
-+    };
-+    const auto payStockFetch = [&] {
-+      for (const GLenum limit : kStockFetchedLimits) {
-+        if (limit == pname) {
-+          (void)GetNumber(pname);
-+          return;
-+        }
-+      }
-+    };
 +    switch (cached.kind) {
 +      case SpoofedParamKind::Number:
 +        payStockFetch();
@@ -494,7 +505,7 @@ index 097d202297..e3b714f7fd 100644
  
    const auto fnSetRetval_Buffer = [&](const GLenum target) {
      const auto buffer = *MaybeFind(state.mBoundBufferByTarget, target);
-@@ -2288,13 +2547,19 @@ void ClientWebGLContext::GetParameter(JSContext* cx, GLenum pname,
+@@ -2288,13 +2558,19 @@ void ClientWebGLContext::GetParameter(JSContext* cx, GLenum pname,
        return;
  
      case LOCAL_GL_ALIASED_POINT_SIZE_RANGE:
@@ -518,7 +529,7 @@ index 097d202297..e3b714f7fd 100644
        return;
  
      // 4 floats
-@@ -2310,7 +2575,11 @@ void ClientWebGLContext::GetParameter(JSContext* cx, GLenum pname,
+@@ -2310,7 +2586,11 @@ void ClientWebGLContext::GetParameter(JSContext* cx, GLenum pname,
      case LOCAL_GL_MAX_VIEWPORT_DIMS: {
        auto maxViewportDim = BitwiseCast<int32_t>(limits.maxViewportDim);
        const auto dims = std::array<int32_t, 2>{maxViewportDim, maxViewportDim};
@@ -531,7 +542,7 @@ index 097d202297..e3b714f7fd 100644
        return;
      }
  
-@@ -2438,6 +2707,31 @@ void ClientWebGLContext::GetParameter(JSContext* cx, GLenum pname,
+@@ -2438,6 +2718,31 @@ void ClientWebGLContext::GetParameter(JSContext* cx, GLenum pname,
    // -
  
    if (!debug) {
@@ -563,7 +574,7 @@ index 097d202297..e3b714f7fd 100644
      const auto GetUnmaskedRenderer = [&]() {
        const auto prefLock = StaticPrefs::webgl_override_unmasked_renderer();
        if (!prefLock->IsEmpty()) {
-@@ -2470,10 +2764,14 @@ void ClientWebGLContext::GetParameter(JSContext* cx, GLenum pname,
+@@ -2470,10 +2775,14 @@ void ClientWebGLContext::GetParameter(JSContext* cx, GLenum pname,
            allowRenderer = false;
          }
          if (allowRenderer) {
@@ -578,7 +589,7 @@ index 097d202297..e3b714f7fd 100644
          }
          if (!ret) {
            ret = Some(std::string{"Mozilla"});
-@@ -2514,6 +2812,9 @@ void ClientWebGLContext::GetParameter(JSContext* cx, GLenum pname,
+@@ -2514,6 +2823,9 @@ void ClientWebGLContext::GetParameter(JSContext* cx, GLenum pname,
                if (ret && StaticPrefs::webgl_sanitize_unmasked_renderer()) {
                  ret = Some(webgl::SanitizeRenderer(*ret));
                }
@@ -588,7 +599,7 @@ index 097d202297..e3b714f7fd 100644
              }
              break;
  
-@@ -2543,10 +2844,13 @@ void ClientWebGLContext::GetParameter(JSContext* cx, GLenum pname,
+@@ -2543,10 +2855,13 @@ void ClientWebGLContext::GetParameter(JSContext* cx, GLenum pname,
                ret = Some("Mozilla"_ns);
              } else {
                ret = GetUnmaskedVendor();
@@ -604,7 +615,7 @@ index 097d202297..e3b714f7fd 100644
              }
              break;
  
-@@ -3020,6 +3324,23 @@ ClientWebGLContext::GetShaderPrecisionFormat(const GLenum shadertype,
+@@ -3020,6 +3335,23 @@ ClientWebGLContext::GetShaderPrecisionFormat(const GLenum shadertype,
      return nullptr;
    }
  
@@ -628,7 +639,7 @@ index 097d202297..e3b714f7fd 100644
    const auto& shaderPrecisions = *notLost->info.shaderPrecisions;
    const auto args =
        webgl::GetShaderPrecisionFormatArgs{shadertype, precisiontype};
-@@ -6409,6 +6730,23 @@ bool ClientWebGLContext::IsSupported(const WebGLExtensionID ext,
+@@ -6409,6 +6741,23 @@ bool ClientWebGLContext::IsSupported(const WebGLExtensionID ext,
      return false;
    }
  
@@ -652,7 +663,7 @@ index 097d202297..e3b714f7fd 100644
    const auto& limits = Limits();
    return limits.supportedExtensions[ext];
  }
-@@ -6423,6 +6761,7 @@ void ClientWebGLContext::GetSupportedExtensions(
+@@ -6423,6 +6772,7 @@ void ClientWebGLContext::GetSupportedExtensions(
    }
  
    auto& retarr = retval.SetValue();

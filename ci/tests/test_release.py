@@ -392,3 +392,11 @@ def test_this_fork_releases_by_tag_and_publishes_to_no_registry():
     # `make dir` (ci.run_prepare) fetches stock's PGO profile for the pinned
     # Firefox and refuses a pin for another one (browser/scripts/pgo.py).
     assert "python3 -m ci.run_prepare" in text
+
+
+def test_tested_reads_the_gate_on_the_commit(monkeypatch):
+    checks = {"check_runs": [{"name": "All tests passed", "conclusion": "success"}]}
+    monkeypatch.setattr(release, "http_json", lambda url, **_: checks)
+    assert release.gate_passed("a" * 40)
+    checks["check_runs"][0]["conclusion"] = "failure"
+    assert not release.gate_passed("a" * 40)

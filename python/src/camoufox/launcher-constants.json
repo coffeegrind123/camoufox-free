@@ -123,6 +123,7 @@
 ,
   "x86IntelShare": 0.8136,
   "cpuIdentityPref": {"x86/intel": 1, "x86/amd": 2, "arm": 3},
+  "cpuIdentityArmWhenDrawn": false,
   "cpuManufacturers": {
     "mac": {"x86": ["intel"], "arm": ["apple"]},
     "windows": {"x86": ["intel", "amd"], "arm": ["qualcomm"]},

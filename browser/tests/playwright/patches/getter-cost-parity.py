@@ -22,7 +22,9 @@ untouched control getter in the same browser, under 1/FASTER_FACTOR of stock's
 cost: one that skips stock's work shows as plainly (screen.width took 18-24 ns
 against stock's 107 ns when it did). Each figure is the fastest of several
 rounds over two launches, so a busy runner inflates both browsers rather than
-one.
+one. The renderer strings, whose GPU round trip swings within and between
+sessions, are the median of their rounds instead, averaged over the launches,
+and fail at ROUND_TRIP_FACTOR times stock's either way.
 
     python browser/tests/playwright/patches/getter-cost-parity.py
     python browser/tests/playwright/patches/getter-cost-parity.py --stock FIREFOX
@@ -84,11 +86,26 @@ WEBGL = [
 # 7812, then 4844). The spoof's per-call work is IsSupported(), which
 # getExtension() times above.
 GL_SETUP = "G.getExtension('WEBGL_debug_renderer_info');"
-# In a worker the renderer strings cost ~23 us in one browser session and
-# ~60 us in another, in stock and Camoufox alike (measured 2026-10-26: stock
-# 62.5 us in every launch of one guard run and 22.5-24.4 us in three others,
-# Camoufox 22.5-26.3 us and then 51.9 us), so the worker times only the rest.
-WORKER_WEBGL = [e for e in WEBGL if e not in ("G.getParameter(G.RENDERER)", "G.getParameter(37446)")]
+# The renderer strings are stock's round trip to the GPU process, and its cost
+# changes between browser sessions, in stock and Camoufox alike. In a worker it
+# took ~23 us in one session and ~60 us in another (2026-10-26: stock 62.5 us in
+# every launch of one guard run and 22.5-24.4 us in three others, Camoufox
+# 22.5-26.3 us and then 51.9 us), so the worker does not time them. In the page
+# it took stock 15.0 and 20.6 us for the two strings and Camoufox 31.3 and 35.0
+# (2026-11-13), and in the next run stock 33.8 us and Camoufox 15.6: the
+# fastest round of a session is as noisy as the session. Ten alternating
+# launches of each on one runner (2026-11-15, stock 159.0.1 against cg.16, five
+# rounds each): the rounds of one session ranged 15-57 us in both browsers,
+# the sessions' medians 25.0-40.0 us for stock and 30.0-43.1 us for Camoufox
+# (RENDERER; UNMASKED 25.0-43.1 against 23.1-45.6), a ratio of 1.04 and 0.96.
+# Resampled with no difference between the browsers, two to five sessions
+# each gave ratios of 0.58-1.97 in 20,000 draws. ROUND_TRIP_FACTOR sits outside
+# that, so it fails a round trip skipped (~50 ns, what the other strings cost)
+# or made a few times slower, and never the session's swing, which a page
+# cannot see past either.
+ROUND_TRIP = ("G.getParameter(G.RENDERER)", "G.getParameter(37446)")
+ROUND_TRIP_FACTOR = 2.5
+WORKER_WEBGL = [e for e in WEBGL if e not in ROUND_TRIP]
 
 # Spoofed getters, and controls Camoufox does not touch (a sanity check that
 # the two browsers are comparable on this machine). innerWidth, innerHeight and
@@ -113,7 +130,7 @@ WORKER = [
 CONTROLS = ["screen.orientation.type", "navigator.onLine"]
 
 PAGE = """<!doctype html><meta charset=utf-8><body><script>
-function bench(exprs, setup) {
+function bench(exprs, setup, medianOf) {
   eval(setup);
   const out = {};
   const ctx = typeof C === 'undefined' ? [null, null] : [C, G];
@@ -121,12 +138,15 @@ function bench(exprs, setup) {
     'let t = performance.now(); let x; for (let i = 0; i < N; i++) { x = (' + e + '); } return performance.now() - t;');
   const empty = mk('i');
   const time = (f, N) => { let b = Infinity; for (let r = 0; r < 7; r++) b = Math.min(b, f(ctx[0], ctx[1], N)); return b; };
+  // The median round, for a cost whose fastest round is as noisy as its session.
+  const mid = (f, N) => { const t = []; for (let r = 0; r < 7; r++) t.push(f(ctx[0], ctx[1], N)); t.sort((a, b) => a - b); return t[3]; };
   for (const e of exprs) {
     let f;
     try { f = mk(e); f(ctx[0], ctx[1], 10); } catch (err) { out[e] = null; continue; }
     let N = 100;
     while (N < 5e6 && f(ctx[0], ctx[1], N) < 25) N *= 4;
-    out[e] = Math.max(0, time(f, N) - time(empty, N)) * 1e6 / N;
+    const pick = (medianOf || []).includes(e) ? mid : time;
+    out[e] = Math.max(0, pick(f, N) - time(empty, N)) * 1e6 / N;
   }
   return out;
 }
@@ -149,7 +169,8 @@ function bench(exprs, setup) {
   });
   if (worker && worker.error) throw new Error(worker.error);
   const win = bench(spec.window,
-    "var C = document.createElement('canvas').getContext('2d'); var G = document.createElement('canvas').getContext('webgl');" + spec.gl);
+    "var C = document.createElement('canvas').getContext('2d'); var G = document.createElement('canvas').getContext('webgl');" + spec.gl,
+    spec.median);
   const res = {window: win, worker, first};
   document.body.dataset.result = JSON.stringify(res);
   fetch('/result', {method: 'POST', body: JSON.stringify(res)});
@@ -186,6 +207,15 @@ class Handler(http.server.BaseHTTPRequestHandler):
         self.server.results.append(json.loads(self.rfile.read(int(self.headers["Content-Length"]))))
         self.send_response(204)
         self.end_headers()
+
+
+def judge(expr, s, c, stock_base, camou_base):
+    """(slower, faster) for Camoufox's c ns against stock's s ns, the two
+    browsers' control getters costing camou_base and stock_base."""
+    if expr in ROUND_TRIP:
+        return c > ROUND_TRIP_FACTOR * s, ROUND_TRIP_FACTOR * c < s
+    return (c > SLOWER_FACTOR * s and c - s >= MIN_GAP_NS,
+            FASTER_FACTOR * c / camou_base < s / stock_base and s - c >= FASTER_MIN_GAP_NS)
 
 
 def stock_firefox():
@@ -268,7 +298,13 @@ def fastest(runs):
         out[where] = {}
         for expr in runs[0][where]:
             values = [r[where][expr] for r in runs if r[where].get(expr) is not None]
-            out[where][expr] = min(values) if values else None
+            if not values:
+                out[where][expr] = None
+            elif expr in ROUND_TRIP:
+                # The launches' median rounds, averaged: a session swings it.
+                out[where][expr] = sum(values) / len(values)
+            else:
+                out[where][expr] = min(values)
     return out
 
 
@@ -287,7 +323,8 @@ def measure() -> int:
     server = Server(("127.0.0.1", 0), Handler)
     server.results = []
     threading.Thread(target=server.serve_forever, daemon=True).start()
-    spec = json.dumps({"window": WINDOW + CONTROLS, "worker": WORKER + CONTROLS[1:], "first": FIRST_READS, "gl": GL_SETUP})
+    spec = json.dumps({"window": WINDOW + CONTROLS, "worker": WORKER + CONTROLS[1:], "first": FIRST_READS, "gl": GL_SETUP,
+                       "median": list(ROUND_TRIP)})
     url = f"http://127.0.0.1:{server.server_address[1]}/#" + urllib.request.quote(spec)
 
     stock_runs = []
@@ -333,9 +370,7 @@ def measure() -> int:
                     print(f"{where:6s} {expr[:44]:44s} {'-':>8s} {'-':>9s}  not measurable")
                     continue
                 control = expr in CONTROLS
-                slow = c > SLOWER_FACTOR * s and c - s >= MIN_GAP_NS
-                fast = (FASTER_FACTOR * c / camou_base < s / stock_base
-                        and s - c >= FASTER_MIN_GAP_NS)
+                slow, fast = judge(expr, s, c, stock_base, camou_base)
                 mark = ("  <- control" if control else "  <- SLOWER" if slow
                         else "  <- FASTER" if fast else "")
                 print(f"{where:6s} {expr[:44]:44s} {s:8.0f} {c:9.0f}{mark}")
@@ -362,7 +397,7 @@ def measure() -> int:
             print(f"FAIL: {f}")
         return 1
     print(f"PASS: no spoofed getter costs over {SLOWER_FACTOR}x or under 1/{FASTER_FACTOR} of "
-          f"stock Firefox's from script.")
+          f"stock Firefox's from script, and no GPU round trip over {ROUND_TRIP_FACTOR}x either way.")
     return 0
 
 

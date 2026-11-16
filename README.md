@@ -5,37 +5,17 @@ that spoofs device fingerprints in C++. For what Camoufox is, its features and
 how to build it, read [upstream's README](https://github.com/daijro/camoufox#readme).
 
 This fork follows upstream `main` and pins Firefox `159.0.1` / Camoufox `beta.35`
-in [`browser/upstream.sh`](browser/upstream.sh). The current release, and the
-only one published, is
-[`v159.0.1-beta.35-cg.14`](https://github.com/coffeegrind123/camoufox-free/releases/tag/v159.0.1-beta.35-cg.14),
-built from [70dbf55](https://github.com/coffeegrind123/camoufox-free/commit/70dbf558040eb9204dd77409490fd20df8c34aa9).
-Everything listed below is in it. Fixes are offered upstream when appropriate.
+in [`browser/upstream.sh`](browser/upstream.sh). The current release is
+[`v159.0.1-beta.35-cg.17`](https://github.com/coffeegrind123/camoufox-free/releases/tag/v159.0.1-beta.35-cg.17),
+built from [832676e](https://github.com/coffeegrind123/camoufox-free/commit/832676e31f62c30a94988c538e6ba1a0e9c7ad8e),
+which includes upstream d737a02d; `cg.16` stays published as the rollback.
+Fixes are offered upstream when
+appropriate.
 
 > [!NOTE]
 > Under development. Test a release against your own targets before relying on it.
 
 ## What this fork adds
-
-### Rendering as the claimed OS
-
-For an identity whose OS is not the host's. Offered upstream in
-[#896](https://github.com/daijro/camoufox/pull/896).
-
-- **Per-script font fallback** follows the claimed OS's tables and `font.*`
-  defaults, so Thai, emoji, Mongolian and other scripts draw with the faces
-  stock Firefox uses there. Where stock's Windows table names a face Windows 10
-  and 11 no longer ship (Lao UI, Euphemia), the face Windows' own system
-  fallback draws follows it (Leelawadee UI, Gadugi). ([7c8e6a9](https://github.com/coffeegrind123/camoufox-free/commit/7c8e6a9d8b3312846c26fe8e31984c10a1d3d6c6))
-- **DirectWrite line metrics** for a Windows identity (`fonts:metrics`), so
-  line boxes match Windows instead of FreeType. ([c8cd204](https://github.com/coffeegrind123/camoufox-free/commit/c8cd20423c9640bbb381fc33a293c33ccbbddadf), [6023d01](https://github.com/coffeegrind123/camoufox-free/commit/6023d01bd194ad38e1fae7a3660c0c02d5c200fa))
-- **Subpixel glyph positions** for a Windows or macOS identity, so text and
-  form-control widths match those OSes. ([806329a](https://github.com/coffeegrind123/camoufox-free/commit/806329ab64dcf271802b672b57cae1ca7ac34ec6))
-- **macOS UCS4 cmaps** are read for a macOS identity, so Geneva, Apple Symbols
-  and Heiti render instead of sitting unused in the font list. ([82092da](https://github.com/coffeegrind123/camoufox-free/commit/82092dac9937b7d87fd62cd64c84a4197f32ee0b))
-- **Codecs:** `canPlayType()` and `mediaCapabilities.decodingInfo()` both
-  answer as the claimed OS, with Windows' hardware codecs. ([8fa6bd8](https://github.com/coffeegrind123/camoufox-free/commit/8fa6bd86d751734ce2bd209aab4e01392aa7580e))
-- **Windows system colours** (Highlight, AccentColor, dialog) instead of the
-  host's GTK theme. ([51dfed2](https://github.com/coffeegrind123/camoufox-free/commit/51dfed22ff39a1bca9e1ab982b97b8c44292c534))
 
 ### Other browser fixes
 
@@ -65,7 +45,8 @@ For an identity whose OS is not the host's. Offered upstream in
   context and none for the launch, connections no page owns (the push
   websocket, media plugin update checks) went out direct from the host's
   address. They now take a proxied context's proxy; a page's own request keeps
-  its context's. ([58e3760](https://github.com/coffeegrind123/camoufox-free/commit/58e3760a83d04efa30982288f5ff00c61da0af1e), guard
+  its context's. Offered
+  upstream in [#1065](https://github.com/daijro/camoufox/pull/1065). ([58e3760](https://github.com/coffeegrind123/camoufox-free/commit/58e3760a83d04efa30982288f5ff00c61da0af1e), guard
   [context-proxy-browser-traffic.py](browser/tests/playwright/patches/context-proxy-browser-traffic.py))
 - **Authenticated SOCKS5 proxies fail closed.** Upstream passes SOCKS5
   credentials to Juggler (`CAMOU_PROXY_AUTH`, and a per-context init script).
@@ -159,13 +140,13 @@ For an identity whose OS is not the host's. Offered upstream in
   XWayland, with the content 43,149 into the window, where stock Firefox on
   Windows measures 16x93 and 8,85. A page now reads the real content area plus
   the claimed OS's frame at its display scale, in a cross-site iframe too, and
-  no frame in fullscreen. A Windows identity drawn maximized gets stock's
-  maximized geometry (outer the available area plus the borders, at minus the
-  border), and a window maximized later goes back to the identity's size. The
-  frame follows the window's state: maximized while the real window is or its
-  content fills the available area, the normal frame once a resize leaves it
-  (it kept the maximized frame at -8,-8 at any size), and no frame at 0,0 in
-  fullscreen. ([patch](browser/patches/window-sizing-claimed-os.patch),
+  no frame in fullscreen. A Windows identity drawn maximized reports the
+  maximized outer size (the available area plus the borders, at minus the
+  border), and a window maximized later goes back to the identity's size.
+  Not yet stock at 100% display scale: maximized, the frame measures 16x93
+  where stock's is 16x101, and a resize out of it stays at -8,-8 where stock
+  is at 0,0 (open in
+  [#41](https://github.com/coffeegrind123/camoufox-free/pull/41)). ([patch](browser/patches/window-sizing-claimed-os.patch),
   [zz-window-presentation.patch](browser/patches/zz-window-presentation.patch),
   [3924094](https://github.com/coffeegrind123/camoufox-free/commit/39240942ecd1e20088209001414b64a1d621d4b5), guard
   [window-sizing-claimed-os.py](browser/tests/playwright/patches/window-sizing-claimed-os.py))
@@ -192,9 +173,46 @@ For an identity whose OS is not the host's. Offered upstream in
   the next sample of a mouse polled at 1 kHz, one sample's travel along the
   path (1px at 0.5 px/ms, about 15px at 15 px/ms), so the fork keeps #987's
   exit on the curve and guards it also at 105% text scale, the fractional
-  content offset #1026 was written for.
-  ([MouseDispatch.js](browser/additions/juggler/input/MouseDispatch.js), [d5945faf](https://github.com/coffeegrind123/camoufox-free/commit/d5945fafb2de243c59b82801ecab99c315a58093), guard
+  content offset #1026 was written for. A step whose planned time rounded to
+  0 ms is taken to last as long as a 14 px/ms pointer needs, the fastest stock
+  measured, so its exit stays one sample from the last move. The guard's
+  stock bounds, from XTest exits at 1 kHz, are offered upstream in
+  [#1029](https://github.com/daijro/camoufox/pull/1029).
+  ([MouseDispatch.js](browser/additions/juggler/input/MouseDispatch.js), [91b0957c](https://github.com/coffeegrind123/camoufox-free/commit/91b0957c2c3d735620dd9381e84b6672dff59423), [d5945faf](https://github.com/coffeegrind123/camoufox-free/commit/d5945fafb2de243c59b82801ecab99c315a58093), guard
   [humanize-mouse-trajectory.py](browser/tests/playwright/patches/humanize-mouse-trajectory.py))
+- **A spoofed WebGL limit costs what stock's does.** Upstream's #997 code
+  fetched the context's tables and scanned the 31 limits stock asks the host for
+  on every `getParameter` of a limit, so `MAX_TEXTURE_SIZE` took 12 ns against
+  stock's 8 ns in every session, 0.36 of an untouched getter against stock's
+  0.25. A cached answer now returns first, and the host-fetched limits are a
+  switch. Offered
+  upstream in [#1062](https://github.com/daijro/camoufox/pull/1062). ([PR #47](https://github.com/coffeegrind123/camoufox-free/pull/47), [1538445d](https://github.com/coffeegrind123/camoufox-free/commit/1538445d7eefc5c3270cd8b49588f3e5a2180f9e), [1849de26](https://github.com/coffeegrind123/camoufox-free/commit/1849de26e87dde339678b9d1ea7aec8e53b96d46))
+- **The estimate blends' native path costs what stock's does.** Upstream's
+  [#1024](https://github.com/daijro/camoufox/pull/1024) made every `rcp` and
+  `rsqrt` in Skia's raster pipeline call out of line to find the other
+  vendor's table, which spills the stage's vector registers, for every
+  identity, the host's own included. The table is resolved once when Skia
+  initialises and read inline: under the host's own identity, color-dodge,
+  color-burn and the non-separable blends draw 9-22% faster than cg.16 did
+  (one runner, interleaved launches). Offered
+  upstream in [#1061](https://github.com/daijro/camoufox/pull/1061).
+  ([PR #44](https://github.com/coffeegrind123/camoufox-free/pull/44))
+- **An ARM Linux identity claims llvmpipe.** Beside an ARM CPU, the only GPU
+  fpgen records from Firefox on Linux is llvmpipe, and the synthetic draw
+  skips software renderers, so `cpu={"arch": "arm"}` on Linux raised "No
+  recorded lin GPU fits". When no hardware GPU on the OS fits the claimed CPU,
+  the draw takes the software renderers that do; every other draw still
+  never claims software rendering. Python and TypeScript. Offered upstream
+  in [#1033](https://github.com/daijro/camoufox/pull/1033).
+  ([3649a60c](https://github.com/coffeegrind123/camoufox-free/commit/3649a60ccd9d3ccc0772573bdbf230d512fece69), guard
+  [cpu-vendor-estimates.py](browser/tests/playwright/patches/cpu-vendor-estimates.py))
+- **The x86-64 build compiles upstream's X86NaN away.** Upstream's
+  [#1034](https://github.com/daijro/camoufox/pull/1034) wraps interpreter and
+  `Math` operations in an `X86NaN` check of `EmulateX86` in every build, though
+  only an ARM64 build can set it. On x86-64 the check is now a compile-time
+  no-op, so those paths do no work stock Firefox does not. Offered
+  upstream in [#1063](https://github.com/daijro/camoufox/pull/1063).
+  ([863b196e](https://github.com/coffeegrind123/camoufox-free/commit/863b196e241a8dbede44bafbae1e389b05b9ea0d))
 - **Humanized moves report like a 125 Hz mouse.** They were resampled to
   60 Hz, but `pointerrawupdate` and `getCoalescedEvents()` show every report:
   stock under a real mouse shows about two per frame, 8 ms apart, humanize one,
@@ -236,9 +254,35 @@ For an identity whose OS is not the host's. Offered upstream in
   claimed OS. ([09b5fc6](https://github.com/coffeegrind123/camoufox-free/commit/09b5fc6bf897143eedd57d73b8b8e0a936d2ad1d))
 - **The search region follows the locale's region.** Stock learns it from a
   network lookup the launch turns off; unset, every identity got the
-  region-less engine list and the DoH rollout never decided. ([2723224](https://github.com/coffeegrind123/camoufox-free/commit/2723224cbc9bcee2e156042f203a7a8154450d95))
+  region-less engine list and the DoH rollout never decided. Offered
+  upstream in [#1066](https://github.com/daijro/camoufox/pull/1066). ([2723224](https://github.com/coffeegrind123/camoufox-free/commit/2723224cbc9bcee2e156042f203a7a8154450d95))
 
 ### Kept here after upstream declined
+
+#### Rendering as the claimed OS
+
+For an identity whose OS is not the host's. Declined in
+[#896](https://github.com/daijro/camoufox/pull/896): upstream's stated reason
+is that rendering text, colours and codecs as an OS other than the host's is
+out of scope for that repository.
+
+- **Per-script font fallback** follows the claimed OS's tables and `font.*`
+  defaults, so Thai, emoji, Mongolian and other scripts draw with the faces
+  stock Firefox uses there. Where stock's Windows table names a face Windows 10
+  and 11 no longer ship (Lao UI, Euphemia), the face Windows' own system
+  fallback draws follows it (Leelawadee UI, Gadugi). ([7c8e6a9](https://github.com/coffeegrind123/camoufox-free/commit/7c8e6a9d8b3312846c26fe8e31984c10a1d3d6c6))
+- **DirectWrite line metrics** for a Windows identity (`fonts:metrics`), so
+  line boxes match Windows instead of FreeType. ([c8cd204](https://github.com/coffeegrind123/camoufox-free/commit/c8cd20423c9640bbb381fc33a293c33ccbbddadf), [6023d01](https://github.com/coffeegrind123/camoufox-free/commit/6023d01bd194ad38e1fae7a3660c0c02d5c200fa))
+- **Subpixel glyph positions** for a Windows or macOS identity, so text and
+  form-control widths match those OSes. ([806329a](https://github.com/coffeegrind123/camoufox-free/commit/806329ab64dcf271802b672b57cae1ca7ac34ec6))
+- **macOS UCS4 cmaps** are read for a macOS identity, so Geneva, Apple Symbols
+  and Heiti render instead of sitting unused in the font list. ([82092da](https://github.com/coffeegrind123/camoufox-free/commit/82092dac9937b7d87fd62cd64c84a4197f32ee0b))
+- **Codecs:** `canPlayType()` and `mediaCapabilities.decodingInfo()` both
+  answer as the claimed OS, with Windows' hardware codecs. ([8fa6bd8](https://github.com/coffeegrind123/camoufox-free/commit/8fa6bd86d751734ce2bd209aab4e01392aa7580e))
+- **Windows system colours** (Highlight, AccentColor, dialog) instead of the
+  host's GTK theme. ([51dfed2](https://github.com/coffeegrind123/camoufox-free/commit/51dfed22ff39a1bca9e1ab982b97b8c44292c534))
+
+#### Other declined changes
 
 - **`gpu_passthrough=True`.** A Linux container on Windows can render on the
   host's real GPU through WSL's D3D12 driver while claiming Windows Firefox on
@@ -278,6 +322,15 @@ For an identity whose OS is not the host's. Offered upstream in
 
 ### Build, releases and defaults
 
+- **A drawn ARM CPU computes as the host until the ARM64 emulation is fast.**
+  Upstream's ARM64 emulation (`general.cpu_identity` 3) gives ARM's bits but
+  drew canvas composites 6-87x slower than native on x86-64, which a page can
+  time, and the launcher drew ARM for 59 of 60 macOS identities. The launcher
+  now sends the pref only for an ARM CPU the caller names;
+  `cpuIdentityArmWhenDrawn` in `launcher-constants.json` restores the old
+  default.
+  ([c0728275](https://github.com/coffeegrind123/camoufox-free/commit/c0728275f5bee2bc7a16c71d0a810ebb3cb114c1))
+
 - **uBlock Origin's selected filter lists are the ten in its bundle.** Upstream
   bundles uBO and stops it updating lists, but uBO still selected regional lists
   for the browser's locale on first run and downloaded them before pages
@@ -297,14 +350,39 @@ For an identity whose OS is not the host's. Offered upstream in
   DuckDuckGo the default, in the search service's own engine selection, where a
   page can't read it.
   ([search-default-duckduckgo.patch](browser/patches/search-default-duckduckgo.patch), [6e24feb](https://github.com/coffeegrind123/camoufox-free/commit/6e24feb8b621bfdd794d1745105f08596a907040), [2a48d607](https://github.com/coffeegrind123/camoufox-free/commit/2a48d6072738d8ac47d428e34bbac130ae0735e2))
+- **Firefox 159.0.1**, where upstream pins 159.0. None of the files 159.0.1
+  changes is touched by a patch. Offered as
+  [#1004](https://github.com/daijro/camoufox/pull/1004) and closed: version
+  bumps are the maintainers' call.
+  ([267f73a](https://github.com/coffeegrind123/camoufox-free/commit/267f73a6c41e76044ec607b1f0961ab98158d702))
 - **Linux x86_64 releases built by this repo's CI**
   ([`build.yml`](.github/workflows/build.yml)), with sha256 digests. No PyPI or
   npm packages are published, and upstream's release train doesn't run. ([b70dc6c](https://github.com/coffeegrind123/camoufox-free/commit/b70dc6c52c1605ad8bcf7c7770cf99d2235dd8a0))
+  Upstream's tests of its `release.yml` (from
+  [#1038](https://github.com/daijro/camoufox/pull/1038)) are dropped, since
+  that file is not here. ([a0b9c5f7](https://github.com/coffeegrind123/camoufox-free/commit/a0b9c5f7823fce58f8a2d4f6329de63431f4792b))
 - **Releases are tag-driven and do not wait for Tests.** Pushing a matching
   `v<version>-<release>-cg.<n>` tag starts the release workflow; pushing to
   `main` does not create a release. The release workflow fails before building
   unless the tag names the pinned browser and its commit is on `main` with a
   successful `All tests passed` check.
+- **The renderer strings' cost is held to stock's, both ways.** Upstream's
+  [#1039](https://github.com/daijro/camoufox/pull/1039) and
+  [#1042](https://github.com/daijro/camoufox/pull/1042) stopped failing a
+  slower `getParameter(RENDERER)` and fail a faster one only under 1/10 of
+  stock's, from two CI readings that each took a session's fastest round.
+  Measured over ten alternating launches each, the two browsers' session
+  medians differ by 4%, and resampling them never went outside 0.58-1.97x;
+  the guard takes the median round and fails beyond 2.5x either way. Offered
+  upstream in [#1064](https://github.com/daijro/camoufox/pull/1064).
+  ([450a0a23](https://github.com/coffeegrind123/camoufox-free/commit/450a0a23fc7871467f387715955965b8b5ae52cf), guard
+  [getter-cost-parity.py](browser/tests/playwright/patches/getter-cost-parity.py))
+- **No preflight of other targets.** Upstream's
+  [#1055](https://github.com/daijro/camoufox/pull/1055) compiles the patched
+  sources for five more targets (Windows, macOS, ARM64) on every pull request
+  that changes the browser. This fork releases linux x86_64 only, so its pull
+  requests build that one target, through the same `ci.run_build` command its
+  release (`build.yml`) runs.
 - **Link Preview stays on, as stock ships it.** Upstream's #966 turned
   `browser.ml.linkPreview.enabled` off. On stock 159.0 a long press on a link
   fetches the link target anonymously with `x-firefox-ai: 1`; with the feature

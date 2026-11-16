@@ -132,6 +132,13 @@ Intel 76.86%, AMD 17.61%, Apple 5.04%). The report has no per-OS split;
 Steam's survey puts AMD far higher, so the share is a choice, kept in
 `launcher-constants.json` as `x86IntelShare`.
 
+An ARM CPU the identity drew (every Apple-GPU Mac) does not get the pref
+for now: the ARM64 emulation below runs canvas composites 6-87x slower than
+native on x86-64, which a page can time, so it computes as the host until the
+emulation is fast. An ARM CPU named through `cpu` still gets 3, and
+`cpuIdentityArmWhenDrawn` in `launcher-constants.json` restores it for drawn
+ones.
+
 On an Apple M4, stock Firefox 159 gives other values than x86-64 for every
 Web Audio node, every canvas composite operation (source-over included, not
 only the estimate-based ones), drawImage, filters and paths, the Opus and VP9
@@ -164,6 +171,26 @@ The two translated ARM sources are generated from Firefox's aarch64 assembly by
 (`browser/tests/cpu-probe/`) with an ARM identity and compares every key on
 which stock x86-64 and ARM64 Linux differ.
 
+With `general.cpu_identity` 1 or 2, an aarch64 build computes what the
+x86-64 build computes on an AVX2 and FMA core of that vendor:
+
+- The x86 code paths are compiled for aarch64 against
+  `third_party/simde/x86emu`, which stands in for `<immintrin.h>`: SIMDe's
+  SSE, AVX2 and FMA intrinsics, with x86's negative default NaN, its NaN
+  operand order and its out-of-range conversions (`x86emu.h`). Skia runs its
+  SSE2, SSSE3 and AVX2 raster pipeline and blend kernels
+  (`SkOpts_X86EmuTarget.h`, the `*_x86emu.cpp` files), with the vendor's
+  estimate tables as on x86-64.
+- Web Audio mixes as its SSE4.2 engine does, on NEON registers with the
+  product rounded before each add (`AudioNodeEngineX86Emu.cpp`); the speex
+  resampler runs its SSE path, and libopus its SSE CELT float kernels
+  (`celt_x86emu.c`).
+- ffvpx's FFT runs its x86-64 AVX2 and FMA3 assembly, translated to C
+  (`tx_float_x86emu.c`) by `browser/scripts/x86toc.py`.
+- The JIT and the interpreter make x86's negative default NaN (Math
+  functions and constant folding included), and wasm relaxed SIMD gives the
+  lanes SpiderMonkey's x64 backend gives (`JS::SetEmulateX86`).
+
 Emulating must not be slower than computing natively either, or a page can
 time it. The `cpu-emulation-timing` guard times canvas blends, sampling,
 paths, Web Audio and Opus under the host's identity, the other x86 vendor and
@@ -171,8 +198,6 @@ ARM64 on one machine.
 
 What this does not cover:
 
-- An x86 identity on an ARM64 host. Nothing emulates x86 on aarch64, so an
-  ARM64 build always computes as ARM64.
 - WebGL. Shaders run on the host's GPU or llvmpipe; an ARM identity on Linux
   claims llvmpipe, since no Linux ARM GPU is recorded yet.
 - hardwareConcurrency and other CPU-shaped values do not yet follow the vendor.

@@ -17,7 +17,12 @@ import {
 } from "../src/fingerprints.js";
 import { LAUNCHER_CONSTANTS } from "../src/paths.js";
 import { ValueError } from "../src/pycompat.js";
-import { cpuIdentityPref, osForCpu, vpxRealtimeOnly } from "../src/utils.js";
+import {
+	cpuIdentityPref,
+	launchCpuIdentityPref,
+	osForCpu,
+	vpxRealtimeOnly,
+} from "../src/utils.js";
 import { sampleWebglForScreen } from "../src/webgl.js";
 import { MODEL } from "./fpgen-setup.js";
 
@@ -374,6 +379,45 @@ describe("the pref", () => {
 		).toBe(3);
 		expect(cpuIdentityPref({ "cpu:arch": "arm" })).toBe(3);
 		expect(cpuIdentityPref({})).toBe(0);
+	});
+
+	// The ARM64 emulation is 6-87x slower than native, a timing tell, so the
+	// launcher does not choose it on its own until it is fast.
+	const appleArm = { "cpu:arch": "arm", "cpu:manufacturer": "apple" };
+
+	it("a drawn ARM CPU computes as the host", () => {
+		expect(LAUNCHER_CONSTANTS.cpuIdentityArmWhenDrawn).toBe(false);
+		expect(launchCpuIdentityPref(appleArm, false)).toBe(0);
+		expect(launchCpuIdentityPref(appleArm, true)).toBe(3);
+	});
+
+	it("a drawn x86 vendor is still sent", () => {
+		expect(
+			launchCpuIdentityPref(
+				{ "cpu:arch": "x86", "cpu:manufacturer": "intel" },
+				false,
+			),
+		).toBe(1);
+		expect(
+			launchCpuIdentityPref(
+				{ "cpu:arch": "x86", "cpu:manufacturer": "amd" },
+				false,
+			),
+		).toBe(2);
+		expect(launchCpuIdentityPref({}, false)).toBe(0);
+	});
+
+	it("the switch restores the ARM emulation", () => {
+		const constants = LAUNCHER_CONSTANTS as {
+			cpuIdentityArmWhenDrawn: boolean;
+		};
+		const saved = constants.cpuIdentityArmWhenDrawn;
+		constants.cpuIdentityArmWhenDrawn = true;
+		try {
+			expect(launchCpuIdentityPref(appleArm, false)).toBe(3);
+		} finally {
+			constants.cpuIdentityArmWhenDrawn = saved;
+		}
 	});
 });
 

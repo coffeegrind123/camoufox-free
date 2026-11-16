@@ -945,6 +945,25 @@ export function cpuIdentityPref(config: Record<string, any>): number {
 }
 
 /**
+ * general.cpu_identity the launcher sends by default.
+ *
+ * The ARM64 emulation computes ARM's bits but runs 6-87x slower than native
+ * (canvas blends), which a page can time. Until it is fast, an ARM CPU the
+ * launcher drew (every Apple-GPU Mac) computes as the host; one the caller
+ * named still gets the emulation. cpuIdentityArmWhenDrawn turns it back on.
+ */
+export function launchCpuIdentityPref(
+	config: Record<string, any>,
+	callerNamedCpu: boolean,
+): number {
+	const pref = cpuIdentityPref(config);
+	if (pref !== LAUNCHER_CONSTANTS.cpuIdentityPref.arm || callerNamedCpu) {
+		return pref;
+	}
+	return LAUNCHER_CONSTANTS.cpuIdentityArmWhenDrawn ? pref : 0;
+}
+
+/**
  * media.libvpx.realtime_only: Firefox builds libvpx realtime-only for Windows
  * and Linux on ARM64 (not macOS), which changes the WebCodecs VP8/VP9 encoders'
  * output and rejects quality-mode VP8 outright.
@@ -1736,7 +1755,8 @@ export interface LaunchOptions {
 	 * recorded GPU for the CPU. By default the CPU follows the GPU (Apple GPU:
 	 * Apple ARM; Intel iGPU or Intel Mac: Intel; Radeon iGPU: AMD) and a core
 	 * count only Intel ships, otherwise x86 drawn 81% Intel, as among
-	 * Firefox's x86 users. */
+	 * Firefox's x86 users. A drawn ARM CPU computes as the host for now (the
+	 * ARM64 emulation is slow enough to time); a named one gets the emulation. */
 	cpu?: { arch?: "x86" | "arm"; manufacturer?: string };
 	/** Calculate longitude, latitude, timezone, country, & locale based on the IP
 	 * address. Pass the target IP address to use, or `true` to find it. */
@@ -2714,7 +2734,12 @@ export async function launchOptions({
 	// The browser computes canvas, audio, Opus, wasm and NaNs as the claimed
 	// CPU does (cpu-identity.patch). A build without the patch ignores the pref
 	// and computes as the host does.
-	const cpuPref = cpuIdentityPref(config);
+	const cpuPref = launchCpuIdentityPref(
+		config,
+		(cpu !== undefined && cpu !== null) ||
+			callerKeys.has("cpu:arch") ||
+			callerKeys.has("cpu:manufacturer"),
+	);
 	if (cpuPref && !("general.cpu_identity" in firefox_user_prefs)) {
 		firefox_user_prefs["general.cpu_identity"] = cpuPref;
 	}

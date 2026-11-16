@@ -189,8 +189,9 @@ jobs:
           # Cap Rust parallelism to lower peak memory (avoids OOM/SIGTERM).
           # Tune to taste: higher = faster but more RAM.
           CARGO_BUILD_JOBS: "1"
-        working-directory: browser
-        run: python3 ./multibuild.py --target ${{ matrix.target }} --arch ${{ matrix.arch }}
+        # The pull request's build job runs the same command for linux x86_64
+        # (ci/tribal-rules.yml: one-build-entry-point).
+        run: python3 -m ci.run_build --target ${{ matrix.target }} --arch ${{ matrix.arch }}
 
       - name: Seed the packaged uBO, then check it as a user that doesn't own it
         # The release's own browser compiles its bundled uBO's lists once and

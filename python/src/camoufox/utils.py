@@ -636,6 +636,20 @@ def cpu_identity_pref(config: Dict[str, Any]) -> int:
     return table.get(f'x86/{maker}', 0) if arch in ('x86', None) else 0
 
 
+def launch_cpu_identity_pref(config: Dict[str, Any], caller_named_cpu: bool) -> int:
+    """general.cpu_identity the launcher sends by default.
+
+    The ARM64 emulation computes ARM's bits but runs 6-87x slower than native
+    (canvas blends), which a page can time. Until it is fast, an ARM CPU the
+    launcher drew (every Apple-GPU Mac) computes as the host; one the caller
+    named still gets the emulation. cpuIdentityArmWhenDrawn turns it back on.
+    """
+    pref = cpu_identity_pref(config)
+    if pref != LAUNCHER_CONSTANTS['cpuIdentityPref']['arm'] or caller_named_cpu:
+        return pref
+    return pref if LAUNCHER_CONSTANTS['cpuIdentityArmWhenDrawn'] else 0
+
+
 def vpx_realtime_only(config: Dict[str, Any], target_os: str) -> bool:
     """media.libvpx.realtime_only: Firefox builds libvpx realtime-only for
     Windows and Linux on ARM64 (not macOS), which changes the WebCodecs VP8/VP9
@@ -1491,7 +1505,9 @@ def launch_options(
             recorded GPU for the CPU. By default the CPU follows the GPU (Apple
             GPU: Apple ARM; Intel iGPU or Intel Mac: Intel; Radeon iGPU: AMD)
             and a core count only Intel ships, otherwise x86 drawn 81% Intel,
-            as among Firefox's x86 users.
+            as among Firefox's x86 users. A drawn ARM CPU computes as the host
+            for now (the ARM64 emulation is slow enough to time); a named one
+            gets the emulation.
         canvas_noise (Optional[bool]):
             Replace canvas and WebGL readback with random data, as
             privacy.resistFingerprinting does in LibreWolf, Tor Browser and
@@ -2248,7 +2264,8 @@ def launch_options(
     # The browser computes canvas, audio, Opus, wasm and NaNs as the claimed
     # CPU does (cpu-identity.patch). A build without the patch ignores the pref
     # and computes as the host does.
-    _cpu_pref = cpu_identity_pref(config)
+    _cpu_pref = launch_cpu_identity_pref(
+        config, cpu is not None or bool({'cpu:arch', 'cpu:manufacturer'} & _caller_keys))
     if _cpu_pref:
         firefox_user_prefs.setdefault('general.cpu_identity', _cpu_pref)
     if vpx_realtime_only(config, target_os):
