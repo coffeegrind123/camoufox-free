@@ -963,7 +963,8 @@ def present_window_frame(config: Dict[str, Any], target_os: str, own_geometry: b
     stock presents a maximized one, the common state in fpgen's records:
     outer size the available area plus the borders, hanging that far off the
     screen's edges. clamp_window_dimensions and clamp_window_position turn
-    exactly that draw into a window filling the available area.
+    exactly that draw into a window filling the available area. Geometry
+    already in that maximized form is maximized with or without own_geometry.
     """
     table = WINDOW_FRAME.get(target_os)
     if not table:
@@ -982,11 +983,23 @@ def present_window_frame(config: Dict[str, Any], target_os: str, own_geometry: b
         and config.get('window.screenX', 0) == left
         and config.get('window.screenY', 0) == avail_top
     )
-    if maximized:
-        config['window.outerWidth'] = width + frame['left'] + frame['right']
-        config['window.outerHeight'] = height + frame['borderTop'] + frame['bottom']
-        config['window.screenX'] = left - frame['left']
-        config['window.screenY'] = avail_top - frame['borderTop']
+    maximized_geometry = {
+        'window.outerWidth': width + frame['left'] + frame['right'],
+        'window.outerHeight': height + frame['borderTop'] + frame['bottom'],
+        'window.screenX': left - frame['left'],
+        'window.screenY': avail_top - frame['borderTop'],
+    }
+    # Geometry already in stock's maximized form, fpgen's record or a caller's,
+    # is maximized whoever set it. A caller pinning any screen.* or window.*
+    # key clears own_geometry, and such a window went out as a normal one
+    # hanging off the screen, its content 8px above stock's.
+    already = (
+        (frame['borderTop'] or frame['bottom'])
+        and width and height
+        and all(config.get(key) == value for key, value in maximized_geometry.items())
+    )
+    if maximized or already:
+        config.update(maximized_geometry)
         top += frame['borderTop']
         config['window.maximized'] = True
     for side, inset in (('Left', frame['left']), ('Top', top),
