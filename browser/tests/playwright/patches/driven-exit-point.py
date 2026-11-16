@@ -53,6 +53,7 @@ def main() -> int:
                                                     i_know_what_im_doing=True)) as browser:
         page = browser.new_page()
         page.set_content(PAGE)
+        dpr = page.evaluate("devicePixelRatio")
         page.evaluate(RECORD)
         width = page.evaluate("innerWidth")
         up = exits(page, UP)
@@ -61,9 +62,11 @@ def main() -> int:
 
     # The pointer moves in device pixels, so under a fractional drawn scale or
     # zoom the page reads its own coordinate back to within a CSS pixel
-    # (350.2 for 350), in stock Firefox as here.
+    # (350.2 for 350), in stock Firefox as here. A mouse event's coordinates
+    # are whole pixels, so that can read one pixel off: 349 for 350 (PR #54's
+    # run 43872663519, which changed nothing in input).
     def near(a, b):
-        return abs(a - b) < 1
+        return abs(a - b) <= 1
 
     for name, got, check in (
         ("up into the toolbar", up, lambda x, y: near(x, UP[0]) and y < 0),
@@ -77,7 +80,7 @@ def main() -> int:
             failures.append(f"{name}: left at {[(e[0], e[1], e[2]) for e in bad]}")
 
     for f in failures:
-        print(f"FAIL: {f}")
+        print(f"FAIL: {f} (devicePixelRatio {dpr})")
     if failures:
         return 1
     print(f"PASS: the pointer leaves the page where it was moved: up {json.dumps(up)}, side {json.dumps(side)}")
