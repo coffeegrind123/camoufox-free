@@ -253,6 +253,46 @@ def test_a_maximized_windows_window_follows_the_display_scale(dpr, outer, frame)
     assert frame_of(config) == frame
 
 
+@pytest.mark.parametrize("own_geometry", [True, False])
+@pytest.mark.parametrize("dpr, outer, position, frame", [
+    (None, (1936, 1048), (-8, -8), (8, 93, 8, 8)),
+    (1.25, (1934, 1046), (-7, -7), (7, 92, 7, 7)),
+])
+def test_a_window_already_in_stock_maximized_form_is_maximized(own_geometry, dpr, outer, position, frame):
+    # fpgen's maximized record as given, or a caller's: pinning any screen.* or
+    # window.* key (window.devicePixelRatio, say) makes the geometry the
+    # caller's, and it was presented as a normal window hanging off the screen
+    # with an 85px top, content at 77 where stock's is at 85 (run 43589336761).
+    config = _window(outer, position=position, dpr=dpr)
+    fingerprints.present_window_frame(config, "win", own_geometry=own_geometry)
+    assert (config["window.outerWidth"], config["window.outerHeight"]) == outer
+    assert (config["window.screenX"], config["window.screenY"]) == position
+    assert frame_of(config) == frame
+    assert config["window.maximized"] is True
+
+
+@pytest.mark.parametrize("outer, position", [
+    ((1936, 1048), (0, 0)),
+    ((1936, 1040), (-8, -8)),
+    ((1934, 1046), (-8, -8)),
+])
+def test_a_window_near_stock_maximized_form_is_normal(outer, position):
+    config = _window(outer, position=position)
+    fingerprints.present_window_frame(config, "win", own_geometry=False)
+    assert frame_of(config) == (8, 85, 8, 8)
+    assert "window.maximized" not in config
+
+
+def test_a_callers_maximized_geometry_is_maximized(launch):
+    geometry = {"screen.width": 1920, "screen.height": 1080, "screen.availWidth": 1920,
+                "screen.availHeight": 1032, "window.outerWidth": 1936, "window.outerHeight": 1048,
+                "window.screenX": -8, "window.screenY": -8, "window.devicePixelRatio": 1}
+    config, _ = launch(WIN_UA, config=geometry)
+    assert (config["window.outerWidth"], config["window.screenX"]) == (1936, -8)
+    assert frame_of(config) == (8, 93, 8, 8)
+    assert config["window.maximized"] is True
+
+
 def test_a_scale_between_steps_takes_the_nearest():
     config = _window((1280, 900), position=(10, 10), dpr=1.2)
     fingerprints.present_window_frame(config, "win", own_geometry=True)

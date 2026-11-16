@@ -84,7 +84,9 @@ appropriate.
 - **Network and automation protocol fixes.** UA, Accept-Language and
   per-scheme Accept-Encoding stay coherent; DNT and context locale are stable
   across navigation. A failed promise-reaction attach rejects immediately
-  instead of leaving Juggler hanging.
+  instead of leaving Juggler hanging. Upstream attaches through the Xray in a
+  window; the worker path is offered upstream in
+  [#1067](https://github.com/daijro/camoufox/pull/1067).
   ([3cebf99](https://github.com/coffeegrind123/camoufox-free/commit/3cebf99c8f486c211a5502099c9ecfdc91164813))
 - **Per-context locale follows every scope.** A context's locale reaches
   `Intl`, `navigator.languages`, Accept-Language q-values, isolated worlds,
@@ -142,11 +144,8 @@ appropriate.
   the claimed OS's frame at its display scale, in a cross-site iframe too, and
   no frame in fullscreen. A Windows identity drawn maximized reports the
   maximized outer size (the available area plus the borders, at minus the
-  border), and a window maximized later goes back to the identity's size.
-  Not yet stock at 100% display scale: maximized, the frame measures 16x93
-  where stock's is 16x101, and a resize out of it stays at -8,-8 where stock
-  is at 0,0 (open in
-  [#41](https://github.com/coffeegrind123/camoufox-free/pull/41)). ([patch](browser/patches/window-sizing-claimed-os.patch),
+  border), as does a caller's geometry already in that form, and a window
+  maximized later goes back to the identity's size. ([patch](browser/patches/window-sizing-claimed-os.patch),
   [zz-window-presentation.patch](browser/patches/zz-window-presentation.patch),
   [3924094](https://github.com/coffeegrind123/camoufox-free/commit/39240942ecd1e20088209001414b64a1d621d4b5), guard
   [window-sizing-claimed-os.py](browser/tests/playwright/patches/window-sizing-claimed-os.py))

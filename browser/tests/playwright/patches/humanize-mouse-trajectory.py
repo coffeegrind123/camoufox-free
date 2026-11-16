@@ -44,8 +44,9 @@ What PASS means, for each generator:
     * those events are spread over a plausible human duration, one per
       refresh frame as stock Firefox delivers a real mouse's motion;
     * a humanized click still lands on the target element;
-    * a page's first humanized move enters from just inside the top edge,
-      above its destination, not out of the top-left corner;
+    * a page's first humanized move enters from the top edge, above its
+      destination, its first mousemove within about a frame's travel of the
+      edge, not out of the top-left corner;
     * a curve that strays outside the viewport leaves the document as a real
       cursor does: a last mousemove inside the edge it crosses and a mouseout
       with no relatedTarget past it, one mouse sample apart, as stock reports;
@@ -95,6 +96,8 @@ MIN_ONE_FRAME = 0.2
 # delivers them, a 150 ms move to the button is about 9 events. Without
 # humanize it is 1, the endpoint (#677).
 CLICK_MIN_MOVES = 3
+# How deep a fresh page's first mousemove may land, in steps to its second.
+ENTRY_STEPS = 1.5
 
 # The default humanize ceiling is 1.5s, and playback may end up to a frame past
 # it; anything under 50ms for a ~1200px move means the trajectory is being
@@ -140,7 +143,7 @@ async def _collect_moves(humanize, engine=None):
 
 
 async def _first_move_start(engine):
-    """The first mousemove a fresh page sees, and the viewport it was in."""
+    """The first two mousemoves a fresh page sees, and the viewport they were in."""
     async with AsyncCamoufox(**_launch_kwargs(True, engine)) as browser:
         page = await browser.new_page()
         await page.set_content(BODY)
@@ -148,7 +151,7 @@ async def _first_move_start(engine):
         viewport = await page.evaluate("({w: innerWidth, h: innerHeight})")
         await page.mouse.move(viewport["w"] * 0.75, viewport["h"] * 0.75)
         moves = await page.evaluate("moves")
-        return (moves[0][:2] if moves else None), viewport
+        return [m[:2] for m in moves[:2]], viewport
 
 
 # Moves that run along the top edge, then the left one, so that curves stray
@@ -173,8 +176,16 @@ EDGE_RECORDER = """
 # gave the slow end of that (0-5px inside, 1-8px past). The time between them is
 # no test: a moving pointer's exit came 1-3ms after its last move, but one leaving
 # from rest came when it left, 563-665ms after it stopped.
+# The same lab through all four edges at up to 25 px/ms, at devicePixelRatio 1
+# and 1.09 (context/measure-kit/exit-from-rest/xtest_drive_edges.py, 208 exits):
+# a 20-25 px/ms flick crosses in one sample of 19-25.3px, so the step bound is
+# that, not the 15 px/ms lab's 16; and where the content is fractionally taller
+# than innerHeight (1040.42 at 1.09, innerHeight 1040), the last move came on
+# row 1040 in 7 of 26 bottom exits, one past innerHeight - 1. innerWidth and
+# innerHeight round, so the right and bottom edges allow that one row.
 STOCK_PAST_MIN_PX = 1
-STOCK_MAX_STEP_PX = 16
+STOCK_MAX_STEP_PX = 26
+ROUNDED_EDGE_PX = 1
 # Prefs to sweep under: the defaults, and text scaled to 105%, which puts the
 # content's top at 85.5, as some hosts' toolbars do, so the page rounds the
 # exit and the last move from a fractional offset (daijro/camoufox#1026).
@@ -211,10 +222,13 @@ def _exits_unlike_stock(events, w, h):
         # that edge the last move was.
         past, inside = (-x, last[0]) if x < 0 else (x - w + 1, w - 1 - last[0]) if x >= w else \
             (-y, last[1]) if y < 0 else (y - h + 1, h - 1 - last[1])
+        # innerWidth/innerHeight round, so past the right or bottom edge the
+        # last row inside can be one beyond them.
+        floor = -ROUNDED_EDGE_PX if (x >= w or y >= h) else 0
         apart = ((x - last[0]) ** 2 + (y - last[1]) ** 2) ** 0.5
         # One sample apart: across the edge in a single step no longer than a
         # fast flick's (+1 for the rounding of both points).
-        if past < STOCK_PAST_MIN_PX or inside < 0 or inside + past > apart + 1 or apart > STOCK_MAX_STEP_PX:
+        if past < STOCK_PAST_MIN_PX or inside < floor or inside + past > apart + 1 or apart > STOCK_MAX_STEP_PX:
             bad.append([last[:2], (x, y), round(t - last[2], 1)])
     return bad
 
@@ -299,10 +313,18 @@ async def _check_engine(engine) -> bool:
     # The bar is 0.25w, not 0.4w: a curve may swing left along the top before
     # heading down, and one whose first frame landed at 0.39w failed a run
     # that had entered exactly as designed (1 in 90 measured).
-    first, viewport = await _first_move_start(engine)
+    # The page sees the cursor at the first refresh after it crossed the top
+    # edge, so the first mousemove lies within about one frame's travel of
+    # the edge, as stock coalesces a real one: cg.17, 30 fresh pages, 0-83px
+    # down, every one under its next step (83 vs 151px). A fast start goes
+    # deep, so the depth is held to 0.25h or 1.5 steps, not 0.25h alone
+    # (CI 43713869538: 268px of 875, a run that entered as designed).
+    moves, viewport = await _first_move_start(engine)
+    first = moves[0] if moves else None
+    step = ((moves[1][0] - first[0]) ** 2 + (moves[1][1] - first[1]) ** 2) ** 0.5 if len(moves) > 1 else 0
     print(f"\n=== first humanized move, {engine} ===")
-    print(f"  first mousemove: {first}  viewport: {viewport['w']}x{viewport['h']}")
-    if first and first[0] > viewport["w"] * 0.25 and first[1] < viewport["h"] * 0.25:
+    print(f"  first mousemoves: {moves}  viewport: {viewport['w']}x{viewport['h']}")
+    if first and first[0] > viewport["w"] * 0.25 and first[1] < max(viewport["h"] * 0.25, ENTRY_STEPS * step):
         print("  PASS: the cursor entered from the top edge, above its destination")
     else:
         passed = False
