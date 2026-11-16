@@ -6,6 +6,7 @@ permissions:
   contents: read
 env:
   RELEASE: v159.0.1-beta.35-cg.17
+  PR_RUN: "43862404200"
 jobs:
   measure:
     runs-on: ubuntu-24.04
@@ -31,4 +32,16 @@ jobs:
           gh release download "$RELEASE" -R "$GITHUB_REPOSITORY" -p 'camoufox-*-lin.x86_64.zip' -D .
           unzip -q camoufox-*-lin.x86_64.zip -d cf
           grep -m1 'model name' /proc/cpuinfo
-      - run: python3 -u tmp/renderer_cost.py "$(realpath "$(find cf -maxdepth 2 -name camoufox-bin | head -1)")" 10
+      - uses: actions/download-artifact@v4
+        with:
+          name: camoufox-dist
+          path: ${{ github.workspace }}
+          run-id: ${{ env.PR_RUN }}
+          github-token: ${{ github.token }}
+      - run: |
+          mkdir -p pr && zstd -d -c camoufox-dist.tar.zst | tar -C pr -xf -
+          find pr -maxdepth 3 -name camoufox-bin
+      - name: PR build
+        run: python3 -u tmp/renderer_cost.py "$(realpath "$(find pr -maxdepth 3 -name camoufox-bin | head -1)")" 10
+      - name: cg.17 release, same runner
+        run: python3 -u tmp/renderer_cost.py "$(realpath "$(find cf -maxdepth 2 -name camoufox-bin | head -1)")" 10
