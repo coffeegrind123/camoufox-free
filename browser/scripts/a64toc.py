@@ -82,11 +82,11 @@ retsites = []
 def X(r):
     r = r.strip()
     if r in ('sp', 'wsp'):
-        return 'R->x[31]', 64
+        return 'X[31]', 64
     if r in ('xzr', 'wzr'):
         return '0', 64 if r[0] == 'x' else 32
     assert re.fullmatch(r'[xw]\d+', r), r
-    return f'R->x[{r[1:]}]', 64 if r[0] == 'x' else 32
+    return f'X[{r[1:]}]', 64 if r[0] == 'x' else 32
 
 def setx(r, expr):
     reg, w = X(r)
@@ -260,35 +260,35 @@ def tr(a, mn, ops, rel):
             return setx(d, getx(s))
         if d[0] in 'xw' and s.startswith('v'):
             n, t, l = vlane(s); assert t == 'd'
-            return setx(d, f'R->v[{n}].d[{l}]')
+            return setx(d, f'V[{n}].d[{l}]')
         if d.startswith('v') and '[' in d:
             n, t, l = vlane(d)
             if s in ('xzr',):
-                return f'R->v[{n}].d[{l}] = 0;'
+                return f'V[{n}].d[{l}] = 0;'
             if s[0] == 'x':
-                return f'R->v[{n}].d[{l}] = {getx(s)};'
+                return f'V[{n}].d[{l}] = {getx(s)};'
             m_, t2, l2 = vlane(s)
             assert t == t2
             f = {'d': 'd', 's': 's'}[t]
-            return f'{{ uint64_t t_ = R->v[{m_}].{f}[{l2}]; R->v[{n}].{f}[{l}] = t_; }}'
+            return f'{{ uint64_t t_ = V[{m_}].{f}[{l2}]; V[{n}].{f}[{l}] = t_; }}'
         n, t = V(d); m_, t2 = V(s)
         assert t == t2 == '16b'
-        return f'R->v[{n}] = R->v[{m_}];'
+        return f'V[{n}] = V[{m_}];'
     if mn in ('fadd', 'fsub', 'fmul', 'fmla', 'fmls', 'trn1', 'trn2', 'zip1', 'zip2', 'uzp1', 'uzp2'):
         d, td = V(o[0]); n, tn = V(o[1]); m_, tm = V(o[2])
         assert td == tn == tm, (a, ops)
         used.add(f'{mn}_{td}')
-        return f'R->v[{d}] = {mn}_{td}(R->v[{d}], R->v[{n}], R->v[{m_}]);'
+        return f'V[{d}] = {mn}_{td}(V[{d}], V[{n}], V[{m_}]);'
     if mn in ('rev64', 'fneg'):
         d, td = V(o[0]); n, tn = V(o[1]); assert td == tn
         used.add(f'{mn}_{td}')
-        return f'R->v[{d}] = {mn}_{td}(R->v[{n}]);'
+        return f'V[{d}] = {mn}_{td}(V[{n}]);'
     if mn == 'ext':
         d, td = V(o[0]); n, _ = V(o[1]); m_, _ = V(o[2]); assert td == '16b'
-        return f'R->v[{d}] = ext16(R->v[{n}], R->v[{m_}], {imm(o[3])});'
+        return f'V[{d}] = ext16(V[{n}], V[{m_}], {imm(o[3])});'
     if mn == 'dup':
         d, td = V(o[0]); n, t, l = vlane(o[1]); assert td == '2d' and t == 'd'
-        return f'{{ uint64_t t_ = R->v[{n}].d[{l}]; R->v[{d}].d[0] = t_; R->v[{d}].d[1] = t_; }}'
+        return f'{{ uint64_t t_ = V[{n}].d[{l}]; V[{d}].d[0] = t_; V[{d}].d[1] = t_; }}'
     if mn in ('ldr', 'str', 'ldp', 'stp', 'ldrh'):
         regs = o[:2] if mn in ('ldp', 'stp') else o[:1]
         rest = o[len(regs):]
@@ -308,29 +308,29 @@ def tr(a, mn, ops, rel):
                     sz = 2
                 idx = int(r[1:])
                 if mn == 'ldrh':
-                    code += f'{{ uint16_t t_; memcpy(&t_, {A}+{pos}, 2); R->x[{idx}] = t_; }} '
+                    code += f'{{ uint16_t t_; memcpy(&t_, {A}+{pos}, 2); X[{idx}] = t_; }} '
                 elif load and k == 's':
-                    code += f'memset(&R->v[{idx}], 0, 16); memcpy(&R->v[{idx}].s[0], {A}+{pos}, 4); '
+                    code += f'memset(&V[{idx}], 0, 16); memcpy(&V[{idx}].s[0], {A}+{pos}, 4); '
                 elif not load and k == 's':
-                    code += f'memcpy({A}+{pos}, &R->v[{idx}].s[0], 4); '
+                    code += f'memcpy({A}+{pos}, &V[{idx}].s[0], 4); '
                 elif load:
                     if k == 'x':
-                        code += f'memcpy(&R->x[{idx}], {A}+{pos}, 8); '
+                        code += f'memcpy(&X[{idx}], {A}+{pos}, 8); '
                     elif k == 'w':
-                        code += f'{{ uint32_t t_; memcpy(&t_, {A}+{pos}, 4); R->x[{idx}] = t_; }} '
+                        code += f'{{ uint32_t t_; memcpy(&t_, {A}+{pos}, 4); X[{idx}] = t_; }} '
                     elif k == 'd':
-                        code += f'memcpy(&R->v[{idx}].d[0], {A}+{pos}, 8); R->v[{idx}].d[1] = 0; '
+                        code += f'memcpy(&V[{idx}].d[0], {A}+{pos}, 8); V[{idx}].d[1] = 0; '
                     elif k == 'q':
-                        code += f'memcpy(&R->v[{idx}], {A}+{pos}, 16); '
+                        code += f'memcpy(&V[{idx}], {A}+{pos}, 16); '
                 else:
                     if k == 'x':
-                        code += f'memcpy({A}+{pos}, &R->x[{idx}], 8); '
+                        code += f'memcpy({A}+{pos}, &X[{idx}], 8); '
                     elif k == 'w':
-                        code += f'{{ uint32_t t_ = (uint32_t)R->x[{idx}]; memcpy({A}+{pos}, &t_, 4); }} '
+                        code += f'{{ uint32_t t_ = (uint32_t)X[{idx}]; memcpy({A}+{pos}, &t_, 4); }} '
                     elif k == 'd':
-                        code += f'memcpy({A}+{pos}, &R->v[{idx}].d[0], 8); '
+                        code += f'memcpy({A}+{pos}, &V[{idx}].d[0], 8); '
                     elif k == 'q':
-                        code += f'memcpy({A}+{pos}, &R->v[{idx}], 16); '
+                        code += f'memcpy({A}+{pos}, &V[{idx}], 16); '
                 pos += sz
             return code
         return mem_seq(base, off, pre, post, body, None)
@@ -344,35 +344,35 @@ def tr(a, mn, ops, rel):
             sz = 8 if t == 'd' else 4
             assert post is None
             if mn == 'ld1':
-                return mem_seq(base, off, pre, post, lambda A: f'memcpy(&R->v[{n}].{t}[{l}], {A}, {sz});', None)
+                return mem_seq(base, off, pre, post, lambda A: f'memcpy(&V[{n}].{t}[{l}], {A}, {sz});', None)
             assert mn == 'st1'
-            return mem_seq(base, off, pre, post, lambda A: f'memcpy({A}, &R->v[{n}].{t}[{l}], {sz});', None)
+            return mem_seq(base, off, pre, post, lambda A: f'memcpy({A}, &V[{n}].{t}[{l}], {sz});', None)
         regs = reglist(lst)
         if mn == 'ld1r':
             assert [t for _, t in regs] == ['2d']
             r0 = regs[0][0]
             return mem_seq(base, off, pre, post, lambda A:
-                f'{{ uint64_t a_; memcpy(&a_, {A}, 8); R->v[{r0}].d[0] = R->v[{r0}].d[1] = a_; }}', None)
+                f'{{ uint64_t a_; memcpy(&a_, {A}, 8); V[{r0}].d[0] = V[{r0}].d[1] = a_; }}', None)
         if mn == 'ld2':
             assert [t for _, t in regs] == ['2s', '2s']
             (r0, _), (r1, _) = regs
             return mem_seq(base, off, pre, post, lambda A:
-                f'{{ uint32_t e_[4]; memcpy(e_, {A}, 16); memset(&R->v[{r0}], 0, 16); memset(&R->v[{r1}], 0, 16); '
-                f'R->v[{r0}].s[0] = e_[0]; R->v[{r1}].s[0] = e_[1]; R->v[{r0}].s[1] = e_[2]; R->v[{r1}].s[1] = e_[3]; }}', None)
+                f'{{ uint32_t e_[4]; memcpy(e_, {A}, 16); memset(&V[{r0}], 0, 16); memset(&V[{r1}], 0, 16); '
+                f'V[{r0}].s[0] = e_[0]; V[{r1}].s[0] = e_[1]; V[{r0}].s[1] = e_[2]; V[{r1}].s[1] = e_[3]; }}', None)
         if mn == 'ld2r':
             assert [t for _, t in regs] == ['2d', '2d']
             (r0, _), (r1, _) = regs
             return mem_seq(base, off, pre, post, lambda A:
                 f'{{ uint64_t a_, b_; memcpy(&a_, {A}, 8); memcpy(&b_, {A}+8, 8); '
-                f'R->v[{r0}].d[0] = R->v[{r0}].d[1] = a_; R->v[{r1}].d[0] = R->v[{r1}].d[1] = b_; }}', None)
+                f'V[{r0}].d[0] = V[{r0}].d[1] = a_; V[{r1}].d[0] = V[{r1}].d[1] = b_; }}', None)
         assert all(t == '4s' for _, t in regs), ops
         def body(A):
             code = ''
             for i, (n, _) in enumerate(regs):
                 if mn == 'ld1':
-                    code += f'memcpy(&R->v[{n}], {A}+{16*i}, 16); '
+                    code += f'memcpy(&V[{n}], {A}+{16*i}, 16); '
                 else:
-                    code += f'memcpy({A}+{16*i}, &R->v[{n}], 16); '
+                    code += f'memcpy({A}+{16*i}, &V[{n}], 16); '
             return code
         return mem_seq(base, off, pre, post, body, None)
     raise SystemExit(f'unhandled {a:x}: {mn} {ops}')
@@ -426,11 +426,21 @@ CELT_HEAD = '''/* Generated by a64toc.py --celt from celt/arm/celt_tx_neon.S (li
 
 #if defined(OPUS_X86_NEONEMU)
 
+#if defined(__SSE2__) || defined(_M_X64)
+#include <immintrin.h>
+#define NEONEMU_SSE 1
+#else
+#define NEONEMU_SSE 0
+#endif
+
 typedef union {
     float f[4];
     uint32_t s[4];
     uint64_t d[2];
     uint8_t b[16];
+#if NEONEMU_SSE
+    __m128 m;
+#endif
 } NV;
 
 typedef struct {
@@ -464,11 +474,21 @@ typedef struct AVTXContext AVTXContext;
 #include "libavutil/attributes.h"
 #endif
 
+#if defined(__SSE2__) || defined(_M_X64)
+#include <immintrin.h>
+#define NEONEMU_SSE 1
+#else
+#define NEONEMU_SSE 0
+#endif
+
 typedef union {
     float f[4];
     uint32_t s[4];
     uint64_t d[2];
     uint8_t b[16];
+#if NEONEMU_SSE
+    __m128 m;
+#endif
 } NV;
 
 typedef struct {
@@ -482,8 +502,8 @@ for t in tabs:
 print('static const uint8_t kRodata[%d] __attribute__((aligned(16))) = {%s};' % (len(rod), ', '.join(str(b) for b in rod)))
 EXTRA2 = {
     'fmul_2s': 'static inline NV fmul_2s(NV d, NV n, NV m) LANES2(n.f[i] * m.f[i])',
-    'fmla_2s': 'static inline NV fmla_2s(NV d, NV n, NV m) LANES2(fmaf(n.f[i], m.f[i], d.f[i]))',
-    'fmls_2s': 'static inline NV fmls_2s(NV d, NV n, NV m) LANES2(fmaf(-n.f[i], m.f[i], d.f[i]))',
+    'fmla_2s': 'static inline NV fmla_2s(NV d, NV n, NV m) LANES2(__builtin_fmaf(n.f[i], m.f[i], d.f[i]))',
+    'fmls_2s': 'static inline NV fmls_2s(NV d, NV n, NV m) LANES2(__builtin_fmaf(-n.f[i], m.f[i], d.f[i]))',
     'rev64_2s': 'static inline NV rev64_2s(NV n) { NV r_; r_.s[0] = n.s[1]; r_.s[1] = n.s[0]; r_.d[1] = 0; return r_; }',
     'zip1_2s': 'static inline NV zip1_2s(NV d, NV n, NV m) { NV r_; r_.s[0] = n.s[0]; r_.s[1] = m.s[0]; r_.d[1] = 0; return r_; }',
     'zip2_2s': 'static inline NV zip2_2s(NV d, NV n, NV m) { NV r_; r_.s[0] = n.s[1]; r_.s[1] = m.s[1]; r_.d[1] = 0; return r_; }',
@@ -499,11 +519,46 @@ if CELT:
     EXTRA = '\n' + EXTRA
 print(r'''
 #define LANES4(expr) { NV r_; for (int i = 0; i < 4; i++) r_.f[i] = (expr); return r_; }
+#if NEONEMU_SSE
+/* Each packed operation gives every lane what the scalar C gives it. */
+#define NEONEMU_SIGN _mm_castsi128_ps(_mm_set1_epi32((int)0x80000000u))
+static inline NV nv_(__m128 v) { NV r_; r_.m = v; return r_; }
+static inline NV fadd_4s(NV d, NV n, NV m) { return nv_(_mm_add_ps(n.m, m.m)); }
+static inline NV fsub_4s(NV d, NV n, NV m) { return nv_(_mm_sub_ps(n.m, m.m)); }
+static inline NV fmul_4s(NV d, NV n, NV m) { return nv_(_mm_mul_ps(n.m, m.m)); }
+#if defined(__FMA__)
+static inline NV fmla_4s(NV d, NV n, NV m) { return nv_(_mm_fmadd_ps(n.m, m.m, d.m)); }
+/* fmaf(-n, m, d): the operand is negated first, as FMLS does. */
+static inline NV fmls_4s(NV d, NV n, NV m) { return nv_(_mm_fmadd_ps(_mm_xor_ps(n.m, NEONEMU_SIGN), m.m, d.m)); }
+#else
+static inline NV fmla_4s(NV d, NV n, NV m) LANES4(__builtin_fmaf(n.f[i], m.f[i], d.f[i]))
+static inline NV fmls_4s(NV d, NV n, NV m) LANES4(__builtin_fmaf(-n.f[i], m.f[i], d.f[i]))
+#endif
+static inline NV fneg_4s(NV n) { return nv_(_mm_xor_ps(n.m, NEONEMU_SIGN)); }
+static inline NV fneg_2s(NV n) {
+    __m128 low = _mm_castsi128_ps(_mm_set_epi32(0, 0, -1, -1));
+    return nv_(_mm_and_ps(_mm_xor_ps(n.m, NEONEMU_SIGN), low));
+}
+static inline NV rev64_4s(NV n) { return nv_(_mm_shuffle_ps(n.m, n.m, _MM_SHUFFLE(2, 3, 0, 1))); }
+/* {n0, m0, n2, m2} and {n1, m1, n3, m3} */
+static inline NV trn1_4s(NV d, NV n, NV m) {
+    __m128 t = _mm_shuffle_ps(n.m, m.m, _MM_SHUFFLE(2, 0, 2, 0));
+    return nv_(_mm_shuffle_ps(t, t, _MM_SHUFFLE(3, 1, 2, 0)));
+}
+static inline NV trn2_4s(NV d, NV n, NV m) {
+    __m128 t = _mm_shuffle_ps(n.m, m.m, _MM_SHUFFLE(3, 1, 3, 1));
+    return nv_(_mm_shuffle_ps(t, t, _MM_SHUFFLE(3, 1, 2, 0)));
+}
+static inline NV zip1_2d(NV d, NV n, NV m) { return nv_(_mm_movelh_ps(n.m, m.m)); }
+static inline NV zip2_2d(NV d, NV n, NV m) { return nv_(_mm_movehl_ps(m.m, n.m)); }
+static inline NV uzp1_2d(NV d, NV n, NV m) { return nv_(_mm_movelh_ps(n.m, m.m)); }
+static inline NV uzp2_2d(NV d, NV n, NV m) { return nv_(_mm_movehl_ps(m.m, n.m)); }
+#else
 static inline NV fadd_4s(NV d, NV n, NV m) LANES4(n.f[i] + m.f[i])
 static inline NV fsub_4s(NV d, NV n, NV m) LANES4(n.f[i] - m.f[i])
 static inline NV fmul_4s(NV d, NV n, NV m) LANES4(n.f[i] * m.f[i])
-static inline NV fmla_4s(NV d, NV n, NV m) LANES4(fmaf(n.f[i], m.f[i], d.f[i]))
-static inline NV fmls_4s(NV d, NV n, NV m) LANES4(fmaf(-n.f[i], m.f[i], d.f[i]))
+static inline NV fmla_4s(NV d, NV n, NV m) LANES4(__builtin_fmaf(n.f[i], m.f[i], d.f[i]))
+static inline NV fmls_4s(NV d, NV n, NV m) LANES4(__builtin_fmaf(-n.f[i], m.f[i], d.f[i]))
 static inline NV fneg_4s(NV n) LANES4(-n.f[i])
 static inline NV fneg_2s(NV n) { NV r_; r_.f[0] = -n.f[0]; r_.f[1] = -n.f[1]; r_.d[1] = 0; return r_; }
 static inline NV rev64_4s(NV n) { NV r_; r_.s[0] = n.s[1]; r_.s[1] = n.s[0]; r_.s[2] = n.s[3]; r_.s[3] = n.s[2]; return r_; }
@@ -513,12 +568,19 @@ static inline NV zip1_2d(NV d, NV n, NV m) { NV r_; r_.d[0] = n.d[0]; r_.d[1] = 
 static inline NV zip2_2d(NV d, NV n, NV m) { NV r_; r_.d[0] = n.d[1]; r_.d[1] = m.d[1]; return r_; }
 static inline NV uzp1_2d(NV d, NV n, NV m) { NV r_; r_.d[0] = n.d[0]; r_.d[1] = m.d[0]; return r_; }
 static inline NV uzp2_2d(NV d, NV n, NV m) { NV r_; r_.d[0] = n.d[1]; r_.d[1] = m.d[1]; return r_; }
+#endif
 static inline NV ext16(NV n, NV m, int k) { NV r_; for (int i = 0; i < 16; i++) r_.b[i] = i + k < 16 ? n.b[i + k] : m.b[i + k - 16]; return r_; }
 ''' + EXTRA + r'''
 #define CALL(target, site) do { RS[rsp++] = &&site; goto target; } while (0)
 #define RET() do { if (rsp == 0) return; goto *RS[--rsp]; } while (0)
 
 static void neonemu_run(int entry, NRegs* R) {
+    /* The register file in locals, indexed only by constants, so the
+     * compiler keeps it in registers; results leave through stores. */
+    NV V[32];
+    uint64_t X[32];
+    memcpy(V, R->v, sizeof V);
+    memcpy(X, R->x, sizeof X);
     void* RS[64];
     int rsp = 0;
     int F_N = 0, F_Z = 0, F_V = 0;
@@ -530,6 +592,10 @@ print('      default: return;\n    }')
 print('\n'.join(body))
 print('}\n')
 if CELT:
+    print('/* The AVX2/FMA twin (celt_tx_neonemu_fma.c); celt_neonemu_use_fma(). */')
+    for a in entries:
+        print(f'void {syms[a].replace("_neon", "_neonemu")}_fma(const OpusTXContext* s, void* out, void* in, ptrdiff_t stride);')
+    print()
     print('''static void neonemu_call(int entry, const void* s, void* out, void* in,
                          ptrdiff_t stride) {
     NRegs R;
@@ -545,7 +611,11 @@ if CELT:
 ''')
     for i, a in enumerate(entries):
         name = syms[a].replace('_neon', '_neonemu')
-        print(f'void {name}(const OpusTXContext* s, void* out, void* in, ptrdiff_t stride) {{ neonemu_call({i}, s, out, in, stride); }}')
+        print(f'void {name}(const OpusTXContext* s, void* out, void* in, ptrdiff_t stride) {{\n'
+              '#ifndef CELT_NEONEMU_FMA_BUILD\n'
+              f'    if (celt_neonemu_use_fma()) {{ {name}_fma(s, out, in, stride); return; }}\n'
+              '#endif\n'
+              f'    neonemu_call({i}, s, out, in, stride);\n}}')
     print('\n#endif /* OPUS_X86_NEONEMU */')
     sys.exit(0)
 print('''static void neonemu_call(int entry, AVTXContext* s, void* out, void* in,

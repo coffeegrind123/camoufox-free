@@ -15,7 +15,7 @@
  * The inverse MDCT is celt_tx_neonemu.c, translated from celt_tx_neon.S.
  * aarch64 NEON float lanes are plain IEEE single precision, so a lane is a
  * C float. vmlaq/vmlaq_lane become vfmaq (__ARM_FEATURE_FMA) and are fused:
- * fmaf() here. Everything else in those files is unfused, as is the scalar
+ * __builtin_fmaf() here. Everything else in those files is unfused, as is the scalar
  * C they share with x86 (Gecko builds with -ffp-contract=off). The order of
  * every add follows the NEON lane layout, not the C reference. */
 
@@ -34,15 +34,18 @@
 opus_val32 celt_inner_prod_neonemu(const opus_val16 *x, const opus_val16 *y,
       int N)
 {
+#ifndef CELT_NEONEMU_FMA_BUILD
+   if (celt_neonemu_use_fma()) return celt_inner_prod_neonemu_fma(x, y, N);
+#endif
    int i, k;
    float acc[4] = {0, 0, 0, 0};
    float xy;
    for (i = 0; i < N - 7; i += 8) {
-      for (k = 0; k < 4; k++) acc[k] = fmaf(x[i + k], y[i + k], acc[k]);
-      for (k = 0; k < 4; k++) acc[k] = fmaf(x[i + 4 + k], y[i + 4 + k], acc[k]);
+      for (k = 0; k < 4; k++) acc[k] = __builtin_fmaf(x[i + k], y[i + k], acc[k]);
+      for (k = 0; k < 4; k++) acc[k] = __builtin_fmaf(x[i + 4 + k], y[i + 4 + k], acc[k]);
    }
    if (N - i >= 4) {
-      for (k = 0; k < 4; k++) acc[k] = fmaf(x[i + k], y[i + k], acc[k]);
+      for (k = 0; k < 4; k++) acc[k] = __builtin_fmaf(x[i + k], y[i + k], acc[k]);
       i += 4;
    }
    /* vadd_f32(low, high), then vpadd_f32 */
@@ -56,6 +59,9 @@ opus_val32 celt_inner_prod_neonemu(const opus_val16 *x, const opus_val16 *y,
 void dual_inner_prod_neonemu(const opus_val16 *x, const opus_val16 *y01,
       const opus_val16 *y02, int N, opus_val32 *xy1, opus_val32 *xy2)
 {
+#ifndef CELT_NEONEMU_FMA_BUILD
+   if (celt_neonemu_use_fma()) { dual_inner_prod_neonemu_fma(x, y01, y02, N, xy1, xy2); return; }
+#endif
    *xy1 = celt_inner_prod_neonemu(x, y01, N);
    *xy2 = celt_inner_prod_neonemu(x, y02, N);
 }
@@ -68,7 +74,7 @@ static void xcorr_kernel_neonemu(const float *x, const float *y,
    int j, k;
    float acc[4] = {0, 0, 0, 0};
    for (j = 0; j < len; j++) {
-      for (k = 0; k < 4; k++) acc[k] = fmaf(y[j + k], x[j], acc[k]);
+      for (k = 0; k < 4; k++) acc[k] = __builtin_fmaf(y[j + k], x[j], acc[k]);
    }
    for (k = 0; k < 4; k++) sum[k] = acc[k];
 }
@@ -76,6 +82,9 @@ static void xcorr_kernel_neonemu(const float *x, const float *y,
 void celt_pitch_xcorr_neonemu(const opus_val16 *_x, const opus_val16 *_y,
       opus_val32 *xcorr, int len, int max_pitch)
 {
+#ifndef CELT_NEONEMU_FMA_BUILD
+   if (celt_neonemu_use_fma()) { celt_pitch_xcorr_neonemu_fma(_x, _y, xcorr, len, max_pitch); return; }
+#endif
    int i;
    for (i = 0; i < (max_pitch - 3); i += 4) {
       xcorr_kernel_neonemu(_x, _y + i, xcorr + i, len);
@@ -91,13 +100,16 @@ void celt_pitch_xcorr_neonemu(const opus_val16 *_x, const opus_val16 *_y,
 void comb_filter_const_neonemu(opus_val32 *y, opus_val32 *x, int T, int N,
       opus_val16 g10, opus_val16 g11, opus_val16 g12)
 {
+#ifndef CELT_NEONEMU_FMA_BUILD
+   if (celt_neonemu_use_fma()) { comb_filter_const_neonemu_fma(y, x, T, N, g10, g11, g12); return; }
+#endif
    int i;
    for (i = 0; i < N; i++) {
       const float *xt = x + i - T;
       float acc = xt[-2] * g12;
-      acc = fmaf(xt[2], g12, acc);
-      acc = fmaf(xt[0], g10, acc);
-      acc = fmaf(xt[1] + xt[-1], g11, acc);
+      acc = __builtin_fmaf(xt[2], g12, acc);
+      acc = __builtin_fmaf(xt[0], g10, acc);
+      acc = __builtin_fmaf(xt[1] + xt[-1], g11, acc);
       y[i] = x[i] + acc;
    }
 }
@@ -133,18 +145,18 @@ static void deemph_step(const deemph_coefs *k, const float *x, float o[8],
    int i;
    float v3[4];
    for (i = 0; i < 4; i++) {
-      v0[i] = fmaf(k->c3[i], x[0], v0[i]);
+      v0[i] = __builtin_fmaf(k->c3[i], x[0], v0[i]);
       v3[i] = k->c1[i] * x[6];
-      v0[i] = fmaf(k->c2[i], x[1], v0[i]);
-      v3[i] = fmaf(k->c2[i], x[5], v3[i]);
-      v0[i] = fmaf(k->c1[i], x[2], v0[i]);
-      v3[i] = fmaf(k->c3[i], x[4], v3[i]);
+      v0[i] = __builtin_fmaf(k->c2[i], x[1], v0[i]);
+      v3[i] = __builtin_fmaf(k->c2[i], x[5], v3[i]);
+      v0[i] = __builtin_fmaf(k->c1[i], x[2], v0[i]);
+      v3[i] = __builtin_fmaf(k->c3[i], x[4], v3[i]);
    }
    for (i = 0; i < 4; i++) {
       o[i] = x[i] + v0[i];
       o[4 + i] = x[4 + i] + v3[i];
    }
-   for (i = 0; i < 4; i++) o[4 + i] = fmaf(k->c4[i], o[3], o[4 + i]);
+   for (i = 0; i < 4; i++) o[4 + i] = __builtin_fmaf(k->c4[i], o[3], o[4 + i]);
    for (i = 0; i < 4; i++) v0[i] = k->c4[i] * o[7];
 }
 
@@ -153,6 +165,9 @@ static const float deemph_scale = 3.0517578125e-5f;  /* 1 / CELT_SIG_SCALE */
 opus_val32 celt_deemphasis_neonemu(opus_res *y, const opus_val32 *x,
       opus_val16 coef, opus_val32 m, int N)
 {
+#ifndef CELT_NEONEMU_FMA_BUILD
+   if (celt_neonemu_use_fma()) return celt_deemphasis_neonemu_fma(y, x, coef, m, N);
+#endif
    deemph_coefs k;
    float v0[4], o[8];
    int i;
@@ -174,6 +189,9 @@ opus_val32 celt_deemphasis_neonemu(opus_res *y, const opus_val32 *x,
 void deemphasis_stereo_simple_neonemu(celt_sig *in[], opus_res *pcm, int N,
       opus_val16 coef, celt_sig *mem)
 {
+#ifndef CELT_NEONEMU_FMA_BUILD
+   if (celt_neonemu_use_fma()) { deemphasis_stereo_simple_neonemu_fma(in, pcm, N, coef, mem); return; }
+#endif
    deemph_coefs k;
    const float *x0 = in[0], *x1 = in[1];
    float a[4], b[4], oa[8], ob[8];

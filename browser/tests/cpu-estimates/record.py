@@ -34,11 +34,13 @@ VENDORS = {"1": "intel", "2": "amd"}
 ENTRIES = 3 * 4096
 
 
-def build(tables=False):
+def build(tables=False, avx2=False):
     out = Path(tempfile.mkdtemp(prefix="cpu-estimates-")) / "estimates"
     cmd = ["cc", "-O2", "-std=c99", "-Wall", "-Werror", f"-I{OPTS}", str(HERE / "estimates.c"), "-o", str(out)]
     if tables:
         cmd.insert(1, "-DTABLES")
+    if avx2:
+        cmd.insert(1, "-mavx2")
     subprocess.run(cmd, check=True)
     return out
 
