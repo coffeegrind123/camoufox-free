@@ -1,6 +1,6 @@
 import asyncio
 from functools import partial
-from typing import Any, Dict, Optional, Union, overload
+from typing import Any, Dict, Optional, Tuple, Union, overload
 
 from playwright.async_api import (
     Browser,
@@ -12,7 +12,7 @@ from typing_extensions import Literal
 
 from camoufox.virtdisplay import VirtualDisplay
 
-from . import driver_defaults
+from . import _humanize_playwright, driver_defaults
 from .fingerprints import generate_context_fingerprint
 from .ip import (
     ExitGeo,
@@ -29,6 +29,7 @@ from .utils import (
     context_identity,
     host_identity,
     launch_options,
+    launch_os,
     needs_exit_geo,
     new_context_options,
     persistent_context_options,
@@ -116,6 +117,9 @@ async def AsyncNewBrowser(
         **kwargs:
             All other keyword arguments passed to `launch_options()`.
     """
+    # humanize runs in this process: checked before the launch,
+    # attached to the browser after it (also with from_options).
+    _humanize_playwright.check(kwargs.get('humanize'), is_async=True)
     virtual_display, headless = await asyncio.get_running_loop().run_in_executor(
         None, start_virtual_display, headless, debug, kwargs
     )
@@ -124,8 +128,11 @@ async def AsyncNewBrowser(
     # close, which used to strand one Xvfb and its /tmp/.X<n> lock per failed
     # launch.
     try:
-        return await _new_browser(
+        browser, os = await _new_browser(
             playwright, virtual_display, headless, from_options, persistent_context, debug, kwargs
+        )
+        return _humanize_playwright.attach(
+            browser, kwargs.get('humanize'), os, i_know_what_im_doing=kwargs.get('i_know_what_im_doing')
         )
     except BaseException:
         if virtual_display:
@@ -141,7 +148,8 @@ async def _new_browser(
     persistent_context: bool,
     debug: Optional[bool],
     kwargs: Dict[str, Any],
-) -> Union[Browser, BrowserContext]:
+) -> Tuple[Union[Browser, BrowserContext], str]:
+    """The browser (or persistent context), and its identity's OS."""
     # Options the caller built leave its contexts to the caller (host_identity).
     canvas_noise: Optional[bool] = False
     gpu_passthrough = False
@@ -171,7 +179,7 @@ async def _new_browser(
         return await _launch(
             playwright, from_options, persistent_context, no_viewport_default, virtual_display, canvas_noise,
             gpu_passthrough,
-        )
+        ), launch_os(from_options)
     # The browser inherits the driver's mask at spawn, so two concurrent launches
     # on one driver must not interleave pin/restore: the second pin would land on
     # the first browser, and the first restore would leave the driver pinned.
@@ -181,7 +189,7 @@ async def _new_browser(
             return await _launch(
                 playwright, from_options, persistent_context, no_viewport_default, virtual_display, canvas_noise,
                 gpu_passthrough,
-            )
+            ), launch_os(from_options)
         finally:
             cpu_affinity.restore(pid, previous)
 

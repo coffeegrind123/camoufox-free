@@ -37,6 +37,7 @@ import {
 
 const { OSError, PyFloat } = await import("../src/pycompat.js");
 const { Version } = await import("../src/pkgman.js");
+const { cursory, myuri, normalize, raw } = await import("../src/humanize.js");
 const { InvalidPropertyType, UnknownIPLocation } = await import(
 	"../src/exceptions.js"
 );
@@ -229,6 +230,31 @@ describe("test_launch_environment: prefs", () => {
 				firefox_user_prefs: { [PREF]: true },
 			});
 			expect(prefs[PREF]).toBe(true);
+		});
+	});
+
+	describe("custom_fonts_only warning", () => {
+		const TEXT = "Disabling OS-specific fonts";
+		const launchWith = async (opts: Record<string, any>) => {
+			const { error, warnings: caught } = await warnings.recordWarnings(() =>
+				utils.launchOptions({
+					env: { HOME },
+					...ua(LINUX_UA),
+					fonts: ["Arial"],
+					custom_fonts_only: true,
+					...opts,
+				}),
+			);
+			if (error) throw error;
+			return caught.filter((w) => w.message.includes(TEXT));
+		};
+		it("the flag silences it", async () => {
+			expect(await launchWith({ i_know_what_im_doing: true })).toEqual([]);
+		});
+		it("without the flag it warns and names the flag", async () => {
+			const caught = await launchWith({});
+			expect(caught).toHaveLength(1);
+			expect(caught[0].message).toContain("pass `i_know_what_im_doing=True`");
 		});
 	});
 
@@ -874,12 +900,10 @@ describe("test_humanize", () => {
 		};
 	});
 
-	const launchHumanize = (
-		humanize: boolean | number | undefined,
-		extra: Record<string, any> = {},
-	) =>
+	const noop = () => undefined;
+	const launchHumanize = (humanize: unknown, extra: Record<string, any> = {}) =>
 		launch({
-			humanize,
+			humanize: humanize as any,
 			block_webgl: true,
 			i_know_what_im_doing: true,
 			...extra,
@@ -894,6 +918,7 @@ describe("test_humanize", () => {
 		const config = await launchHumanize(true);
 		expect(config.humanize).toBe(true);
 		expect("humanize:maxTime" in config).toBe(false);
+		expect("humanize:driver" in config).toBe(false);
 	});
 
 	it.each([
@@ -907,6 +932,116 @@ describe("test_humanize", () => {
 		expect(utils.configJson({ t: config["humanize:maxTime"] })).toBe(
 			`{"t":${Number.isInteger(duration) ? `${duration}.0` : duration}}`,
 		);
+	});
+
+	it.each([
+		null,
+		false,
+		0,
+		{ mouse: raw(), keyboard: raw(), scroll: raw() },
+	])("nothing humanized sends no humanize key (%#)", async (humanize) => {
+		const config = await launchHumanize(humanize);
+		expect(Object.keys(config).filter((k) => k.startsWith("humanize"))).toEqual(
+			[],
+		);
+	});
+
+	it.each([
+		{},
+		{ mouse: raw() },
+		{
+			mouse: myuri({ move: noop }),
+			keyboard: myuri({ type: noop, wpm: 70 }),
+			scroll: myuri({ wheel: noop }),
+			seed: 9,
+		},
+		{ keyboard: raw(), seed: 2 ** 32 - 1 },
+	])("a driver engine tells the browser only that (%#)", async (humanize) => {
+		const config = await launchHumanize(humanize);
+		expect(
+			Object.fromEntries(
+				Object.entries(config).filter(([k]) => k.startsWith("humanize")),
+			),
+		).toEqual({ "humanize:driver": true });
+	});
+
+	it("no humanize is raw, and the browser's engine leaves the driver raw", () => {
+		for (const off of [null, false, 0, true, 1.5])
+			expect(normalize(off)).toEqual({
+				engines: { mouse: raw(), keyboard: raw(), scroll: raw() },
+			});
+		const { engines, seed } = normalize({
+			scroll: myuri({ intoView: noop }),
+			keyboard: { engine: "myuri", options: { wpm: 70 } },
+			seed: 5,
+		});
+		expect(engines.mouse).toEqual(myuri());
+		expect(engines.keyboard).toEqual(myuri({ wpm: 70 }));
+		expect(engines.scroll).toEqual(myuri({ intoView: noop }));
+		expect(seed).toBe(5);
+	});
+
+	it("takes cursory() as myuri()", () => {
+		expect(cursory()).toEqual(myuri());
+		expect(cursory({ move: noop })).toEqual(myuri({ move: noop }));
+		expect(
+			normalize({
+				mouse: { engine: "cursory", options: { move: noop } },
+				scroll: cursory(),
+			}).engines,
+		).toEqual({
+			mouse: myuri({ move: noop }),
+			keyboard: myuri(),
+			scroll: myuri(),
+		});
+	});
+
+	it.each([
+		{ mouse: "cursory" },
+		{ mouse: { engine: "auto", options: {} } },
+		{ mouse: { engine: "custom", options: {} } },
+	])("a channel takes only an engine (%#)", async (humanize) => {
+		expect(() => normalize(humanize)).toThrow("is not an engine");
+		await expect(launchHumanize(humanize)).rejects.toThrow("is not an engine");
+	});
+
+	it("a negative duration is refused", async () => {
+		await expect(launchHumanize(-1.5)).rejects.toThrow(
+			"positive number of seconds",
+		);
+	});
+
+	it.each([
+		[{ touch: raw() }, "no channel"],
+		[{ seed: -1 }, "seed"],
+		[{ seed: 2 ** 32 }, "seed"],
+		[{ seed: 1.5 }, "seed"],
+		[{ seed: true }, "seed"],
+		[{ seed: "1" }, "seed"],
+		[{ mouse: 3 }, "is not an engine"],
+		[
+			{ mouse: { engine: "myuri", options: { speed: 1 } } },
+			"myuri() has no part 'speed'",
+		],
+		[
+			{ mouse: { engine: "cursory", options: { maxTime: 1 } } },
+			"myuri() has no part 'maxTime'",
+		],
+		[
+			{ mouse: myuri({ type: noop }) },
+			'humanize["mouse"]: myuri({ type }) is not a mouse part',
+		],
+		[
+			{ mouse: { engine: "myuri", options: { wpm: 70 } } },
+			"myuri({ wpm }) is not a mouse part",
+		],
+		[
+			{ keyboard: { engine: "myuri", options: { type: "fast" } } },
+			"takes the function that replaces the part",
+		],
+		[{ mouse: { engine: "raw", options: { speed: 1 } } }, "takes no options"],
+	])("refuses a malformed setting (%#)", (humanize, message) => {
+		expect(() => normalize(humanize)).toThrow(message);
 	});
 
 	it("cursory is the default engine", async () => {
@@ -928,10 +1063,13 @@ describe("test_humanize", () => {
 		).rejects.toThrow(/humanize_engine/);
 	});
 
-	it("an engine without humanize is refused", async () => {
-		// Otherwise the choice would be silently ignored: nothing is humanized.
+	it.each([
+		undefined,
+		{ mouse: myuri() },
+	])("an engine without the browser's humanize is refused (%#)", async (humanize) => {
+		// Otherwise the choice would be silently ignored: the browser's engine is off.
 		await expect(
-			launchHumanize(undefined, { humanize_engine: "mousecrack" }),
+			launchHumanize(humanize, { humanize_engine: "mousecrack" }),
 		).rejects.toThrow(/humanize/);
 	});
 });

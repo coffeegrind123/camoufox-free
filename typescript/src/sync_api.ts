@@ -16,9 +16,11 @@ import {
 	type BrowserType,
 	firefox,
 } from "playwright-core";
+import { attach } from "./_humanize_playwright.js";
 import * as cpuAffinity from "./cpu_affinity.js";
 import { attachDriverDefaults } from "./driver_defaults.js";
 import { generateContextFingerprint } from "./fingerprints.js";
+import { normalize } from "./humanize.js";
 import {
 	type ProxyConfig,
 	ProxyHelper,
@@ -41,6 +43,7 @@ import {
 	hostIdentity,
 	type LaunchOptions,
 	launchOptions,
+	launchOs,
 	pinnedCoreCount,
 	STOCK_MEDIA_DEFAULTS,
 	spoofsWindowDimensions,
@@ -105,6 +108,9 @@ export async function NewBrowser(
 		...kwargs
 	}: NewBrowserOptions = {},
 ): Promise<Browser | BrowserContext> {
+	// humanize engines run in this process: checked before the launch,
+	// attached to the browser after it (also with from_options).
+	normalize(kwargs.humanize);
 	const [virtualDisplay, headlessBool] = await startVirtualDisplay(
 		headless,
 		debug,
@@ -146,15 +152,20 @@ export async function NewBrowser(
 	// as the identity reports, so measurable parallelism matches
 	// navigator.hardwareConcurrency; the driver gets its cores back afterwards.
 	const pinTo = pinnedCoreCount(fromOptions);
-	const launch = () =>
-		launchWith(
-			playwright,
-			fromOptions as Record<string, any>,
-			Boolean(persistent_context),
-			noViewportDefault,
-			virtualDisplay,
-			canvasNoise,
-			gpuPassthrough,
+	const launch = async () =>
+		attach(
+			await launchWith(
+				playwright,
+				fromOptions as Record<string, any>,
+				Boolean(persistent_context),
+				noViewportDefault,
+				virtualDisplay,
+				canvasNoise,
+				gpuPassthrough,
+			),
+			kwargs.humanize,
+			launchOs(fromOptions as Record<string, any>),
+			kwargs.i_know_what_im_doing,
 		);
 	try {
 		if (!pinTo) {
