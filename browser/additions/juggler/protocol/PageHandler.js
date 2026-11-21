@@ -892,7 +892,24 @@ export class PageHandler {
         // the toolbar at its own x, or out of the window through the edge it
         // crosses. Parked at the chrome window's origin, every exit read as
         // (0, -85) on the page, whichever edge (driven-exit-point.py).
-        dispatch.leaveContent(x, y);
+        //
+        // With humanize on, a cursor already on the page gets there along a
+        // planned path, leaving where the path crosses the edge
+        // (sendTrajectoryAcked). It used to leave in one jump: no mousemove, then
+        // a mouseout 60px past the top edge from rest 30px inside it, where a
+        // stock pointer's last step is under 26px.
+        const from = this._lastTrackedPos;
+        const humanize = ChromeUtils.camouGetBool('humanize', false) && this._cursorEntered &&
+            Number.isFinite(from.x) && Number.isFinite(from.y);
+        const humanized = humanize ? await humanizedMove(from, {x, y}, {within: null}) : null;
+        if (humanized) {
+          const watcher = new EventWatcher(this._pageEventSink, ['mousemove', 'mousequeued'], this._pendingEventWatchers);
+          await dispatch.sendTrajectoryAcked(watcher, 'mousemove', from, humanized.plan,
+              (plan, dispatchStep) => play(plan, dispatchStep, {signal: this._humanizeAbort.signal, deadlineMs: humanized.deadlineMs}));
+          await watcher.dispose();
+        } else {
+          dispatch.leaveContent(x, y);
+        }
         // Camoufox: the pointer really moved (off content), so forget the tracked
         // position. Otherwise a later move back to the same coordinates was
         // treated as a no-op and skipped, and the following mousedown made the

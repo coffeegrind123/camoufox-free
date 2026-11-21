@@ -401,6 +401,13 @@ export class MouseDispatch {
     await play({...plan, steps}, async (step, i) => {
       const {x, y} = step;
       if (i === destination) {
+        // A move asked to end outside the viewport has crossed its edge on the
+        // way (below); its destination is off the content too.
+        if (!this.isInViewport(x, y)) {
+          if (!offContent)
+            await leave(x, y);
+          return true;
+        }
         await Promise.all(outstanding);
         await this._reveal(x, y);
         await sendDestination(x, y);
@@ -421,7 +428,7 @@ export class MouseDispatch {
       // A step on the way to one outside the viewport leaves it at the moment
       // the pointer crosses the edge, not at the next step's time.
       const next = steps[i + 1];
-      if (i + 1 === destination || this.isInViewport(next.x, next.y))
+      if (this.isInViewport(next.x, next.y))
         return true;
       const {ms, last, exit} = this._crossing(step, next);
       const wait = ms - (ChromeUtils.now() - begun);
