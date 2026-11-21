@@ -28,6 +28,7 @@ from .exceptions import (
 from .fingerprints import Screen, platform_to_os, from_fpgen, from_preset, generate_fingerprint, get_random_preset, _generate_random_font_subset, draw_voice_config, fix_navigator_arch, fix_hardware_concurrency, set_cpu_default, present_window_frame, identity_salt, drop_audio_seed, identity_seed, voice_pool, voice_pool_speechd, follow_baseline_protection, clamp_screen_to_display, clamp_window_dimensions, clamp_window_position, raise_screen_to_modern_floor, set_media_devices_defaults, WINDOWS_11_MARKER_FONTS, OS_KEYS, OS_NAMES
 from . import coherence
 from .geolocation import geoip_allowed, get_geolocation
+from .humanize import HumanizeSetting, driven_channels, in_browser, normalize as normalize_humanize
 from .ip import (
     ExitGeo,
     Proxy,
@@ -849,6 +850,13 @@ def _camou_config_blob(from_options: Dict[str, Any]) -> str:
     return ''.join(v for _, v in sorted(chunks))
 
 
+def launch_os(from_options: Dict[str, Any]) -> str:
+    """The OS ('macos', 'windows' or 'linux') of the identity these launch
+    options claim, the host's when they claim no user agent."""
+    blob = _camou_config_blob(from_options)
+    return OS_NAMES[get_target_os(orjson.loads(blob) if blob else {})]
+
+
 def pinned_core_count(from_options: Dict[str, Any]) -> Optional[int]:
     """The core count the browser must be pinned to for these launch options,
     or None: the identity's navigator.hardwareConcurrency when this host can
@@ -1346,7 +1354,7 @@ def launch_options(
     cpu: Optional[Dict[str, str]] = None,
     geoip: Optional[Union[str, bool]] = None,
     geoip_db: Optional[str] = None,
-    humanize: Optional[Union[bool, float]] = None,
+    humanize: HumanizeSetting = None,
     humanize_engine: Optional[str] = None,
     locale: Optional[Union[str, List[str]]] = None,
     addons: Optional[List[str]] = None,
@@ -1403,14 +1411,20 @@ def launch_options(
         geoip_db (Optional[str]):
             Name of the GeoIP database to use (e.g., "GeoIP AIO by daijro").
             If not specified, uses the one chosen with `camoufox set --geoip`, or the default.
-        humanize (Optional[Union[bool, float]]):
-            Humanize the cursor movement.
-            Takes either `True`, or the MAX duration in seconds of the cursor movement.
-            The cursor typically takes up to 1.5 seconds to move across the window.
+        humanize (Optional[Union[bool, float, dict]]):
+            Humanize input. `True`, or the MAX duration in seconds of a cursor move, runs
+            the browser's own engine: the cursor follows recorded human paths (typically
+            up to 1.5 seconds across the window), enters a page from the toolbar, and
+            presses and wheel notches are paced as a person's.
+            A dict runs engines in the driver instead, per channel: `myuri()` or `raw()`
+            from `camoufox.humanize` (an omitted channel is `myuri()`), e.g.
+            `{"mouse": myuri(move=my_move), "scroll": raw(), "seed": 1234}`;
+            `myuri(**parts)` replaces parts of myuri's with your functions. The browser
+            then adds no pacing of its own; each Playwright call is one event.
         humanize_engine (Optional[str]):
-            The generator behind `humanize`: "cursory" (the default) replays recorded
-            human movements; "mousecrack" synthesizes them with a network trained on
-            recordings. See browser/additions/juggler/input/mousecrack/README.md.
+            The generator behind the browser's engine (`humanize=True`): "cursory" (the
+            default) replays recorded human movements; "mousecrack" synthesizes them with a
+            network trained on recordings. See browser/additions/juggler/input/mousecrack/README.md.
         locale (Optional[Union[str, List[str]]]):
             Locale(s) to use in Camoufox. The first listed locale will be used for the Intl API.
         addons (Optional[List[str]]):
@@ -1768,7 +1782,7 @@ def launch_options(
     if custom_fonts_only:
         firefox_user_prefs['gfx.bundled-fonts.activate'] = 0
         if fonts:
-            LeakWarning.warn('custom_fonts_only')
+            LeakWarning.warn('custom_fonts_only', i_know_what_im_doing)
         else:
             raise ValueError('No custom fonts were passed, but `custom_fonts_only` is enabled.')
     elif not _user_set_fonts or not config.get('fonts'):
@@ -2114,19 +2128,24 @@ def launch_options(
     # context's list names them, and they are too many to list in voices:pool.
     set_into(config, 'voices:pool:speechd', voice_pool_speechd())
 
-    # Pass the humanize option
+    # Pass the humanize option. True or a number is the browser's engine; a
+    # dict runs engines in the driver (camoufox._humanize_playwright), and the
+    # browser is told only that something there plans the input.
+    normalize_humanize(humanize)
     if humanize_engine is not None:
         if humanize_engine not in HUMANIZE_ENGINES:
             raise ValueError(f'humanize_engine must be one of {HUMANIZE_ENGINES}, not {humanize_engine!r}')
-        if not humanize:
-            raise ValueError('humanize_engine chooses how humanize moves the cursor; set humanize too')
+        if not in_browser(humanize):
+            raise ValueError('humanize_engine chooses how the browser\'s engine moves the cursor; set humanize=True too')
         set_into(config, 'humanize:engine', humanize_engine)
-    if humanize:
+    if in_browser(humanize):
         set_into(config, 'humanize', True)
         # bool is a subclass of int, but MaskConfig expects maxTime to be a
         # JSON number with a floating-point representation.
-        if isinstance(humanize, (int, float)) and not isinstance(humanize, bool):
+        if not isinstance(humanize, bool):
             set_into(config, 'humanize:maxTime', float(humanize))
+    elif driven_channels(humanize):
+        set_into(config, 'humanize:driver', True)
 
     # Enable the main world context creation
     if main_world_eval:

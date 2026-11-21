@@ -164,6 +164,24 @@ export class MouseDispatch {
     return x >= 0 && y >= 0 && x < this._box.width && y < this._box.height;
   }
 
+  /**
+   * The device pixels inside the CSS pixel holding relative (x, y), as
+   * relative points: one at a display scale of 1, two or three at 2.5.
+   */
+  devicePointsIn(x, y) {
+    const scale = this._win.devicePixelRatio;
+    const axis = (v, origin) => {
+      // The content area starts on the device pixel nearest its CSS origin.
+      const start = Math.round(origin * scale);
+      const points = [];
+      for (let k = Math.ceil(Math.floor(v) * scale); k < (Math.floor(v) + 1) * scale; k++)
+        points.push((start + k) / scale - origin);
+      return points;
+    };
+    const xs = axis(x, this._box.left);
+    return axis(y, this._box.top).flatMap(py => xs.map(px => ({x: px, y: py})));
+  }
+
   /** Relative point -> absolute, snapped clear of both of the element's edges. */
   toAbsolute(x, y) {
     return {
@@ -383,6 +401,13 @@ export class MouseDispatch {
     await play({...plan, steps}, async (step, i) => {
       const {x, y} = step;
       if (i === destination) {
+        // A move asked to end outside the viewport has crossed its edge on the
+        // way (below); its destination is off the content too.
+        if (!this.isInViewport(x, y)) {
+          if (!offContent)
+            await leave(x, y);
+          return true;
+        }
         await Promise.all(outstanding);
         await this._reveal(x, y);
         await sendDestination(x, y);
@@ -403,7 +428,7 @@ export class MouseDispatch {
       // A step on the way to one outside the viewport leaves it at the moment
       // the pointer crosses the edge, not at the next step's time.
       const next = steps[i + 1];
-      if (i + 1 === destination || this.isInViewport(next.x, next.y))
+      if (this.isInViewport(next.x, next.y))
         return true;
       const {ms, last, exit} = this._crossing(step, next);
       const wait = ms - (ChromeUtils.now() - begun);

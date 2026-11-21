@@ -208,6 +208,33 @@ async def _edge_sweeps(engine, prefs):
         return await page.evaluate("edge"), w, h
 
 
+# A move asked to end outside the viewport, from rest this far inside the edge
+# it crosses: past the top, and past the right.
+OUTSIDE_FROM_PX = 30
+OUTSIDE_PAST_PX = 60
+
+
+async def _moves_to_outside(engine):
+    """Events of humanized moves from rest inside the page to a point outside
+    it, one gesture each, and the viewport's size."""
+    async with AsyncCamoufox(**_launch_kwargs(True, engine)) as browser:
+        page = await browser.new_page()
+        await page.set_content(BODY)
+        viewport = await page.evaluate("({w: innerWidth, h: innerHeight})")
+        w, h = viewport["w"], viewport["h"]
+        gestures = []
+        for start, end in (((w / 2, OUTSIDE_FROM_PX), (w / 2, -OUTSIDE_PAST_PX)),
+                           ((w - OUTSIDE_FROM_PX, h / 2), (w + OUTSIDE_PAST_PX, h / 2))):
+            await page.mouse.move(*start)
+            await page.wait_for_timeout(300)
+            await page.evaluate(EDGE_RECORDER)
+            await page.mouse.move(*end)
+            await page.wait_for_timeout(200)
+            gestures.append(await page.evaluate("edge"))
+            await page.set_content(BODY)
+        return gestures, w, h
+
+
 def _exits_unlike_stock(events, w, h):
     """Exits the page sees unlike any stock one, each with the last mousemove
     before it: (move x, y), (out x, y), ms between them."""
@@ -351,6 +378,29 @@ async def _check_engine(engine) -> bool:
                 print(f"  FAIL: mousemoves after an exit with no mouseover first: {unannounced[:5]}")
             if misplaced:
                 print(f"  FAIL: exits unlike stock's, as (last move, exit, ms apart) in {w}x{h}: {misplaced[:5]}")
+
+    # A move to a point outside the page is a humanized move too: the page sees
+    # the path inside and the exit one sample past the edge, as stock reports a
+    # pointer that heads off the page. It used to skip humanize and leave in one
+    # jump: no mousemove, a mouseout 60px past the top edge (2026-11-21, fork
+    # main 659000bd, 10/10 runs; context/humanize-1000-review.md).
+    gestures, w, h = await _moves_to_outside(engine)
+    print(f"\n=== humanized moves to a point outside the viewport, {engine} ===")
+    for events in gestures:
+        exits = [e for e in events if e[0] == "out"]
+        before = [e for e in events if e[0] == "move" and (not exits or e[3] <= exits[0][3])]
+        misplaced = _exits_unlike_stock(events, w, h) if exits and before else []
+        print(f"  {len(before)} mousemoves, then exits {[e[1:3] for e in exits]}")
+        if exits and before and not misplaced:
+            print("  PASS: the path reached the edge and left it one sample past")
+        else:
+            passed = False
+            if not exits:
+                print("  FAIL: the cursor never left the document (no mouseout)")
+            elif not before:
+                print(f"  FAIL: left in one jump from rest {OUTSIDE_FROM_PX}px inside, no path on the page")
+            else:
+                print(f"  FAIL: exit unlike stock's, as (last move, exit, ms apart) in {w}x{h}: {misplaced[:5]}")
 
     moves, clicked = await _humanized_click_hits_target(engine)
     print(f"\n=== humanized click, {engine} ===")

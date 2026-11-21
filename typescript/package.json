@@ -44,8 +44,12 @@
   "license": "MIT",
   "description": "Camoufox: TypeScript launcher for the Camoufox anti-detect Firefox browser. A port of the Python wrapper.",
   "//playwright-core": "Range mirrors python/pyproject.toml's `playwright = \"<1.63\"`: every Playwright minor is free to change Juggler, so the ceiling is bumped deliberately, with a run of `make -C browser tests`. The dev pin (1.62.0) is the version the Python venv resolves, so the goldens compare like with like.",
+  "//@jwriter20/myuri": "Pinned to the release python/pyproject.toml pins, so a humanize seed plans the same input in both launchers.",
+  "//cursory-js": "myuri depends on cursory-js ^2.1.0; pinned exactly here so a new cursory-js release does not reach users unreviewed (python/pyproject.toml pins cursory the same way).",
   "packageManager": "pnpm@10.33.4",
   "dependencies": {
+    "@jwriter20/myuri": "4.0.0",
+    "cursory-js": "2.1.0",
     "adm-zip": "^0.6.1",
     "cli-progress": "^3.12.0",
     "commander": "^14.0.0",
