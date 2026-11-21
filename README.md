@@ -157,28 +157,6 @@ appropriate.
   really is. The getter costs what stock's does (getter-cost-parity.py).
   ([031108e](https://github.com/coffeegrind123/camoufox-free/commit/031108e0ed85469d834a9847bb5edcc17a4fcd84), [2a48d607](https://github.com/coffeegrind123/camoufox-free/commit/2a48d6072738d8ac47d428e34bbac130ae0735e2), [96e66d86](https://github.com/coffeegrind123/camoufox-free/commit/96e66d86794e3652134a30eec73e9bc164aebfbd), guard
   [window-screen-origin.py](browser/tests/playwright/patches/window-screen-origin.py))
-- **A page's first humanized move comes in from the toolbar.** Every page's
-  first trajectory left from (0, 0), so each one swept out of the same corner.
-  It now starts just inside the top edge, within a quarter viewport of its
-  destination, on a path that stays on the page. The fork's exit point (below)
-  runs on top of it, with unawaited intermediate steps; the guard's check that moves
-  arrive at refresh ticks is offered upstream in
-  [#978](https://github.com/daijro/camoufox/pull/978).
-  ([PageHandler.js](browser/additions/juggler/protocol/PageHandler.js), guard
-  [humanize-mouse-trajectory.py](browser/tests/playwright/patches/humanize-mouse-trajectory.py))
-- **A humanized curve leaves the page on its next sample.** Upstream's
-  [#1026](https://github.com/daijro/camoufox/pull/1026) puts every exit 3px
-  straight across the edge from the last move, at any speed. Stock's exit is
-  the next sample of a mouse polled at 1 kHz, one sample's travel along the
-  path (1px at 0.5 px/ms, about 15px at 15 px/ms), so the fork keeps #987's
-  exit on the curve and guards it also at 105% text scale, the fractional
-  content offset #1026 was written for. A step whose planned time rounded to
-  0 ms is taken to last as long as a 14 px/ms pointer needs, the fastest stock
-  measured, so its exit stays one sample from the last move. The guard's
-  stock bounds, from XTest exits at 1 kHz, are offered upstream in
-  [#1029](https://github.com/daijro/camoufox/pull/1029).
-  ([MouseDispatch.js](browser/additions/juggler/input/MouseDispatch.js), [91b0957c](https://github.com/coffeegrind123/camoufox-free/commit/91b0957c2c3d735620dd9381e84b6672dff59423), [d5945faf](https://github.com/coffeegrind123/camoufox-free/commit/d5945fafb2de243c59b82801ecab99c315a58093), guard
-  [humanize-mouse-trajectory.py](browser/tests/playwright/patches/humanize-mouse-trajectory.py))
 - **A spoofed WebGL limit costs what stock's does.** Upstream's #997 code
   fetched the context's tables and scanned the 31 limits stock asks the host for
   on every `getParameter` of a limit, so `MAX_TEXTURE_SIZE` took 12 ns against
@@ -187,27 +165,9 @@ appropriate.
   switch; the cache holds the finished value and whether stock asks the host,
   so nothing is decided per call. On one runner: stock 12-13 ns, cg.17 15-16,
   now 14-15, the same ~2 ns every getter costs over stock there (0.27 of an
-  untouched getter against stock's 0.25). Offered
-  upstream in [#1062](https://github.com/daijro/camoufox/pull/1062). ([PR #47](https://github.com/coffeegrind123/camoufox-free/pull/47), [1538445d](https://github.com/coffeegrind123/camoufox-free/commit/1538445d7eefc5c3270cd8b49588f3e5a2180f9e), [1849de26](https://github.com/coffeegrind123/camoufox-free/commit/1849de26e87dde339678b9d1ea7aec8e53b96d46))
-- **The estimate blends' native path costs what stock's does.** Upstream's
-  [#1024](https://github.com/daijro/camoufox/pull/1024) made every `rcp` and
-  `rsqrt` in Skia's raster pipeline call out of line to find the other
-  vendor's table, which spills the stage's vector registers, for every
-  identity, the host's own included. The table is resolved once when Skia
-  initialises and read inline: under the host's own identity, color-dodge,
-  color-burn and the non-separable blends draw 9-22% faster than cg.16 did
-  (one runner, interleaved launches). Offered
-  upstream in [#1061](https://github.com/daijro/camoufox/pull/1061).
-  ([PR #44](https://github.com/coffeegrind123/camoufox-free/pull/44))
-- **An ARM Linux identity claims llvmpipe.** Beside an ARM CPU, the only GPU
-  fpgen records from Firefox on Linux is llvmpipe, and the synthetic draw
-  skips software renderers, so `cpu={"arch": "arm"}` on Linux raised "No
-  recorded lin GPU fits". When no hardware GPU on the OS fits the claimed CPU,
-  the draw takes the software renderers that do; every other draw still
-  never claims software rendering. Python and TypeScript. Offered upstream
-  in [#1033](https://github.com/daijro/camoufox/pull/1033).
-  ([3649a60c](https://github.com/coffeegrind123/camoufox-free/commit/3649a60ccd9d3ccc0772573bdbf230d512fece69), guard
-  [cpu-vendor-estimates.py](browser/tests/playwright/patches/cpu-vendor-estimates.py))
+  untouched getter against stock's 0.25). Upstream merged the switch in
+  [#1062](https://github.com/daijro/camoufox/pull/1062); the cached value is
+  the fork's. ([PR #47](https://github.com/coffeegrind123/camoufox-free/pull/47), [1538445d](https://github.com/coffeegrind123/camoufox-free/commit/1538445d7eefc5c3270cd8b49588f3e5a2180f9e), [1849de26](https://github.com/coffeegrind123/camoufox-free/commit/1849de26e87dde339678b9d1ea7aec8e53b96d46))
 - **The x86-64 build compiles upstream's X86NaN away.** Upstream's
   [#1034](https://github.com/daijro/camoufox/pull/1034) wraps interpreter and
   `Math` operations in an `X86NaN` check of `EmulateX86` in every build, though
@@ -293,6 +253,36 @@ out of scope for that repository.
   upstream's stated reason is that Mesa GL over D3D12 with FreeType draws
   differently from Windows' ANGLE and DirectWrite, and it asks for pixel
   comparisons against real Windows machines on the same GPU. ([aaf96d7](https://github.com/coffeegrind123/camoufox-free/commit/aaf96d7a94641757d88fff876dcd8b17d13b689a), [f7c27c8](https://github.com/coffeegrind123/camoufox-free/commit/f7c27c8681e55480b6f3f434b7a2e0e3a535598d))
+- **`humanize=True` stays in the browser.** Upstream's
+  [#1000](https://github.com/daijro/camoufox/pull/1000) moved humanization into
+  the driver ([myuri](https://github.com/JWriter20/Myuri)) and removed the
+  in-browser engine. Measured against it on a Linux identity (10 browsers each):
+  both deliver moves at the page's refresh ticks, but myuri keeps every point
+  inside the viewport, so its cursor never leaves the page (no `mouseout` in
+  10 of 10 moves past the top edge). The fork keeps the engine for
+  `humanize=True` or a number, with what upstream no longer has:
+  - a page's first move comes in from the toolbar, just inside the top edge,
+    not out of (0, 0) ([PageHandler.js](browser/additions/juggler/protocol/PageHandler.js));
+  - a curve leaves the page on its next sample, one stock step past the edge,
+    also at 105% text scale; upstream's
+    [#1026](https://github.com/daijro/camoufox/pull/1026) put every exit 3px
+    straight across. The stock bounds were offered in
+    [#1029](https://github.com/daijro/camoufox/pull/1029), which JWriter20
+    closed as superseded by #1000, suggesting recorded exits belong in myuri's
+    own tests ([MouseDispatch.js](browser/additions/juggler/input/MouseDispatch.js),
+    [91b0957c](https://github.com/coffeegrind123/camoufox-free/commit/91b0957c2c3d735620dd9381e84b6672dff59423),
+    [d5945faf](https://github.com/coffeegrind123/camoufox-free/commit/d5945fafb2de243c59b82801ecab99c315a58093));
+  - a move to a point outside the page follows a path and leaves where it
+    crosses the edge, not in one jump ([5dc53a5f](https://github.com/coffeegrind123/camoufox-free/commit/5dc53a5f341f9b5274ffe9d9cdf24848a69c4413));
+  - the check that moves arrive at refresh ticks, which upstream merged in
+    [#978](https://github.com/daijro/camoufox/pull/978) and deleted with #1000.
+
+  A per-channel dict (`myuri()`, `raw()`) runs upstream's driver engines
+  instead. The launcher then sets `humanize:driver`, and the browser drops its
+  own click hold, double-click gap, hover dwell and wheel-notch pacing, so the
+  driver's timing gets no second layer. ([6d6892ed](https://github.com/coffeegrind123/camoufox-free/commit/6d6892ede95b5997be5aed345b6e3b8995249d0a), guards
+  [humanize-mouse-trajectory.py](browser/tests/playwright/patches/humanize-mouse-trajectory.py),
+  [driven-input-driver-mode.py](browser/tests/playwright/patches/driven-input-driver-mode.py))
 - **`humanize_engine="mousecrack"`.** A second cursor engine, using
   [mousecrack](https://github.com/puffinsoft/mousecrack)'s trained network.
   Cursory stays the default. Declined in
@@ -324,6 +314,12 @@ out of scope for that repository.
 
 ### Build, releases and defaults
 
+- **myuri's cursory is pinned exactly.** Upstream pins `myuri` to one release
+  in both launchers, but myuri itself takes any `cursory` 2.x (PyPI) and
+  `cursory-js` ^2.1.0 (npm), so a new cursory release would reach users
+  unreviewed. Both are pinned to 2.1.0, the release read for network access,
+  telemetry and feature gating (none found).
+  ([6d6892ed](https://github.com/coffeegrind123/camoufox-free/commit/6d6892ede95b5997be5aed345b6e3b8995249d0a))
 - **A drawn ARM CPU computes as the host until the ARM64 emulation is fast.**
   Upstream's ARM64 emulation (`general.cpu_identity` 3) gives ARM's bits but
   drew canvas composites 6-87x slower than native on x86-64, which a page can
