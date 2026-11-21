@@ -36,6 +36,12 @@ PAGE = """<!doctype html><html><body><input id="field"><script>
 # Delay and interval in ms, and whether a modifier repeats.
 REPEAT = {"windows": (500, 31.25, True), "macos": (500, 1000 / 12, False), "linux": (500, 30, False)}
 HOLD = 1100
+# The repeats are counted against how long the page saw the key held, keydown
+# to keyup: wait_for_timeout(HOLD) overshoots on a busy runner, and the OS
+# repeats for as long as the key is really down (CI: 21 repeats where 1100 ms
+# gives 19, on daijro/camoufox runs 44575692624 and 44705566488). The window
+# allows for both stamps' Windows tick and the keyup's trip to the browser.
+HELD_SLACK_MS = 20
 
 
 def probe(binary, os_name):
@@ -68,6 +74,17 @@ def held(seen, key):
     return downs[0], downs[1:]
 
 
+def held_ms(seen, key):
+    """How long the page saw `key` held: its first keydown to its keyup."""
+    down = next(t for type, k, _, t in seen if type == "keydown" and k == key)
+    return next(t for type, k, _, t in seen if type == "keyup" and k == key) - down
+
+
+def repeats_due(ms, delay, interval):
+    """How many repeats the OS sends for a key held `ms`."""
+    return 0 if ms <= delay else int((ms - delay) / interval) + 1
+
+
 def main() -> int:
     failures = []
     with hidden_display("1920x1080"):
@@ -76,9 +93,13 @@ def main() -> int:
         seen, value = runs[os_name]
         flagged = [k for type, k, repeat, _ in seen if type == "keydown" and repeat]
         first, repeats = held(seen, "a")
-        expected = int((HOLD - delay) / interval)
-        if not expected - 3 <= len(repeats) <= expected + 1:
-            failures.append(f"{os_name}: 'a' held {HOLD} ms repeated {len(repeats)} times, the OS {expected}")
+        ms = held_ms(seen, "a")
+        # A late timer under load can still be owed its last repeats at the
+        # keyup, so two fewer pass, as the old bound let three.
+        low = repeats_due(ms - HELD_SLACK_MS, delay, interval) - 2
+        high = repeats_due(ms + HELD_SLACK_MS, delay, interval)
+        if not low <= len(repeats) <= high:
+            failures.append(f"{os_name}: 'a' held {ms:.0f} ms repeated {len(repeats)} times, the OS {low}-{high}")
         else:
             # The Windows tick puts each stamp on a 15.625 ms step.
             if abs(repeats[0] - first - delay) > 17:

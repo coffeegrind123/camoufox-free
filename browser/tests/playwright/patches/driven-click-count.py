@@ -32,16 +32,57 @@ PAGE = """<!doctype html><html><body style="margin:0;width:800px;height:600px"><
   const seen = [];
   for (const type of ['mousedown', 'mouseup', 'click'])
     addEventListener(type, (e) => {
-      seen.push([type, e.detail]);
+      seen.push([type, e.detail, e.timeStamp]);
       document.body.dataset.seen = JSON.stringify(seen);
     }, true);
 </script></body></html>"""
 PRESSES = 8
-IN_PLACE = {
-    "windows": [1, 2, 3, 2, 3, 2, 3, 2],
-    "macos": [1, 2, 3, 4, 5, 6, 7, 8],
-    "linux": [1, 2, 3, 1, 2, 3, 1, 2],
-}
+# With every press inside the OS's window, the in-place presses count:
+#   windows 1, 2, 3, 2, 3, 2, 3, 2   macos 1, 2, ..., 8   linux 1, 2, 3, 1, 2, 3, 1, 2
+# A press is soon when it comes within the window of the one before. The guard
+# applies each OS's rule to the gaps the page saw, not to the 60 ms it waits:
+# on a busy runner a gap passed GTK's 400 ms and the count rightly started again
+# (daijro/camoufox run 44575692624: linux 1, 2, 3, 1, 2, 1, 2, 3).
+CLICK_MS = {"windows": 500, "macos": 500, "linux": 400}
+# Within this of the window, either answer passes: the page's stamps (on the
+# Windows tick) are not the times the browser counted from.
+EDGE_MS = 25
+
+
+def next_counts(os_name, count, soon):
+    """The counts the OS may give a press in place after one counted `count`;
+    `soon` is True, False, or None when the gap is too near the window to say."""
+    def one(is_soon):
+        if not is_soon:
+            return 1
+        if os_name == "windows":
+            # Windows' own double click for a press by the last single press
+            # (counted 1 or 3); Firefox counts up any other.
+            return 2 if count in (1, 3) else count + 1
+        if os_name == "macos":
+            return count + 1
+        return count + 1 if count < 3 else 1
+    return {one(True), one(False)} if soon is None else {one(soon)}
+
+
+def in_place_failures(os_name, presses):
+    """Presses [(count, timeStamp)] in place that the OS would not count so."""
+    bad = []
+    for i, (count, t) in enumerate(presses):
+        if i == 0:
+            allowed = {1}
+        else:
+            gap = t - presses[i - 1][1]
+            window = CLICK_MS[os_name]
+            soon = None if abs(gap - window) <= EDGE_MS else gap < window
+            allowed = next_counts(os_name, presses[i - 1][0], soon)
+        if count not in allowed:
+            if i:
+                bad.append(f"press {i + 1} counted {count} {round(t - presses[i - 1][1])} ms after the last, "
+                           f"the OS {sorted(allowed)}")
+            else:
+                bad.append(f"press 1 counted {count}, the OS 1")
+    return bad
 
 
 def probe(binary, os_name):
@@ -66,15 +107,21 @@ def main() -> int:
     failures = []
     with hidden_display("1920x1080"):
         seen = {os_name: probe(resolve_binary(), os_name) for os_name in IN_PLACE}
-    for os_name, counts in IN_PLACE.items():
-        expected = counts + [1, 1]
-        downs = [d for t, d in seen[os_name] if t == "mousedown"]
-        if downs != expected:
-            failures.append(f"{os_name}: presses counted {downs}, a person's count {expected}")
+    for os_name in CLICK_MS:
+        presses = [(d, ts) for t, d, ts in seen[os_name] if t == "mousedown"]
+        downs = [d for d, _ in presses]
+        if len(downs) != PRESSES + 2:
+            failures.append(f"{os_name}: {len(downs)} presses reached the page, {PRESSES + 2} were sent")
+            continue
+        for bad in in_place_failures(os_name, presses[:PRESSES]):
+            failures.append(f"{os_name}: {bad} (counts {downs})")
+        # After a 700 ms pause, and after a move away, a press starts again.
+        if downs[PRESSES:] != [1, 1]:
+            failures.append(f"{os_name}: presses after a pause and after a move counted {downs[PRESSES:]}, the OS [1, 1]")
         for kind in ("mouseup", "click"):
-            got = [d for t, d in seen[os_name] if t == kind]
-            if got != expected:
-                failures.append(f"{os_name}: {kind} detail {got}, its press counted {expected}")
+            got = [d for t, d, _ in seen[os_name] if t == kind]
+            if got != downs:
+                failures.append(f"{os_name}: {kind} detail {got}, its press counted {downs}")
     for failure in failures:
         print(f"FAIL: {failure}")
     if failures:

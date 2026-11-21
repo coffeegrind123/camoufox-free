@@ -46,6 +46,7 @@ Cu.getGlobalForObject(TargetRegistry).closedPageProbe = {target: new WeakRef(tar
 return !!network;
 """
 COLLECT = "Cu.forceGC(); Cu.forceCC(); Cu.forceShrinkingGC(); return 0;"
+FREED_WITHIN_S = 10
 ALIVE = """
 const {TargetRegistry} = ChromeUtils.importESModule("resource://gre/modules/juggler/TargetRegistry.js");
 const p = Cu.getGlobalForObject(TargetRegistry).closedPageProbe;
@@ -80,10 +81,17 @@ def main() -> int:
                 page.close()
                 # Marionette may have been on the closed page's window.
                 m.call("WebDriver:SwitchToWindow", {"handle": m.call("WebDriver:GetWindowHandles", {})[0]})
-                for _ in range(5):
+                # The page's teardown is asynchronous, so collect until both are
+                # gone or the deadline passes: five rounds in a second failed on
+                # busy runners (daijro/camoufox runs 44575692624, 44683290333).
+                # A leak never frees them, so it still fails.
+                deadline = time.monotonic() + FREED_WITHIN_S
+                while True:
                     m.js(COLLECT)
+                    alive = m.js(ALIVE)
+                    if not (alive["target"] or alive["network"]) or time.monotonic() > deadline:
+                        break
                     time.sleep(0.2)
-                alive = m.js(ALIVE)
             finally:
                 m.close()
             context.close()
