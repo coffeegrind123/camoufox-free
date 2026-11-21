@@ -71,6 +71,10 @@ const clickGap = () => logNormalDelay(110, 0.32, 70, 180);
 // How long a person's pointer rests on a target before pressing it: 125 ms
 // median, sigma 0.5, kept within 60-240 ms. Stock's OS input reads under
 // 250 ms from arrival to press; Playwright pressed under 10 ms after the move.
+// The share of the OS's double-click time a double click's second press may come
+// after its first: inside it with room for the dispatch itself.
+const kDoubleClickShare = 0.85;
+
 const hoverDwell = () => logNormalDelay(125, 0.5, 60, 240);
 
 function hashConsoleMessage(params) {
@@ -859,8 +863,9 @@ export class PageHandler {
         if (humanized) {
           // Before its first move the cursor is not on the page: the tracked
           // position is a placeholder, and the entry point was never sent.
-          const at = this._cursorEntered ? this._lastTrackedPos : {x: NaN, y: NaN};
-          await dispatch.sendTrajectoryAcked(watcher, 'mousemove', at, humanized.plan,
+          // (`start`, not `at`: `at` is the destination's point, _placeMove's.)
+          const start = this._cursorEntered ? this._lastTrackedPos : {x: NaN, y: NaN};
+          await dispatch.sendTrajectoryAcked(watcher, 'mousemove', start, humanized.plan,
               (plan, dispatchStep) => play(plan, dispatchStep, {signal: this._humanizeAbort.signal, deadlineMs: humanized.deadlineMs}),
               () => this._sendMove(dispatch, watcher, at.x, at.y));
         } else if (eventType === 'mousemove') {
@@ -933,7 +938,7 @@ export class PageHandler {
         const at = this._pressPoint(x, y);
         eventArgs.clickCount = this._countPress(button, at);
         await sendEvents(eventNames, at);
-        this._buttonDownAt = ChromeUtils.now();
+        this._buttonDownAt = this._lastPressAt = ChromeUtils.now();
         return;
       }
 
@@ -1068,8 +1073,14 @@ export class PageHandler {
     } else if (clickCount > 1) {
       // The second press of a double click comes a person's gap after the
       // release, with no move before it (driven-dblclick-gap.py).
-      if (this._buttonUpAt !== undefined)
-        wait = this._buttonUpAt + clickGap() - ChromeUtils.now();
+      // It also lands well inside the claimed OS's double-click time from the
+      // first press (_countPress), as a person's second press must to be one:
+      // a long hold plus the gap reached 443 ms, past GTK's 400, and the OS
+      // counted the press 1 with no dblclick.
+      if (this._buttonUpAt !== undefined) {
+        const latest = (this._lastPressAt ?? -Infinity) + kDoubleClickShare * kOsInput[this._identityOS()].clickMs;
+        wait = Math.min(this._buttonUpAt + clickGap(), latest) - ChromeUtils.now();
+      }
     } else if (this._movedAt !== undefined) {
       // A press comes a person's dwell after the move that brought the pointer
       // to its target: a page read under 10 ms where stock reads under 250.

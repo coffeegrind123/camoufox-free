@@ -106,7 +106,7 @@ def probe(binary, os_name):
 def main() -> int:
     failures = []
     with hidden_display("1920x1080"):
-        seen = {os_name: probe(resolve_binary(), os_name) for os_name in IN_PLACE}
+        seen = {os_name: probe(resolve_binary(), os_name) for os_name in CLICK_MS}
     for os_name in CLICK_MS:
         presses = [(d, ts) for t, d, ts in seen[os_name] if t == "mousedown"]
         downs = [d for d, _ in presses]
