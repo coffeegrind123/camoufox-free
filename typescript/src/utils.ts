@@ -61,6 +61,12 @@ import {
 	WINDOWS_WEBGPU_LIMITS,
 } from "./host_rendering.js";
 import {
+	drivenChannels,
+	type HumanizeSetting,
+	inBrowser,
+	normalize,
+} from "./humanize.js";
+import {
 	type ProxyConfig,
 	ProxyHelper,
 	proxyAuthEnv,
@@ -159,6 +165,7 @@ type EnvVars = Record<string, string | number | boolean>;
 
 /** The OS names Camoufox takes, by target_os key. */
 const OS_NAMES = { win: "windows", mac: "macos", lin: "linux" } as const;
+export type OsName = (typeof OS_NAMES)[TargetOS];
 
 // Camoufox preferences to cache previous pages and requests
 export const CACHE_PREFS: Record<string, any> = LAUNCHER_CONSTANTS.cachePrefs;
@@ -1219,6 +1226,13 @@ export function camouConfigBlob(fromOptions: Record<string, any>): string {
 		.join("");
 }
 
+/** The OS of the identity these launch options claim, the host's when they
+ * claim no user agent. */
+export function launchOs(fromOptions: Record<string, any>): OsName {
+	const blob = camouConfigBlob(fromOptions);
+	return OS_NAMES[getTargetOs(blob ? JSON.parse(blob) : {})];
+}
+
 /**
  * The core count the browser must be pinned to for these launch options, or
  * null: the identity's navigator.hardwareConcurrency when this host can honour
@@ -1763,9 +1777,9 @@ export interface LaunchOptions {
 	geoip?: string | boolean;
 	/** Name of the GeoIP database to use (e.g. "GeoIP AIO by daijro"). */
 	geoip_db?: string;
-	/** Humanize the cursor movement: `true`, or the MAX duration in seconds. */
-	humanize?: boolean | number;
-	/** The generator behind `humanize`: "cursory" (the default) replays recorded
+	/** Humanize input. `true`, or the MAX duration in seconds of a cursor move, runs the browser's own engine (recorded human paths, entry from the toolbar, presses and wheel notches paced as a person's). An object `{ mouse, keyboard, scroll, seed }` of myuri() or raw() runs engines in the driver instead, per channel (a channel the object omits is myuri()), and the browser then adds no pacing of its own. */
+	humanize?: HumanizeSetting;
+	/** The generator behind the browser's engine (`humanize: true`): "cursory" (the default) replays recorded
 	 * human movements; "mousecrack" synthesizes them with a network trained on
 	 * recordings. See browser/additions/juggler/input/mousecrack/README.md. */
 	humanize_engine?: string;
@@ -1791,8 +1805,9 @@ export interface LaunchOptions {
 	/** Firefox version to use. Defaults to the current Camoufox version. */
 	ff_version?: number;
 	/** Whether to run the browser in headless mode. Defaults to false.
-	 * NewBrowser and launchServer run headless: true on Linux on Xvfb when available;
-	 * launchOptions() alone starts no display. */
+	 * `true` is Firefox's own headless mode and starts no display; only
+	 * `"virtual"` and `"virtual-gpu"` (Camoufox, NewBrowser and launchServer)
+	 * start one. launchOptions() alone starts no display. */
 	headless?: boolean;
 	/** Whether to enable running scripts in the main world ("mw:" prefix). */
 	main_world_eval?: boolean;
@@ -1821,7 +1836,7 @@ export interface LaunchOptions {
 	i_know_what_im_doing?: boolean;
 	/** Prints the config being sent to Camoufox. */
 	debug?: boolean;
-	/** Virtual display number, e.g. ":99". Handled by Camoufox & NewBrowser. */
+	/** Virtual display number, e.g. ":99". Handled by Camoufox, NewBrowser and launchServer. */
 	virtual_display?: string;
 	/** Pin the browser to navigator.hardwareConcurrency cores (Linux/Windows).
 	 * OFF by default -- it costs real CPU and serializes concurrent launches. */
@@ -2169,7 +2184,7 @@ export async function launchOptions({
 	if (custom_fonts_only) {
 		firefox_user_prefs["gfx.bundled-fonts.activate"] = 0;
 		if (fonts?.length) {
-			LeakWarning.warn("custom_fonts_only");
+			LeakWarning.warn("custom_fonts_only", i_know_what_im_doing);
 		} else {
 			throw new ValueError(
 				"No custom fonts were passed, but `custom_fonts_only` is enabled.",
@@ -2501,27 +2516,32 @@ export async function launchOptions({
 	// context's list names them, and they are too many to list in voices:pool.
 	setInto(config, "voices:pool:speechd", voicePoolSpeechd());
 
-	// Pass the humanize option
+	// Pass the humanize option. true or a number is the browser's engine; an
+	// object runs engines in the driver (_humanize_playwright.ts), and the
+	// browser is told only that something there plans the input.
+	normalize(humanize);
 	if (humanize_engine !== undefined && humanize_engine !== null) {
 		if (!(HUMANIZE_ENGINES as readonly string[]).includes(humanize_engine)) {
 			throw new ValueError(
 				`humanize_engine must be one of ${HUMANIZE_ENGINES.join(", ")}, not '${humanize_engine}'`,
 			);
 		}
-		if (!pyTruthy(humanize)) {
+		if (!inBrowser(humanize)) {
 			throw new ValueError(
-				"humanize_engine chooses how humanize moves the cursor; set humanize too",
+				"humanize_engine chooses how the browser's engine moves the cursor; set humanize: true too",
 			);
 		}
 		setInto(config, "humanize:engine", humanize_engine);
 	}
-	if (pyTruthy(humanize)) {
+	if (inBrowser(humanize)) {
 		setInto(config, "humanize", true);
 		// MaskConfig expects maxTime to be a JSON number.
 		// float(humanize): a JSON number with a floating-point representation.
 		if (typeof humanize === "number") {
 			setInto(config, "humanize:maxTime", new PyFloat(humanize));
 		}
+	} else if (drivenChannels(humanize).length) {
+		setInto(config, "humanize:driver", true);
 	}
 
 	// Enable the main world context creation

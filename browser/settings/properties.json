@@ -51,6 +51,7 @@
   { "property": "humanize:maxTime", "type": "double" },
   { "property": "humanize:minTime", "type": "double" },
   { "property": "humanize:engine", "type": "str" },
+  { "property": "humanize:driver", "type": "bool" },
   { "property": "showcursor", "type": "bool" },
   { "property": "AudioContext:sampleRate", "type": "uint" },
   { "property": "AudioContext:outputLatency", "type": "double" },

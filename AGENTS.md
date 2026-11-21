@@ -324,7 +324,7 @@ persist a change there as a patch, never as an edit to that tree.
 | `browser/` | The browser build: `Makefile`, `upstream.sh`, `multibuild.py`, `Dockerfile`, and the directories below. |
 | `browser/patches/` | Diffs applied to Firefox: one per behaviour at the top level, plus `playwright/`, `librewolf/` and `ghostery/`. Browser behaviour changes here. |
 | `browser/additions/camoucfg/` | The C++ config layer. `MaskConfig.hpp` reads `CAMOU_CONFIG`, which the patches consult. |
-| `browser/additions/juggler/` | Camoufox's Juggler, Playwright's Firefox protocol. The page agent runs in an isolated world. `input/` holds the cursor trajectory generators: Cursory (default) and mousecrack. |
+| `browser/additions/juggler/` | Camoufox's Juggler, Playwright's Firefox protocol. The page agent runs in an isolated world. `input/` holds `MouseDispatch.js` (every synthesized mouse event), `HumanDelay.js`, and the in-browser humanize engine (`humanize=True`): the cursor trajectory generators Cursory (default) and mousecrack, and the pacer. A driver engine (`myuri()`, [`docs/humanize.md`](docs/humanize.md)) runs in the launcher instead and turns the browser's pacing off (`humanize:driver`). |
 | `browser/settings/` | `camoufox.cfg` (prefs), `properties.json` (every config key and its type; a key the browser stops reading is marked `removed`, never deleted). |
 | `browser/scripts/` | `patch.py` applies patches and writes the mozconfig; `sync_additions.py`, `patchstack.py`, `remote_settings.py`, `package.py`, `install-deps.sh`, font tooling. |
 | `browser/assets/` | Mozconfigs, README images. |
@@ -448,6 +448,7 @@ this section in step with the launcher options.
 - **Use `geoip=True` with a proxy.** Without it the timezone and locale are the identity's, not the proxy's, and a warning is printed.
 - **`page.evaluate` is isolated.** It cannot read globals the page defined. Use `main_world_eval=True` and prefix the script with `mw:`. Without the option, a `mw:` evaluate fails with "Main world evaluation is disabled". `mw:` cannot return a handle (`evaluate_handle`).
 - **Leave the viewport alone.** When the window size is spoofed, new pages default to `no_viewport=True`; forcing a `viewport` asks the window to resize to something the identity does not claim.
+- **The OS counts clicks and repeats keys.** A press's `detail` follows the identity's OS, not `click_count`: presses count up only when quick and in place (`dblclick` is). A key held with `keyboard.down` repeats until `keyboard.up`, with that OS's delay and interval ([docs/input-dispatch.md](docs/input-dispatch.md#click-count)).
 - **`is_mobile` is ignored** (with a warning). Camoufox has desktop identities only.
 - **Persistent contexts** need `persistent_context=True` and `user_data_dir`, and cannot be served by `launch_server`.
 - **`headless=True`** uses native headless mode and needs Mesa's EGL and DRI packages on Linux; it needs neither `DISPLAY` nor Xvfb for WebGL. See [Native headless WebGL](docs/headless-webgl.md).
