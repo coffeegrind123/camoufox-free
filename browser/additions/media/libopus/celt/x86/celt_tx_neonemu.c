@@ -100,6 +100,37 @@ static inline NV uzp1_2d(NV d, NV n, NV m) { NV r_; r_.d[0] = n.d[0]; r_.d[1] = 
 static inline NV uzp2_2d(NV d, NV n, NV m) { NV r_; r_.d[0] = n.d[1]; r_.d[1] = m.d[1]; return r_; }
 #endif
 static inline NV ext16(NV n, NV m, int k) { NV r_; for (int i = 0; i < 16; i++) r_.b[i] = i + k < 16 ? n.b[i + k] : m.b[i + k - 16]; return r_; }
+/* Lane moves as register shuffles, not 64-bit round trips through memory:
+ * movd_LK is MOV Vd.D[L], Vn.D[K]; movs_33 MOV Vd.S[3], Vn.S[3]; dupd_K
+ * DUP Vd.2D, Vn.D[K]; ext_8 and ext_12 EXT #8 and #12; ldrd_ LDR Dt. */
+#if NEONEMU_SSE
+static inline NV movd_00(NV d, NV n) { return nv_(_mm_castpd_ps(_mm_move_sd(_mm_castps_pd(d.m), _mm_castps_pd(n.m)))); }
+static inline NV movd_01(NV d, NV n) { return nv_(_mm_castpd_ps(_mm_shuffle_pd(_mm_castps_pd(n.m), _mm_castps_pd(d.m), 3))); }
+static inline NV movd_10(NV d, NV n) { return nv_(_mm_movelh_ps(d.m, n.m)); }
+static inline NV movd_11(NV d, NV n) { return nv_(_mm_castpd_ps(_mm_shuffle_pd(_mm_castps_pd(d.m), _mm_castps_pd(n.m), 2))); }
+static inline NV movs_33(NV d, NV n) {
+    __m128 t = _mm_shuffle_ps(d.m, n.m, _MM_SHUFFLE(3, 3, 2, 2));
+    return nv_(_mm_shuffle_ps(d.m, t, _MM_SHUFFLE(2, 0, 1, 0)));
+}
+static inline NV dupd_0(NV n) { return nv_(_mm_movelh_ps(n.m, n.m)); }
+static inline NV dupd_1(NV n) { return nv_(_mm_movehl_ps(n.m, n.m)); }
+static inline NV ext_8(NV n, NV m) { return nv_(_mm_castpd_ps(_mm_shuffle_pd(_mm_castps_pd(n.m), _mm_castps_pd(m.m), 1))); }
+static inline NV ext_12(NV n, NV m) {
+    return nv_(_mm_castsi128_ps(_mm_or_si128(_mm_srli_si128(_mm_castps_si128(n.m), 12), _mm_slli_si128(_mm_castps_si128(m.m), 4))));
+}
+static inline NV ldrd_(const uint8_t* p) { return nv_(_mm_castsi128_ps(_mm_loadl_epi64((const __m128i*)p))); }
+#else
+static inline NV movd_00(NV d, NV n) { d.d[0] = n.d[0]; return d; }
+static inline NV movd_01(NV d, NV n) { d.d[0] = n.d[1]; return d; }
+static inline NV movd_10(NV d, NV n) { d.d[1] = n.d[0]; return d; }
+static inline NV movd_11(NV d, NV n) { d.d[1] = n.d[1]; return d; }
+static inline NV movs_33(NV d, NV n) { d.s[3] = n.s[3]; return d; }
+static inline NV dupd_0(NV n) { n.d[1] = n.d[0]; return n; }
+static inline NV dupd_1(NV n) { n.d[0] = n.d[1]; return n; }
+static inline NV ext_8(NV n, NV m) { return ext16(n, m, 8); }
+static inline NV ext_12(NV n, NV m) { return ext16(n, m, 12); }
+static inline NV ldrd_(const uint8_t* p) { NV r_; memcpy(&r_.d[0], p, 8); r_.d[1] = 0; return r_; }
+#endif
 
 #define LANES2(expr) { NV r_; for (int i = 0; i < 2; i++) r_.f[i] = (expr); r_.d[1] = 0; return r_; }
 static inline NV fmul_2s(NV d, NV n, NV m) LANES2(n.f[i] * m.f[i])
@@ -148,12 +179,12 @@ static void neonemu_run(int entry, NRegs* R) {
   V[18] = rev64_4s(V[0]);  /* c: rev64 v18.4s, v0.4s */
   V[1] = zip2_2d(V[1], V[16], V[0]);  /* 10: zip2 v1.2d, v16.2d, v0.2d */
   V[17] = zip1_2d(V[17], V[16], V[0]);  /* 14: zip1 v17.2d, v16.2d, v0.2d */
-  { uint64_t t_ = V[18].d[1]; V[1].d[1] = t_; }  /* 18: mov v1.d[1], v18.d[1] */
+  V[1] = movd_11(V[1], V[18]);  /* 18: mov v1.d[1], v18.d[1] */
   V[0] = fadd_4s(V[0], V[17], V[1]);  /* 1c: fadd v0.4s, v17.4s, v1.4s */
   V[16] = fsub_4s(V[16], V[17], V[1]);  /* 20: fsub v16.4s, v17.4s, v1.4s */
   V[1] = V[16];  /* 24: mov v1.16b, v16.16b */
-  { uint64_t t_ = V[0].s[3]; V[1].s[3] = t_; }  /* 28: mov v1.s[3], v0.s[3] */
-  { uint64_t t_ = V[16].s[3]; V[0].s[3] = t_; }  /* 2c: mov v0.s[3], v16.s[3] */
+  V[1] = movs_33(V[1], V[0]);  /* 28: mov v1.s[3], v0.s[3] */
+  V[0] = movs_33(V[0], V[16]);  /* 2c: mov v0.s[3], v16.s[3] */
   { uint8_t* A = (uint8_t*)X[1] + 0; memcpy(A+0, &V[0], 16); memcpy(A+16, &V[1], 16);  }  /* 30: st1 { v0.4s, v1.4s }, [x1] */
   RET();  /* 34: ret  */
   /* 38: nop */
@@ -170,18 +201,18 @@ static void neonemu_run(int entry, NRegs* R) {
   V[16] = fsub_4s(V[16], V[0], V[2]);  /* 60: fsub v16.4s, v0.4s, v2.4s */
   V[2] = fadd_4s(V[2], V[0], V[2]);  /* 64: fadd v2.4s, v0.4s, v2.4s */
   { uint8_t* A = (uint8_t*)X[5] + 0; memcpy(&V[21], A+0, 16);  }  /* 68: ld1 { v21.4s }, [x5] */
-  V[20] = ext16(V[3], V[3], 12);  /* 6c: ext v20.16b, v3.16b, v3.16b, #0xc */
+  V[20] = ext_12(V[3], V[3]);  /* 6c: ext v20.16b, v3.16b, v3.16b, #0xc */
   V[20] = rev64_4s(V[20]);  /* 70: rev64 v20.4s, v20.4s */
-  V[18] = ext16(V[2], V[20], 8);  /* 74: ext v18.16b, v2.16b, v20.16b, #0x8 */
-  { uint64_t t_ = V[20].d[1]; V[2].d[1] = t_; }  /* 78: mov v2.d[1], v20.d[1] */
+  V[18] = ext_8(V[2], V[20]);  /* 74: ext v18.16b, v2.16b, v20.16b, #0x8 */
+  V[2] = movd_11(V[2], V[20]);  /* 78: mov v2.d[1], v20.d[1] */
   V[1] = fsub_4s(V[1], V[2], V[18]);  /* 7c: fsub v1.4s, v2.4s, v18.4s */
   V[18] = fadd_4s(V[18], V[2], V[18]);  /* 80: fadd v18.4s, v2.4s, v18.4s */
   V[22] = rev64_4s(V[31]);  /* 84: rev64 v22.4s, v31.4s */
-  { uint64_t t_ = V[16].d[0]; V[2].d[0] = t_; V[2].d[1] = t_; }  /* 88: dup v2.2d, v16.d[0] */
-  { uint64_t t_ = V[16].d[1]; V[3].d[0] = t_; V[3].d[1] = t_; }  /* 8c: dup v3.2d, v16.d[1] */
+  V[2] = dupd_0(V[16]);  /* 88: dup v2.2d, v16.d[0] */
+  V[3] = dupd_1(V[16]);  /* 8c: dup v3.2d, v16.d[1] */
   V[20] = rev64_4s(V[1]);  /* 90: rev64 v20.4s, v1.4s */
   V[3] = rev64_4s(V[3]);  /* 94: rev64 v3.4s, v3.4s */
-  V[22] = ext16(V[31], V[22], 8);  /* 98: ext v22.16b, v31.16b, v22.16b, #0x8 */
+  V[22] = ext_8(V[31], V[22]);  /* 98: ext v22.16b, v31.16b, v22.16b, #0x8 */
   V[19] = zip1_2d(V[19], V[18], V[1]);  /* 9c: zip1 v19.2d, v18.2d, v1.2d */
   V[18] = zip2_2d(V[18], V[18], V[20]);  /* a0: zip2 v18.2d, v18.2d, v20.2d */
   V[0] = fadd_4s(V[0], V[19], V[18]);  /* a4: fadd v0.4s, v19.4s, v18.4s */
@@ -191,7 +222,7 @@ static void neonemu_run(int entry, NRegs* R) {
   V[20] = rev64_4s(V[17]);  /* b4: rev64 v20.4s, v17.4s */
   V[17] = fmla_4s(V[17], V[20], V[31]);  /* b8: fmla v17.4s, v20.4s, v31.4s */
   V[20] = rev64_4s(V[17]);  /* bc: rev64 v20.4s, v17.4s */
-  V[20] = ext16(V[20], V[20], 8);  /* c0: ext v20.16b, v20.16b, v20.16b, #0x8 */
+  V[20] = ext_8(V[20], V[20]);  /* c0: ext v20.16b, v20.16b, v20.16b, #0x8 */
   V[20] = fmla_4s(V[20], V[17], V[31]);  /* c4: fmla v20.4s, v17.4s, v31.4s */
   V[3] = fadd_4s(V[3], V[2], V[20]);  /* c8: fadd v3.4s, v2.4s, v20.4s */
   V[2] = fsub_4s(V[2], V[2], V[20]);  /* cc: fsub v2.4s, v2.4s, v20.4s */
@@ -216,18 +247,18 @@ static void neonemu_run(int entry, NRegs* R) {
   V[16] = fsub_4s(V[16], V[0], V[2]);  /* 114: fsub v16.4s, v0.4s, v2.4s */
   V[2] = fadd_4s(V[2], V[0], V[2]);  /* 118: fadd v2.4s, v0.4s, v2.4s */
   { uint8_t* A = (uint8_t*)X[5] + 0; memcpy(&V[21], A+0, 16);  }  /* 11c: ld1 { v21.4s }, [x5] */
-  V[20] = ext16(V[3], V[3], 12);  /* 120: ext v20.16b, v3.16b, v3.16b, #0xc */
+  V[20] = ext_12(V[3], V[3]);  /* 120: ext v20.16b, v3.16b, v3.16b, #0xc */
   V[20] = rev64_4s(V[20]);  /* 124: rev64 v20.4s, v20.4s */
-  V[18] = ext16(V[2], V[20], 8);  /* 128: ext v18.16b, v2.16b, v20.16b, #0x8 */
-  { uint64_t t_ = V[20].d[1]; V[2].d[1] = t_; }  /* 12c: mov v2.d[1], v20.d[1] */
+  V[18] = ext_8(V[2], V[20]);  /* 128: ext v18.16b, v2.16b, v20.16b, #0x8 */
+  V[2] = movd_11(V[2], V[20]);  /* 12c: mov v2.d[1], v20.d[1] */
   V[1] = fsub_4s(V[1], V[2], V[18]);  /* 130: fsub v1.4s, v2.4s, v18.4s */
   V[18] = fadd_4s(V[18], V[2], V[18]);  /* 134: fadd v18.4s, v2.4s, v18.4s */
   V[22] = rev64_4s(V[31]);  /* 138: rev64 v22.4s, v31.4s */
-  { uint64_t t_ = V[16].d[0]; V[2].d[0] = t_; V[2].d[1] = t_; }  /* 13c: dup v2.2d, v16.d[0] */
-  { uint64_t t_ = V[16].d[1]; V[3].d[0] = t_; V[3].d[1] = t_; }  /* 140: dup v3.2d, v16.d[1] */
+  V[2] = dupd_0(V[16]);  /* 13c: dup v2.2d, v16.d[0] */
+  V[3] = dupd_1(V[16]);  /* 140: dup v3.2d, v16.d[1] */
   V[20] = rev64_4s(V[1]);  /* 144: rev64 v20.4s, v1.4s */
   V[3] = rev64_4s(V[3]);  /* 148: rev64 v3.4s, v3.4s */
-  V[22] = ext16(V[31], V[22], 8);  /* 14c: ext v22.16b, v31.16b, v22.16b, #0x8 */
+  V[22] = ext_8(V[31], V[22]);  /* 14c: ext v22.16b, v31.16b, v22.16b, #0x8 */
   V[19] = zip1_2d(V[19], V[18], V[1]);  /* 150: zip1 v19.2d, v18.2d, v1.2d */
   V[18] = zip2_2d(V[18], V[18], V[20]);  /* 154: zip2 v18.2d, v18.2d, v20.2d */
   V[0] = fadd_4s(V[0], V[19], V[18]);  /* 158: fadd v0.4s, v19.4s, v18.4s */
@@ -237,7 +268,7 @@ static void neonemu_run(int entry, NRegs* R) {
   V[20] = rev64_4s(V[17]);  /* 168: rev64 v20.4s, v17.4s */
   V[17] = fmla_4s(V[17], V[20], V[31]);  /* 16c: fmla v17.4s, v20.4s, v31.4s */
   V[20] = rev64_4s(V[17]);  /* 170: rev64 v20.4s, v17.4s */
-  V[20] = ext16(V[20], V[20], 8);  /* 174: ext v20.16b, v20.16b, v20.16b, #0x8 */
+  V[20] = ext_8(V[20], V[20]);  /* 174: ext v20.16b, v20.16b, v20.16b, #0x8 */
   V[20] = fmla_4s(V[20], V[17], V[31]);  /* 178: fmla v20.4s, v17.4s, v31.4s */
   V[3] = fadd_4s(V[3], V[2], V[20]);  /* 17c: fadd v3.4s, v2.4s, v20.4s */
   V[2] = fsub_4s(V[2], V[2], V[20]);  /* 180: fsub v2.4s, v2.4s, v20.4s */
@@ -251,8 +282,8 @@ static void neonemu_run(int entry, NRegs* R) {
   V[7] = zip2_2d(V[7], V[18], V[21]);  /* 1a0: zip2 v7.2d, v18.2d, v21.2d */
   V[19] = fneg_4s(V[20]);  /* 1a4: fneg v19.4s, v20.4s */
   V[20] = fneg_4s(V[21]);  /* 1a8: fneg v20.4s, v21.4s */
-  { uint64_t t_ = V[19].s[3]; V[5].s[3] = t_; }  /* 1ac: mov v5.s[3], v19.s[3] */
-  { uint64_t t_ = V[20].s[3]; V[7].s[3] = t_; }  /* 1b0: mov v7.s[3], v20.s[3] */
+  V[5] = movs_33(V[5], V[19]);  /* 1ac: mov v5.s[3], v19.s[3] */
+  V[7] = movs_33(V[7], V[20]);  /* 1b0: mov v7.s[3], v20.s[3] */
   V[17] = zip1_2d(V[17], V[16], V[4]);  /* 1b4: zip1 v17.2d, v16.2d, v4.2d */
   V[19] = zip1_2d(V[19], V[18], V[6]);  /* 1b8: zip1 v19.2d, v18.2d, v6.2d */
   V[20] = fsub_4s(V[20], V[17], V[5]);  /* 1bc: fsub v20.4s, v17.4s, v5.4s */
@@ -340,12 +371,12 @@ static void neonemu_run(int entry, NRegs* R) {
   /* adrp */  /* 300: adrp x5, 0x0 <celt_tx_fft4_fwd_float_neon> */
   X[5] = (uint64_t)((uintptr_t)((const uint8_t*)kRodata + 0));  /* 304: add x5, x5, #0x0 */
   { uint8_t* A = (uint8_t*)X[5] + 0; memcpy(&V[31], A+0, 16);  }  /* 308: ld1 { v31.4s }, [x5] */
-  { uint64_t t_ = V[30].d[0]; V[8].d[0] = t_; V[8].d[1] = t_; }  /* 30c: dup v8.2d, v30.d[0] */
-  { uint64_t t_ = V[30].d[1]; V[9].d[0] = t_; V[9].d[1] = t_; }  /* 310: dup v9.2d, v30.d[1] */
-  { uint64_t t_ = V[29].d[1]; V[10].d[0] = t_; V[10].d[1] = t_; }  /* 314: dup v10.2d, v29.d[1] */
-  { uint64_t t_ = V[28].d[0]; V[25].d[0] = t_; V[25].d[1] = t_; }  /* 318: dup v25.2d, v28.d[0] */
-  { uint64_t t_ = V[28].d[1]; V[28].d[0] = t_; V[28].d[1] = t_; }  /* 31c: dup v28.2d, v28.d[1] */
-  { uint64_t t_ = V[29].d[0]; V[29].d[0] = t_; V[29].d[1] = t_; }  /* 320: dup v29.2d, v29.d[0] */
+  V[8] = dupd_0(V[30]);  /* 30c: dup v8.2d, v30.d[0] */
+  V[9] = dupd_1(V[30]);  /* 310: dup v9.2d, v30.d[1] */
+  V[10] = dupd_1(V[29]);  /* 314: dup v10.2d, v29.d[1] */
+  V[25] = dupd_0(V[28]);  /* 318: dup v25.2d, v28.d[0] */
+  V[28] = dupd_1(V[28]);  /* 31c: dup v28.2d, v28.d[1] */
+  V[29] = dupd_0(V[29]);  /* 320: dup v29.2d, v29.d[0] */
   V[8] = fmul_4s(V[8], V[8], V[31]);  /* 324: fmul v8.4s, v8.4s, v31.4s */
   V[9] = fmul_4s(V[9], V[9], V[31]);  /* 328: fmul v9.4s, v9.4s, v31.4s */
   V[10] = fmul_4s(V[10], V[10], V[24]);  /* 32c: fmul v10.4s, v10.4s, v24.4s */
@@ -360,7 +391,7 @@ static void neonemu_run(int entry, NRegs* R) {
   X[8] = (uint64_t)(X[1] + X[7]);  /* 350: add x8, x1, x7 */
   X[9] = (uint64_t)(X[8] + X[7]);  /* 354: add x9, x8, x7 */
   V[16] = fsub_4s(V[16], V[2], V[4]);  /* 358: fsub v16.4s, v2.4s, v4.4s */
-  V[26] = ext16(V[0], V[0], 8);  /* 35c: ext v26.16b, v0.16b, v0.16b, #0x8 */
+  V[26] = ext_8(V[0], V[0]);  /* 35c: ext v26.16b, v0.16b, v0.16b, #0x8 */
   V[17] = fsub_4s(V[17], V[3], V[5]);  /* 360: fsub v17.4s, v3.4s, v5.4s */
   V[27] = fadd_4s(V[27], V[0], V[26]);  /* 364: fadd v27.4s, v0.4s, v26.4s */
   V[2] = fadd_4s(V[2], V[2], V[4]);  /* 368: fadd v2.4s, v2.4s, v4.4s */
@@ -368,14 +399,14 @@ static void neonemu_run(int entry, NRegs* R) {
   V[3] = fadd_4s(V[3], V[3], V[5]);  /* 370: fadd v3.4s, v3.4s, v5.4s */
   V[20] = rev64_4s(V[20]);  /* 374: rev64 v20.4s, v20.4s */
   V[16] = rev64_4s(V[16]);  /* 378: rev64 v16.4s, v16.4s */
-  V[21] = ext16(V[20], V[27], 8);  /* 37c: ext v21.16b, v20.16b, v27.16b, #0x8 */
+  V[21] = ext_8(V[20], V[27]);  /* 37c: ext v21.16b, v20.16b, v27.16b, #0x8 */
   V[17] = rev64_4s(V[17]);  /* 380: rev64 v17.4s, v17.4s */
   V[0] = fadd_4s(V[0], V[1], V[27]);  /* 384: fadd v0.4s, v1.4s, v27.4s */
   V[22] = fadd_4s(V[22], V[6], V[2]);  /* 388: fadd v22.4s, v6.4s, v2.4s */
   V[21] = fmul_4s(V[21], V[21], V[30]);  /* 38c: fmul v21.4s, v21.4s, v30.4s */
   V[23] = fadd_4s(V[23], V[7], V[3]);  /* 390: fadd v23.4s, v7.4s, v3.4s */
   V[16] = fmul_4s(V[16], V[16], V[8]);  /* 394: fmul v16.4s, v16.4s, v8.4s */
-  V[26] = ext16(V[21], V[21], 8);  /* 398: ext v26.16b, v21.16b, v21.16b, #0x8 */
+  V[26] = ext_8(V[21], V[21]);  /* 398: ext v26.16b, v21.16b, v21.16b, #0x8 */
   V[17] = fmul_4s(V[17], V[17], V[8]);  /* 39c: fmul v17.4s, v17.4s, v8.4s */
   V[21] = fmla_4s(V[21], V[26], V[24]);  /* 3a0: fmla v21.4s, v26.4s, v24.4s */
   V[6] = fmla_4s(V[6], V[2], V[9]);  /* 3a4: fmla v6.4s, v2.4s, v9.4s */
@@ -385,16 +416,16 @@ static void neonemu_run(int entry, NRegs* R) {
   V[5] = fsub_4s(V[5], V[7], V[17]);  /* 3b4: fsub v5.4s, v7.4s, v17.4s */
   V[2] = fadd_4s(V[2], V[6], V[16]);  /* 3b8: fadd v2.4s, v6.4s, v16.4s */
   V[3] = fadd_4s(V[3], V[7], V[17]);  /* 3bc: fadd v3.4s, v7.4s, v17.4s */
-  V[16] = ext16(V[23], V[23], 8);  /* 3c0: ext v16.16b, v23.16b, v23.16b, #0x8 */
-  V[17] = ext16(V[5], V[5], 8);  /* 3c4: ext v17.16b, v5.16b, v5.16b, #0x8 */
-  V[20] = ext16(V[3], V[3], 8);  /* 3c8: ext v20.16b, v3.16b, v3.16b, #0x8 */
+  V[16] = ext_8(V[23], V[23]);  /* 3c0: ext v16.16b, v23.16b, v23.16b, #0x8 */
+  V[17] = ext_8(V[5], V[5]);  /* 3c4: ext v17.16b, v5.16b, v5.16b, #0x8 */
+  V[20] = ext_8(V[3], V[3]);  /* 3c8: ext v20.16b, v3.16b, v3.16b, #0x8 */
   V[21] = fsub_4s(V[21], V[22], V[16]);  /* 3cc: fsub v21.4s, v22.4s, v16.4s */
   V[22] = fadd_4s(V[22], V[22], V[16]);  /* 3d0: fadd v22.4s, v22.4s, v16.4s */
   V[26] = fsub_4s(V[26], V[4], V[17]);  /* 3d4: fsub v26.4s, v4.4s, v17.4s */
   V[4] = fadd_4s(V[4], V[4], V[17]);  /* 3d8: fadd v4.4s, v4.4s, v17.4s */
   V[27] = fsub_4s(V[27], V[2], V[20]);  /* 3dc: fsub v27.4s, v2.4s, v20.4s */
   V[2] = fadd_4s(V[2], V[2], V[20]);  /* 3e0: fadd v2.4s, v2.4s, v20.4s */
-  V[16] = ext16(V[22], V[22], 8);  /* 3e4: ext v16.16b, v22.16b, v22.16b, #0x8 */
+  V[16] = ext_8(V[22], V[22]);  /* 3e4: ext v16.16b, v22.16b, v22.16b, #0x8 */
   V[17] = zip1_2d(V[17], V[4], V[2]);  /* 3e8: zip1 v17.2d, v4.2d, v2.2d */
   V[20] = zip2_2d(V[20], V[4], V[2]);  /* 3ec: zip2 v20.2d, v4.2d, v2.2d */
   V[16] = fadd_4s(V[16], V[16], V[22]);  /* 3f0: fadd v16.4s, v16.4s, v22.4s */
@@ -404,24 +435,24 @@ static void neonemu_run(int entry, NRegs* R) {
   { uint8_t* A = (uint8_t*)X[1] + 0; memcpy(A, &V[16].d[0], 8); }  /* 400: st1 { v16.d }[0], [x1] */
   { uint8_t* A = (uint8_t*)X[8] + 0; memcpy(A, &V[17].d[1], 8); }  /* 404: st1 { v17.d }[1], [x8] */
   { uint8_t* A = (uint8_t*)X[9] + 0; memcpy(A, &V[17].d[0], 8); }  /* 408: st1 { v17.d }[0], [x9] */
-  V[16] = ext16(V[22], V[22], 8);  /* 40c: ext v16.16b, v22.16b, v22.16b, #0x8 */
+  V[16] = ext_8(V[22], V[22]);  /* 40c: ext v16.16b, v22.16b, v22.16b, #0x8 */
   V[6] = V[0];  /* 410: mov v6.16b, v0.16b */
-  V[17] = ext16(V[21], V[21], 8);  /* 414: ext v17.16b, v21.16b, v21.16b, #0x8 */
+  V[17] = ext_8(V[21], V[21]);  /* 414: ext v17.16b, v21.16b, v21.16b, #0x8 */
   V[7] = fmul_4s(V[7], V[21], V[29]);  /* 418: fmul v7.4s, v21.4s, v29.4s */
   V[6] = fmla_4s(V[6], V[22], V[25]);  /* 41c: fmla v6.4s, v22.4s, v25.4s */
-  { uint64_t t_ = V[1].d[0]; V[18].d[0] = t_; V[18].d[1] = t_; }  /* 420: dup v18.2d, v1.d[0] */
+  V[18] = dupd_0(V[1]);  /* 420: dup v18.2d, v1.d[0] */
   V[18] = fmla_4s(V[18], V[4], V[25]);  /* 424: fmla v18.4s, v4.4s, v25.4s */
   V[6] = fmls_4s(V[6], V[16], V[28]);  /* 428: fmls v6.4s, v16.4s, v28.4s */
-  V[16] = ext16(V[4], V[4], 8);  /* 42c: ext v16.16b, v4.16b, v4.16b, #0x8 */
+  V[16] = ext_8(V[4], V[4]);  /* 42c: ext v16.16b, v4.16b, v4.16b, #0x8 */
   V[7] = fmla_4s(V[7], V[17], V[10]);  /* 430: fmla v7.4s, v17.4s, v10.4s */
-  V[17] = ext16(V[26], V[26], 8);  /* 434: ext v17.16b, v26.16b, v26.16b, #0x8 */
+  V[17] = ext_8(V[26], V[26]);  /* 434: ext v17.16b, v26.16b, v26.16b, #0x8 */
   V[18] = fmls_4s(V[18], V[16], V[28]);  /* 438: fmls v18.4s, v16.4s, v28.4s */
   V[23] = fmul_4s(V[23], V[26], V[29]);  /* 43c: fmul v23.4s, v26.4s, v29.4s */
-  { uint64_t t_ = V[1].d[1]; V[19].d[0] = t_; V[19].d[1] = t_; }  /* 440: dup v19.2d, v1.d[1] */
+  V[19] = dupd_1(V[1]);  /* 440: dup v19.2d, v1.d[1] */
   V[19] = fmla_4s(V[19], V[2], V[25]);  /* 444: fmla v19.4s, v2.4s, v25.4s */
-  V[16] = ext16(V[2], V[2], 8);  /* 448: ext v16.16b, v2.16b, v2.16b, #0x8 */
+  V[16] = ext_8(V[2], V[2]);  /* 448: ext v16.16b, v2.16b, v2.16b, #0x8 */
   V[23] = fmla_4s(V[23], V[17], V[10]);  /* 44c: fmla v23.4s, v17.4s, v10.4s */
-  V[17] = ext16(V[27], V[27], 8);  /* 450: ext v17.16b, v27.16b, v27.16b, #0x8 */
+  V[17] = ext_8(V[27], V[27]);  /* 450: ext v17.16b, v27.16b, v27.16b, #0x8 */
   V[5] = fmul_4s(V[5], V[27], V[29]);  /* 454: fmul v5.4s, v27.4s, v29.4s */
   V[19] = fmls_4s(V[19], V[16], V[28]);  /* 458: fmls v19.4s, v16.4s, v28.4s */
   V[5] = fmla_4s(V[5], V[17], V[10]);  /* 45c: fmla v5.4s, v17.4s, v10.4s */
@@ -485,10 +516,10 @@ static void neonemu_run(int entry, NRegs* R) {
   X[13] = (uint32_t)((uint32_t)X[13] & 0xffff);  /* 540: uxth w13, w13 */
   X[16] = (uint32_t)((uint32_t)X[15] >> 16);  /* 544: lsr w16, w15, #16 */
   X[15] = (uint32_t)((uint32_t)X[15] & 0xffff);  /* 548: uxth w15, w15 */
-  { uint8_t* A = (uint8_t*)X[20] + (X[13] << 3); memcpy(&V[0].d[0], A+0, 8); V[0].d[1] = 0;  }  /* 54c: ldr d0, [x20, x13, lsl #3] */
-  { uint8_t* A = (uint8_t*)X[20] + (X[14] << 3); memcpy(&V[1].d[0], A+0, 8); V[1].d[1] = 0;  }  /* 550: ldr d1, [x20, x14, lsl #3] */
-  { uint8_t* A = (uint8_t*)X[20] + (X[15] << 3); memcpy(&V[2].d[0], A+0, 8); V[2].d[1] = 0;  }  /* 554: ldr d2, [x20, x15, lsl #3] */
-  { uint8_t* A = (uint8_t*)X[20] + (X[16] << 3); memcpy(&V[3].d[0], A+0, 8); V[3].d[1] = 0;  }  /* 558: ldr d3, [x20, x16, lsl #3] */
+  { uint8_t* A = (uint8_t*)X[20] + (X[13] << 3); V[0] = ldrd_(A+0);  }  /* 54c: ldr d0, [x20, x13, lsl #3] */
+  { uint8_t* A = (uint8_t*)X[20] + (X[14] << 3); V[1] = ldrd_(A+0);  }  /* 550: ldr d1, [x20, x14, lsl #3] */
+  { uint8_t* A = (uint8_t*)X[20] + (X[15] << 3); V[2] = ldrd_(A+0);  }  /* 554: ldr d2, [x20, x15, lsl #3] */
+  { uint8_t* A = (uint8_t*)X[20] + (X[16] << 3); V[3] = ldrd_(A+0);  }  /* 558: ldr d3, [x20, x16, lsl #3] */
   { uint8_t* A = (uint8_t*)X[10] + 0; memcpy(A+0, &V[0].d[0], 8);  }  /* 55c: str d0, [x10] */
   { uint8_t* A = (uint8_t*)X[10] + (X[27] << 0); memcpy(A+0, &V[1].d[0], 8);  }  /* 560: str d1, [x10, x27] */
   { uint8_t* A = (uint8_t*)X[10] + (X[11] << 0); memcpy(A+0, &V[2].d[0], 8);  }  /* 564: str d2, [x10, x11] */
@@ -501,8 +532,8 @@ static void neonemu_run(int entry, NRegs* R) {
   { uint8_t* A = (uint8_t*)X[31] + 48; memcpy(&X[23], A+0, 8); memcpy(&X[24], A+8, 8);  }  /* 580: ldp x23, x24, [sp, #0x30] */
   { uint8_t* A = (uint8_t*)X[31] + 64; memcpy(&X[25], A+0, 8); memcpy(&X[26], A+8, 8);  }  /* 584: ldp x25, x26, [sp, #0x40] */
   { uint8_t* A = (uint8_t*)X[31] + 80; memcpy(&X[27], A+0, 8); memcpy(&X[28], A+8, 8);  }  /* 588: ldp x27, x28, [sp, #0x50] */
-  { uint8_t* A = (uint8_t*)X[31] + 96; memcpy(&V[8].d[0], A+0, 8); V[8].d[1] = 0; memcpy(&V[9].d[0], A+8, 8); V[9].d[1] = 0;  }  /* 58c: ldp d8, d9, [sp, #0x60] */
-  { uint8_t* A = (uint8_t*)X[31] + 112; memcpy(&V[10].d[0], A+0, 8); V[10].d[1] = 0;  }  /* 590: ldr d10, [sp, #0x70] */
+  { uint8_t* A = (uint8_t*)X[31] + 96; V[8] = ldrd_(A+0); V[9] = ldrd_(A+8);  }  /* 58c: ldp d8, d9, [sp, #0x60] */
+  { uint8_t* A = (uint8_t*)X[31] + 112; V[10] = ldrd_(A+0);  }  /* 590: ldr d10, [sp, #0x70] */
   { uint8_t* A = (uint8_t*)X[31]; memcpy(&X[29], A+0, 8); memcpy(&X[30], A+8, 8);  X[31] += 128; }  /* 594: ldp x29, x30, [sp], #0x80 */
   RET();  /* 598: ret  */
   /* 59c: nop */
@@ -540,7 +571,7 @@ static void neonemu_run(int entry, NRegs* R) {
   { uint8_t* A = (uint8_t*)X[8] + 0; memcpy(&V[0].s[1], A, 4); }  /* 618: ld1 { v0.s }[1], [x8] */
   { uint8_t* A = (uint8_t*)X[11] + 0; memcpy(&V[0].s[2], A, 4); }  /* 61c: ld1 { v0.s }[2], [x11] */
   { uint8_t* A = (uint8_t*)X[10] + 0; memcpy(&V[0].s[3], A, 4); }  /* 620: ld1 { v0.s }[3], [x10] */
-  { uint8_t* A = (uint8_t*)X[15] + 0; memcpy(&V[1].d[0], A+0, 8); V[1].d[1] = 0;  }  /* 624: ldr d1, [x15] */
+  { uint8_t* A = (uint8_t*)X[15] + 0; V[1] = ldrd_(A+0);  }  /* 624: ldr d1, [x15] */
   { uint8_t* A = (uint8_t*)X[16] + 0; memcpy(&V[1].d[1], A, 8); }  /* 628: ld1 { v1.d }[1], [x16] */
   V[2] = trn1_4s(V[2], V[0], V[0]);  /* 62c: trn1 v2.4s, v0.4s, v0.4s */
   V[3] = trn2_4s(V[3], V[0], V[0]);  /* 630: trn2 v3.4s, v0.4s, v0.4s */
@@ -635,9 +666,9 @@ static void neonemu_run(int entry, NRegs* R) {
   { uint8_t* A = (uint8_t*)X[5] + 0; memcpy(&V[31], A+0, 16);  }  /* 790: ld1 { v31.4s }, [x5] */
   X[9] = (uint64_t)(X[9] + 8);  /* 794: add x9, x9, #0x8 */
   X[11] = (uint64_t)(X[11] + 8);  /* 798: add x11, x11, #0x8 */
-  { uint8_t* A = (uint8_t*)X[8] + 0; memcpy(&V[0].d[0], A+0, 8); V[0].d[1] = 0;  }  /* 79c: ldr d0, [x8] */
+  { uint8_t* A = (uint8_t*)X[8] + 0; V[0] = ldrd_(A+0);  }  /* 79c: ldr d0, [x8] */
   { uint8_t* A = (uint8_t*)X[9] + 0; memcpy(&V[0].d[1], A, 8); }  /* 7a0: ld1 { v0.d }[1], [x9] */
-  { uint8_t* A = (uint8_t*)X[10] + 0; memcpy(&V[1].d[0], A+0, 8); V[1].d[1] = 0;  }  /* 7a4: ldr d1, [x10] */
+  { uint8_t* A = (uint8_t*)X[10] + 0; V[1] = ldrd_(A+0);  }  /* 7a4: ldr d1, [x10] */
   { uint8_t* A = (uint8_t*)X[11] + 0; memcpy(&V[1].d[1], A, 8); }  /* 7a8: ld1 { v1.d }[1], [x11] */
   V[2] = rev64_4s(V[0]);  /* 7ac: rev64 v2.4s, v0.4s */
   V[3] = rev64_4s(V[1]);  /* 7b0: rev64 v3.4s, v1.4s */
@@ -680,14 +711,14 @@ static void neonemu_run(int entry, NRegs* R) {
   V[18] = fadd_4s(V[18], V[12], V[14]);  /* 840: fadd v18.4s, v12.4s, v14.4s */
   V[16] = fadd_4s(V[16], V[8], V[10]);  /* 844: fadd v16.4s, v8.4s, v10.4s */
   { uint8_t* A = (uint8_t*)X[5] + 0; memcpy(&V[23], A+0, 16);  }  /* 848: ld1 { v23.4s }, [x5] */
-  V[22] = ext16(V[19], V[19], 12);  /* 84c: ext v22.16b, v19.16b, v19.16b, #0xc */
-  V[21] = ext16(V[17], V[17], 12);  /* 850: ext v21.16b, v17.16b, v17.16b, #0xc */
+  V[22] = ext_12(V[19], V[19]);  /* 84c: ext v22.16b, v19.16b, v19.16b, #0xc */
+  V[21] = ext_12(V[17], V[17]);  /* 850: ext v21.16b, v17.16b, v17.16b, #0xc */
   V[22] = rev64_4s(V[22]);  /* 854: rev64 v22.4s, v22.4s */
   V[21] = rev64_4s(V[21]);  /* 858: rev64 v21.4s, v21.4s */
-  V[19] = ext16(V[18], V[22], 8);  /* 85c: ext v19.16b, v18.16b, v22.16b, #0x8 */
-  V[17] = ext16(V[16], V[21], 8);  /* 860: ext v17.16b, v16.16b, v21.16b, #0x8 */
-  { uint64_t t_ = V[22].d[1]; V[18].d[1] = t_; }  /* 864: mov v18.d[1], v22.d[1] */
-  { uint64_t t_ = V[16].d[0]; V[21].d[0] = t_; }  /* 868: mov v21.d[0], v16.d[0] */
+  V[19] = ext_8(V[18], V[22]);  /* 85c: ext v19.16b, v18.16b, v22.16b, #0x8 */
+  V[17] = ext_8(V[16], V[21]);  /* 860: ext v17.16b, v16.16b, v21.16b, #0x8 */
+  V[18] = movd_11(V[18], V[22]);  /* 864: mov v18.d[1], v22.d[1] */
+  V[21] = movd_00(V[21], V[16]);  /* 868: mov v21.d[0], v16.d[0] */
   V[22] = fadd_4s(V[22], V[18], V[19]);  /* 86c: fadd v22.4s, v18.4s, v19.4s */
   V[19] = fsub_4s(V[19], V[18], V[19]);  /* 870: fsub v19.4s, v18.4s, v19.4s */
   V[18] = fsub_4s(V[18], V[21], V[17]);  /* 874: fsub v18.4s, v21.4s, v17.4s */
@@ -703,15 +734,15 @@ static void neonemu_run(int entry, NRegs* R) {
   V[19] = rev64_4s(V[19]);  /* 89c: rev64 v19.4s, v19.4s */
   V[16] = zip2_2d(V[16], V[16], V[18]);  /* 8a0: zip2 v16.2d, v16.2d, v18.2d */
   V[13] = zip2_2d(V[13], V[22], V[19]);  /* 8a4: zip2 v13.2d, v22.2d, v19.2d */
-  { uint64_t t_ = V[8].d[0]; V[10].d[0] = t_; V[10].d[1] = t_; }  /* 8a8: dup v10.2d, v8.d[0] */
-  { uint64_t t_ = V[8].d[1]; V[11].d[0] = t_; V[11].d[1] = t_; }  /* 8ac: dup v11.2d, v8.d[1] */
-  { uint64_t t_ = V[12].d[0]; V[14].d[0] = t_; V[14].d[1] = t_; }  /* 8b0: dup v14.2d, v12.d[0] */
-  { uint64_t t_ = V[12].d[1]; V[15].d[0] = t_; V[15].d[1] = t_; }  /* 8b4: dup v15.2d, v12.d[1] */
+  V[10] = dupd_0(V[8]);  /* 8a8: dup v10.2d, v8.d[0] */
+  V[11] = dupd_1(V[8]);  /* 8ac: dup v11.2d, v8.d[1] */
+  V[14] = dupd_0(V[12]);  /* 8b0: dup v14.2d, v12.d[0] */
+  V[15] = dupd_1(V[12]);  /* 8b4: dup v15.2d, v12.d[1] */
   V[12] = fadd_4s(V[12], V[9], V[13]);  /* 8b8: fadd v12.4s, v9.4s, v13.4s */
   V[13] = fsub_4s(V[13], V[9], V[13]);  /* 8bc: fsub v13.4s, v9.4s, v13.4s */
   V[8] = fadd_4s(V[8], V[17], V[16]);  /* 8c0: fadd v8.4s, v17.4s, v16.4s */
   V[9] = fsub_4s(V[9], V[17], V[16]);  /* 8c4: fsub v9.4s, v17.4s, v16.4s */
-  V[24] = ext16(V[31], V[24], 8);  /* 8c8: ext v24.16b, v31.16b, v24.16b, #0x8 */
+  V[24] = ext_8(V[31], V[24]);  /* 8c8: ext v24.16b, v31.16b, v24.16b, #0x8 */
   V[11] = rev64_4s(V[11]);  /* 8cc: rev64 v11.4s, v11.4s */
   V[15] = rev64_4s(V[15]);  /* 8d0: rev64 v15.4s, v15.4s */
   V[19] = fmul_4s(V[19], V[20], V[23]);  /* 8d4: fmul v19.4s, v20.4s, v23.4s */
@@ -724,8 +755,8 @@ static void neonemu_run(int entry, NRegs* R) {
   V[21] = fmla_4s(V[21], V[18], V[31]);  /* 8f0: fmla v21.4s, v18.4s, v31.4s */
   V[20] = rev64_4s(V[19]);  /* 8f4: rev64 v20.4s, v19.4s */
   V[18] = rev64_4s(V[21]);  /* 8f8: rev64 v18.4s, v21.4s */
-  V[20] = ext16(V[20], V[20], 8);  /* 8fc: ext v20.16b, v20.16b, v20.16b, #0x8 */
-  V[18] = ext16(V[18], V[18], 8);  /* 900: ext v18.16b, v18.16b, v18.16b, #0x8 */
+  V[20] = ext_8(V[20], V[20]);  /* 8fc: ext v20.16b, v20.16b, v20.16b, #0x8 */
+  V[18] = ext_8(V[18], V[18]);  /* 900: ext v18.16b, v18.16b, v18.16b, #0x8 */
   V[20] = fmla_4s(V[20], V[19], V[31]);  /* 904: fmla v20.4s, v19.4s, v31.4s */
   V[18] = fmla_4s(V[18], V[21], V[31]);  /* 908: fmla v18.4s, v21.4s, v31.4s */
   V[11] = fadd_4s(V[11], V[10], V[20]);  /* 90c: fadd v11.4s, v10.4s, v20.4s */
@@ -739,18 +770,18 @@ static void neonemu_run(int entry, NRegs* R) {
   V[16] = fsub_4s(V[16], V[0], V[2]);  /* 92c: fsub v16.4s, v0.4s, v2.4s */
   V[2] = fadd_4s(V[2], V[0], V[2]);  /* 930: fadd v2.4s, v0.4s, v2.4s */
   { uint8_t* A = (uint8_t*)X[5] + 0; memcpy(&V[21], A+0, 16);  }  /* 934: ld1 { v21.4s }, [x5] */
-  V[20] = ext16(V[3], V[3], 12);  /* 938: ext v20.16b, v3.16b, v3.16b, #0xc */
+  V[20] = ext_12(V[3], V[3]);  /* 938: ext v20.16b, v3.16b, v3.16b, #0xc */
   V[20] = rev64_4s(V[20]);  /* 93c: rev64 v20.4s, v20.4s */
-  V[18] = ext16(V[2], V[20], 8);  /* 940: ext v18.16b, v2.16b, v20.16b, #0x8 */
-  { uint64_t t_ = V[20].d[1]; V[2].d[1] = t_; }  /* 944: mov v2.d[1], v20.d[1] */
+  V[18] = ext_8(V[2], V[20]);  /* 940: ext v18.16b, v2.16b, v20.16b, #0x8 */
+  V[2] = movd_11(V[2], V[20]);  /* 944: mov v2.d[1], v20.d[1] */
   V[1] = fsub_4s(V[1], V[2], V[18]);  /* 948: fsub v1.4s, v2.4s, v18.4s */
   V[18] = fadd_4s(V[18], V[2], V[18]);  /* 94c: fadd v18.4s, v2.4s, v18.4s */
   V[22] = rev64_4s(V[31]);  /* 950: rev64 v22.4s, v31.4s */
-  { uint64_t t_ = V[16].d[0]; V[2].d[0] = t_; V[2].d[1] = t_; }  /* 954: dup v2.2d, v16.d[0] */
-  { uint64_t t_ = V[16].d[1]; V[3].d[0] = t_; V[3].d[1] = t_; }  /* 958: dup v3.2d, v16.d[1] */
+  V[2] = dupd_0(V[16]);  /* 954: dup v2.2d, v16.d[0] */
+  V[3] = dupd_1(V[16]);  /* 958: dup v3.2d, v16.d[1] */
   V[20] = rev64_4s(V[1]);  /* 95c: rev64 v20.4s, v1.4s */
   V[3] = rev64_4s(V[3]);  /* 960: rev64 v3.4s, v3.4s */
-  V[22] = ext16(V[31], V[22], 8);  /* 964: ext v22.16b, v31.16b, v22.16b, #0x8 */
+  V[22] = ext_8(V[31], V[22]);  /* 964: ext v22.16b, v31.16b, v22.16b, #0x8 */
   V[19] = zip1_2d(V[19], V[18], V[1]);  /* 968: zip1 v19.2d, v18.2d, v1.2d */
   V[18] = zip2_2d(V[18], V[18], V[20]);  /* 96c: zip2 v18.2d, v18.2d, v20.2d */
   V[0] = fadd_4s(V[0], V[19], V[18]);  /* 970: fadd v0.4s, v19.4s, v18.4s */
@@ -760,7 +791,7 @@ static void neonemu_run(int entry, NRegs* R) {
   V[20] = rev64_4s(V[17]);  /* 980: rev64 v20.4s, v17.4s */
   V[17] = fmla_4s(V[17], V[20], V[31]);  /* 984: fmla v17.4s, v20.4s, v31.4s */
   V[20] = rev64_4s(V[17]);  /* 988: rev64 v20.4s, v17.4s */
-  V[20] = ext16(V[20], V[20], 8);  /* 98c: ext v20.16b, v20.16b, v20.16b, #0x8 */
+  V[20] = ext_8(V[20], V[20]);  /* 98c: ext v20.16b, v20.16b, v20.16b, #0x8 */
   V[20] = fmla_4s(V[20], V[17], V[31]);  /* 990: fmla v20.4s, v17.4s, v31.4s */
   V[3] = fadd_4s(V[3], V[2], V[20]);  /* 994: fadd v3.4s, v2.4s, v20.4s */
   V[2] = fsub_4s(V[2], V[2], V[20]);  /* 998: fsub v2.4s, v2.4s, v20.4s */
@@ -774,8 +805,8 @@ static void neonemu_run(int entry, NRegs* R) {
   V[7] = zip2_2d(V[7], V[18], V[21]);  /* 9b8: zip2 v7.2d, v18.2d, v21.2d */
   V[19] = fneg_4s(V[20]);  /* 9bc: fneg v19.4s, v20.4s */
   V[20] = fneg_4s(V[21]);  /* 9c0: fneg v20.4s, v21.4s */
-  { uint64_t t_ = V[19].s[3]; V[5].s[3] = t_; }  /* 9c4: mov v5.s[3], v19.s[3] */
-  { uint64_t t_ = V[20].s[3]; V[7].s[3] = t_; }  /* 9c8: mov v7.s[3], v20.s[3] */
+  V[5] = movs_33(V[5], V[19]);  /* 9c4: mov v5.s[3], v19.s[3] */
+  V[7] = movs_33(V[7], V[20]);  /* 9c8: mov v7.s[3], v20.s[3] */
   V[17] = zip1_2d(V[17], V[16], V[4]);  /* 9cc: zip1 v17.2d, v16.2d, v4.2d */
   V[19] = zip1_2d(V[19], V[18], V[6]);  /* 9d0: zip1 v19.2d, v18.2d, v6.2d */
   V[20] = fsub_4s(V[20], V[17], V[5]);  /* 9d4: fsub v20.4s, v17.4s, v5.4s */
@@ -823,8 +854,8 @@ static void neonemu_run(int entry, NRegs* R) {
   V[1] = fadd_4s(V[1], V[1], V[17]);  /* a7c: fadd v1.4s, v1.4s, v17.4s */
   { uint8_t* A = (uint8_t*)X[8]; memcpy(&V[24], A+0, 16); memcpy(&V[25], A+16, 16);  X[8] += X[9]; }  /* a80: ld1 { v24.4s, v25.4s }, [x8], x9 */
   { uint8_t* A = (uint8_t*)X[7]; memcpy(&V[16], A+0, 16); memcpy(&V[17], A+16, 16);  X[7] += 32; }  /* a84: ld1 { v16.4s, v17.4s }, [x7], #32 */
-  V[18] = ext16(V[24], V[24], 8);  /* a88: ext v18.16b, v24.16b, v24.16b, #0x8 */
-  V[19] = ext16(V[25], V[25], 8);  /* a8c: ext v19.16b, v25.16b, v25.16b, #0x8 */
+  V[18] = ext_8(V[24], V[24]);  /* a88: ext v18.16b, v24.16b, v24.16b, #0x8 */
+  V[19] = ext_8(V[25], V[25]);  /* a8c: ext v19.16b, v25.16b, v25.16b, #0x8 */
   V[20] = trn1_4s(V[20], V[16], V[16]);  /* a90: trn1 v20.4s, v16.4s, v16.4s */
   V[16] = trn2_4s(V[16], V[16], V[16]);  /* a94: trn2 v16.4s, v16.4s, v16.4s */
   V[21] = trn1_4s(V[21], V[17], V[17]);  /* a98: trn1 v21.4s, v17.4s, v17.4s */
@@ -913,10 +944,10 @@ static void neonemu_run(int entry, NRegs* R) {
   V[30] = zip1_2d(V[30], V[11], V[15]);  /* be4: zip1 v30.2d, v11.2d, v15.2d */
   V[31] = zip2_2d(V[31], V[11], V[15]);  /* be8: zip2 v31.2d, v11.2d, v15.2d */
   { uint8_t* A = (uint8_t*)X[1] + 0; memcpy(A+0, &V[28], 16); memcpy(A+16, &V[29], 16); memcpy(A+32, &V[30], 16); memcpy(A+48, &V[31], 16);  }  /* bec: st1 { v28.4s, v29.4s, v30.4s, v31.4s }, [x1] */
-  { uint8_t* A = (uint8_t*)X[31] + 16; memcpy(&V[12].d[0], A+0, 8); V[12].d[1] = 0; memcpy(&V[13].d[0], A+8, 8); V[13].d[1] = 0;  }  /* bf0: ldp d12, d13, [sp, #0x10] */
-  { uint8_t* A = (uint8_t*)X[31] + 32; memcpy(&V[10].d[0], A+0, 8); V[10].d[1] = 0; memcpy(&V[11].d[0], A+8, 8); V[11].d[1] = 0;  }  /* bf4: ldp d10, d11, [sp, #0x20] */
-  { uint8_t* A = (uint8_t*)X[31] + 48; memcpy(&V[8].d[0], A+0, 8); V[8].d[1] = 0; memcpy(&V[9].d[0], A+8, 8); V[9].d[1] = 0;  }  /* bf8: ldp d8, d9, [sp, #0x30] */
-  { uint8_t* A = (uint8_t*)X[31]; memcpy(&V[14].d[0], A+0, 8); V[14].d[1] = 0; memcpy(&V[15].d[0], A+8, 8); V[15].d[1] = 0;  X[31] += 64; }  /* bfc: ldp d14, d15, [sp], #0x40 */
+  { uint8_t* A = (uint8_t*)X[31] + 16; V[12] = ldrd_(A+0); V[13] = ldrd_(A+8);  }  /* bf0: ldp d12, d13, [sp, #0x10] */
+  { uint8_t* A = (uint8_t*)X[31] + 32; V[10] = ldrd_(A+0); V[11] = ldrd_(A+8);  }  /* bf4: ldp d10, d11, [sp, #0x20] */
+  { uint8_t* A = (uint8_t*)X[31] + 48; V[8] = ldrd_(A+0); V[9] = ldrd_(A+8);  }  /* bf8: ldp d8, d9, [sp, #0x30] */
+  { uint8_t* A = (uint8_t*)X[31]; V[14] = ldrd_(A+0); V[15] = ldrd_(A+8);  X[31] += 64; }  /* bfc: ldp d14, d15, [sp], #0x40 */
   RET();  /* c00: ret  */
   /* c04: nop */
   /* c08: nop */
@@ -951,14 +982,14 @@ static void neonemu_run(int entry, NRegs* R) {
   V[18] = fadd_4s(V[18], V[12], V[14]);  /* c78: fadd v18.4s, v12.4s, v14.4s */
   V[16] = fadd_4s(V[16], V[8], V[10]);  /* c7c: fadd v16.4s, v8.4s, v10.4s */
   { uint8_t* A = (uint8_t*)X[5] + 0; memcpy(&V[23], A+0, 16);  }  /* c80: ld1 { v23.4s }, [x5] */
-  V[22] = ext16(V[19], V[19], 12);  /* c84: ext v22.16b, v19.16b, v19.16b, #0xc */
-  V[21] = ext16(V[17], V[17], 12);  /* c88: ext v21.16b, v17.16b, v17.16b, #0xc */
+  V[22] = ext_12(V[19], V[19]);  /* c84: ext v22.16b, v19.16b, v19.16b, #0xc */
+  V[21] = ext_12(V[17], V[17]);  /* c88: ext v21.16b, v17.16b, v17.16b, #0xc */
   V[22] = rev64_4s(V[22]);  /* c8c: rev64 v22.4s, v22.4s */
   V[21] = rev64_4s(V[21]);  /* c90: rev64 v21.4s, v21.4s */
-  V[19] = ext16(V[18], V[22], 8);  /* c94: ext v19.16b, v18.16b, v22.16b, #0x8 */
-  V[17] = ext16(V[16], V[21], 8);  /* c98: ext v17.16b, v16.16b, v21.16b, #0x8 */
-  { uint64_t t_ = V[22].d[1]; V[18].d[1] = t_; }  /* c9c: mov v18.d[1], v22.d[1] */
-  { uint64_t t_ = V[16].d[0]; V[21].d[0] = t_; }  /* ca0: mov v21.d[0], v16.d[0] */
+  V[19] = ext_8(V[18], V[22]);  /* c94: ext v19.16b, v18.16b, v22.16b, #0x8 */
+  V[17] = ext_8(V[16], V[21]);  /* c98: ext v17.16b, v16.16b, v21.16b, #0x8 */
+  V[18] = movd_11(V[18], V[22]);  /* c9c: mov v18.d[1], v22.d[1] */
+  V[21] = movd_00(V[21], V[16]);  /* ca0: mov v21.d[0], v16.d[0] */
   V[22] = fadd_4s(V[22], V[18], V[19]);  /* ca4: fadd v22.4s, v18.4s, v19.4s */
   V[19] = fsub_4s(V[19], V[18], V[19]);  /* ca8: fsub v19.4s, v18.4s, v19.4s */
   V[18] = fsub_4s(V[18], V[21], V[17]);  /* cac: fsub v18.4s, v21.4s, v17.4s */
@@ -974,15 +1005,15 @@ static void neonemu_run(int entry, NRegs* R) {
   V[19] = rev64_4s(V[19]);  /* cd4: rev64 v19.4s, v19.4s */
   V[16] = zip2_2d(V[16], V[16], V[18]);  /* cd8: zip2 v16.2d, v16.2d, v18.2d */
   V[13] = zip2_2d(V[13], V[22], V[19]);  /* cdc: zip2 v13.2d, v22.2d, v19.2d */
-  { uint64_t t_ = V[8].d[0]; V[10].d[0] = t_; V[10].d[1] = t_; }  /* ce0: dup v10.2d, v8.d[0] */
-  { uint64_t t_ = V[8].d[1]; V[11].d[0] = t_; V[11].d[1] = t_; }  /* ce4: dup v11.2d, v8.d[1] */
-  { uint64_t t_ = V[12].d[0]; V[14].d[0] = t_; V[14].d[1] = t_; }  /* ce8: dup v14.2d, v12.d[0] */
-  { uint64_t t_ = V[12].d[1]; V[15].d[0] = t_; V[15].d[1] = t_; }  /* cec: dup v15.2d, v12.d[1] */
+  V[10] = dupd_0(V[8]);  /* ce0: dup v10.2d, v8.d[0] */
+  V[11] = dupd_1(V[8]);  /* ce4: dup v11.2d, v8.d[1] */
+  V[14] = dupd_0(V[12]);  /* ce8: dup v14.2d, v12.d[0] */
+  V[15] = dupd_1(V[12]);  /* cec: dup v15.2d, v12.d[1] */
   V[12] = fadd_4s(V[12], V[9], V[13]);  /* cf0: fadd v12.4s, v9.4s, v13.4s */
   V[13] = fsub_4s(V[13], V[9], V[13]);  /* cf4: fsub v13.4s, v9.4s, v13.4s */
   V[8] = fadd_4s(V[8], V[17], V[16]);  /* cf8: fadd v8.4s, v17.4s, v16.4s */
   V[9] = fsub_4s(V[9], V[17], V[16]);  /* cfc: fsub v9.4s, v17.4s, v16.4s */
-  V[24] = ext16(V[31], V[24], 8);  /* d00: ext v24.16b, v31.16b, v24.16b, #0x8 */
+  V[24] = ext_8(V[31], V[24]);  /* d00: ext v24.16b, v31.16b, v24.16b, #0x8 */
   V[11] = rev64_4s(V[11]);  /* d04: rev64 v11.4s, v11.4s */
   V[15] = rev64_4s(V[15]);  /* d08: rev64 v15.4s, v15.4s */
   V[19] = fmul_4s(V[19], V[20], V[23]);  /* d0c: fmul v19.4s, v20.4s, v23.4s */
@@ -995,8 +1026,8 @@ static void neonemu_run(int entry, NRegs* R) {
   V[21] = fmla_4s(V[21], V[18], V[31]);  /* d28: fmla v21.4s, v18.4s, v31.4s */
   V[20] = rev64_4s(V[19]);  /* d2c: rev64 v20.4s, v19.4s */
   V[18] = rev64_4s(V[21]);  /* d30: rev64 v18.4s, v21.4s */
-  V[20] = ext16(V[20], V[20], 8);  /* d34: ext v20.16b, v20.16b, v20.16b, #0x8 */
-  V[18] = ext16(V[18], V[18], 8);  /* d38: ext v18.16b, v18.16b, v18.16b, #0x8 */
+  V[20] = ext_8(V[20], V[20]);  /* d34: ext v20.16b, v20.16b, v20.16b, #0x8 */
+  V[18] = ext_8(V[18], V[18]);  /* d38: ext v18.16b, v18.16b, v18.16b, #0x8 */
   V[20] = fmla_4s(V[20], V[19], V[31]);  /* d3c: fmla v20.4s, v19.4s, v31.4s */
   V[18] = fmla_4s(V[18], V[21], V[31]);  /* d40: fmla v18.4s, v21.4s, v31.4s */
   V[11] = fadd_4s(V[11], V[10], V[20]);  /* d44: fadd v11.4s, v10.4s, v20.4s */
@@ -1010,18 +1041,18 @@ static void neonemu_run(int entry, NRegs* R) {
   V[16] = fsub_4s(V[16], V[0], V[2]);  /* d64: fsub v16.4s, v0.4s, v2.4s */
   V[2] = fadd_4s(V[2], V[0], V[2]);  /* d68: fadd v2.4s, v0.4s, v2.4s */
   { uint8_t* A = (uint8_t*)X[5] + 0; memcpy(&V[21], A+0, 16);  }  /* d6c: ld1 { v21.4s }, [x5] */
-  V[20] = ext16(V[3], V[3], 12);  /* d70: ext v20.16b, v3.16b, v3.16b, #0xc */
+  V[20] = ext_12(V[3], V[3]);  /* d70: ext v20.16b, v3.16b, v3.16b, #0xc */
   V[20] = rev64_4s(V[20]);  /* d74: rev64 v20.4s, v20.4s */
-  V[18] = ext16(V[2], V[20], 8);  /* d78: ext v18.16b, v2.16b, v20.16b, #0x8 */
-  { uint64_t t_ = V[20].d[1]; V[2].d[1] = t_; }  /* d7c: mov v2.d[1], v20.d[1] */
+  V[18] = ext_8(V[2], V[20]);  /* d78: ext v18.16b, v2.16b, v20.16b, #0x8 */
+  V[2] = movd_11(V[2], V[20]);  /* d7c: mov v2.d[1], v20.d[1] */
   V[1] = fsub_4s(V[1], V[2], V[18]);  /* d80: fsub v1.4s, v2.4s, v18.4s */
   V[18] = fadd_4s(V[18], V[2], V[18]);  /* d84: fadd v18.4s, v2.4s, v18.4s */
   V[22] = rev64_4s(V[31]);  /* d88: rev64 v22.4s, v31.4s */
-  { uint64_t t_ = V[16].d[0]; V[2].d[0] = t_; V[2].d[1] = t_; }  /* d8c: dup v2.2d, v16.d[0] */
-  { uint64_t t_ = V[16].d[1]; V[3].d[0] = t_; V[3].d[1] = t_; }  /* d90: dup v3.2d, v16.d[1] */
+  V[2] = dupd_0(V[16]);  /* d8c: dup v2.2d, v16.d[0] */
+  V[3] = dupd_1(V[16]);  /* d90: dup v3.2d, v16.d[1] */
   V[20] = rev64_4s(V[1]);  /* d94: rev64 v20.4s, v1.4s */
   V[3] = rev64_4s(V[3]);  /* d98: rev64 v3.4s, v3.4s */
-  V[22] = ext16(V[31], V[22], 8);  /* d9c: ext v22.16b, v31.16b, v22.16b, #0x8 */
+  V[22] = ext_8(V[31], V[22]);  /* d9c: ext v22.16b, v31.16b, v22.16b, #0x8 */
   V[19] = zip1_2d(V[19], V[18], V[1]);  /* da0: zip1 v19.2d, v18.2d, v1.2d */
   V[18] = zip2_2d(V[18], V[18], V[20]);  /* da4: zip2 v18.2d, v18.2d, v20.2d */
   V[0] = fadd_4s(V[0], V[19], V[18]);  /* da8: fadd v0.4s, v19.4s, v18.4s */
@@ -1031,7 +1062,7 @@ static void neonemu_run(int entry, NRegs* R) {
   V[20] = rev64_4s(V[17]);  /* db8: rev64 v20.4s, v17.4s */
   V[17] = fmla_4s(V[17], V[20], V[31]);  /* dbc: fmla v17.4s, v20.4s, v31.4s */
   V[20] = rev64_4s(V[17]);  /* dc0: rev64 v20.4s, v17.4s */
-  V[20] = ext16(V[20], V[20], 8);  /* dc4: ext v20.16b, v20.16b, v20.16b, #0x8 */
+  V[20] = ext_8(V[20], V[20]);  /* dc4: ext v20.16b, v20.16b, v20.16b, #0x8 */
   V[20] = fmla_4s(V[20], V[17], V[31]);  /* dc8: fmla v20.4s, v17.4s, v31.4s */
   V[3] = fadd_4s(V[3], V[2], V[20]);  /* dcc: fadd v3.4s, v2.4s, v20.4s */
   V[2] = fsub_4s(V[2], V[2], V[20]);  /* dd0: fsub v2.4s, v2.4s, v20.4s */
@@ -1045,8 +1076,8 @@ static void neonemu_run(int entry, NRegs* R) {
   V[7] = zip2_2d(V[7], V[18], V[21]);  /* df0: zip2 v7.2d, v18.2d, v21.2d */
   V[19] = fneg_4s(V[20]);  /* df4: fneg v19.4s, v20.4s */
   V[20] = fneg_4s(V[21]);  /* df8: fneg v20.4s, v21.4s */
-  { uint64_t t_ = V[19].s[3]; V[6].s[3] = t_; }  /* dfc: mov v6.s[3], v19.s[3] */
-  { uint64_t t_ = V[20].s[3]; V[7].s[3] = t_; }  /* e00: mov v7.s[3], v20.s[3] */
+  V[6] = movs_33(V[6], V[19]);  /* dfc: mov v6.s[3], v19.s[3] */
+  V[7] = movs_33(V[7], V[20]);  /* e00: mov v7.s[3], v20.s[3] */
   V[17] = zip1_2d(V[17], V[16], V[4]);  /* e04: zip1 v17.2d, v16.2d, v4.2d */
   V[19] = zip1_2d(V[19], V[18], V[5]);  /* e08: zip1 v19.2d, v18.2d, v5.2d */
   V[20] = fsub_4s(V[20], V[17], V[6]);  /* e0c: fsub v20.4s, v17.4s, v6.4s */
@@ -1094,8 +1125,8 @@ static void neonemu_run(int entry, NRegs* R) {
   V[1] = fadd_4s(V[1], V[1], V[17]);  /* eb4: fadd v1.4s, v1.4s, v17.4s */
   { uint8_t* A = (uint8_t*)X[8]; memcpy(&V[24], A+0, 16); memcpy(&V[25], A+16, 16);  X[8] += X[9]; }  /* eb8: ld1 { v24.4s, v25.4s }, [x8], x9 */
   { uint8_t* A = (uint8_t*)X[7]; memcpy(&V[16], A+0, 16); memcpy(&V[17], A+16, 16);  X[7] += 32; }  /* ebc: ld1 { v16.4s, v17.4s }, [x7], #32 */
-  V[18] = ext16(V[24], V[24], 8);  /* ec0: ext v18.16b, v24.16b, v24.16b, #0x8 */
-  V[19] = ext16(V[25], V[25], 8);  /* ec4: ext v19.16b, v25.16b, v25.16b, #0x8 */
+  V[18] = ext_8(V[24], V[24]);  /* ec0: ext v18.16b, v24.16b, v24.16b, #0x8 */
+  V[19] = ext_8(V[25], V[25]);  /* ec4: ext v19.16b, v25.16b, v25.16b, #0x8 */
   V[20] = trn1_4s(V[20], V[16], V[16]);  /* ec8: trn1 v20.4s, v16.4s, v16.4s */
   V[16] = trn2_4s(V[16], V[16], V[16]);  /* ecc: trn2 v16.4s, v16.4s, v16.4s */
   V[21] = trn1_4s(V[21], V[17], V[17]);  /* ed0: trn1 v21.4s, v17.4s, v17.4s */
@@ -1195,18 +1226,18 @@ static void neonemu_run(int entry, NRegs* R) {
   V[16] = fsub_4s(V[16], V[2], V[10]);  /* 1048: fsub v16.4s, v2.4s, v10.4s */
   V[10] = fadd_4s(V[10], V[2], V[10]);  /* 104c: fadd v10.4s, v2.4s, v10.4s */
   { uint8_t* A = (uint8_t*)X[5] + 0; memcpy(&V[21], A+0, 16);  }  /* 1050: ld1 { v21.4s }, [x5] */
-  V[20] = ext16(V[11], V[11], 12);  /* 1054: ext v20.16b, v11.16b, v11.16b, #0xc */
+  V[20] = ext_12(V[11], V[11]);  /* 1054: ext v20.16b, v11.16b, v11.16b, #0xc */
   V[20] = rev64_4s(V[20]);  /* 1058: rev64 v20.4s, v20.4s */
-  V[18] = ext16(V[10], V[20], 8);  /* 105c: ext v18.16b, v10.16b, v20.16b, #0x8 */
-  { uint64_t t_ = V[20].d[1]; V[10].d[1] = t_; }  /* 1060: mov v10.d[1], v20.d[1] */
+  V[18] = ext_8(V[10], V[20]);  /* 105c: ext v18.16b, v10.16b, v20.16b, #0x8 */
+  V[10] = movd_11(V[10], V[20]);  /* 1060: mov v10.d[1], v20.d[1] */
   V[3] = fsub_4s(V[3], V[10], V[18]);  /* 1064: fsub v3.4s, v10.4s, v18.4s */
   V[18] = fadd_4s(V[18], V[10], V[18]);  /* 1068: fadd v18.4s, v10.4s, v18.4s */
   V[22] = rev64_4s(V[31]);  /* 106c: rev64 v22.4s, v31.4s */
-  { uint64_t t_ = V[16].d[0]; V[10].d[0] = t_; V[10].d[1] = t_; }  /* 1070: dup v10.2d, v16.d[0] */
-  { uint64_t t_ = V[16].d[1]; V[11].d[0] = t_; V[11].d[1] = t_; }  /* 1074: dup v11.2d, v16.d[1] */
+  V[10] = dupd_0(V[16]);  /* 1070: dup v10.2d, v16.d[0] */
+  V[11] = dupd_1(V[16]);  /* 1074: dup v11.2d, v16.d[1] */
   V[20] = rev64_4s(V[3]);  /* 1078: rev64 v20.4s, v3.4s */
   V[11] = rev64_4s(V[11]);  /* 107c: rev64 v11.4s, v11.4s */
-  V[22] = ext16(V[31], V[22], 8);  /* 1080: ext v22.16b, v31.16b, v22.16b, #0x8 */
+  V[22] = ext_8(V[31], V[22]);  /* 1080: ext v22.16b, v31.16b, v22.16b, #0x8 */
   V[19] = zip1_2d(V[19], V[18], V[3]);  /* 1084: zip1 v19.2d, v18.2d, v3.2d */
   V[18] = zip2_2d(V[18], V[18], V[20]);  /* 1088: zip2 v18.2d, v18.2d, v20.2d */
   V[2] = fadd_4s(V[2], V[19], V[18]);  /* 108c: fadd v2.4s, v19.4s, v18.4s */
@@ -1216,7 +1247,7 @@ static void neonemu_run(int entry, NRegs* R) {
   V[20] = rev64_4s(V[17]);  /* 109c: rev64 v20.4s, v17.4s */
   V[17] = fmla_4s(V[17], V[20], V[31]);  /* 10a0: fmla v17.4s, v20.4s, v31.4s */
   V[20] = rev64_4s(V[17]);  /* 10a4: rev64 v20.4s, v17.4s */
-  V[20] = ext16(V[20], V[20], 8);  /* 10a8: ext v20.16b, v20.16b, v20.16b, #0x8 */
+  V[20] = ext_8(V[20], V[20]);  /* 10a8: ext v20.16b, v20.16b, v20.16b, #0x8 */
   V[20] = fmla_4s(V[20], V[17], V[31]);  /* 10ac: fmla v20.4s, v17.4s, v31.4s */
   V[11] = fadd_4s(V[11], V[10], V[20]);  /* 10b0: fadd v11.4s, v10.4s, v20.4s */
   V[10] = fsub_4s(V[10], V[10], V[20]);  /* 10b4: fsub v10.4s, v10.4s, v20.4s */
@@ -1230,8 +1261,8 @@ static void neonemu_run(int entry, NRegs* R) {
   V[15] = zip2_2d(V[15], V[18], V[21]);  /* 10d4: zip2 v15.2d, v18.2d, v21.2d */
   V[19] = fneg_4s(V[20]);  /* 10d8: fneg v19.4s, v20.4s */
   V[20] = fneg_4s(V[21]);  /* 10dc: fneg v20.4s, v21.4s */
-  { uint64_t t_ = V[19].s[3]; V[14].s[3] = t_; }  /* 10e0: mov v14.s[3], v19.s[3] */
-  { uint64_t t_ = V[20].s[3]; V[15].s[3] = t_; }  /* 10e4: mov v15.s[3], v20.s[3] */
+  V[14] = movs_33(V[14], V[19]);  /* 10e0: mov v14.s[3], v19.s[3] */
+  V[15] = movs_33(V[15], V[20]);  /* 10e4: mov v15.s[3], v20.s[3] */
   V[17] = zip1_2d(V[17], V[16], V[6]);  /* 10e8: zip1 v17.2d, v16.2d, v6.2d */
   V[19] = zip1_2d(V[19], V[18], V[7]);  /* 10ec: zip1 v19.2d, v18.2d, v7.2d */
   V[20] = fsub_4s(V[20], V[17], V[14]);  /* 10f0: fsub v20.4s, v17.4s, v14.4s */
@@ -1288,18 +1319,18 @@ static void neonemu_run(int entry, NRegs* R) {
   V[24] = fsub_4s(V[24], V[16], V[18]);  /* 11bc: fsub v24.4s, v16.4s, v18.4s */
   V[18] = fadd_4s(V[18], V[16], V[18]);  /* 11c0: fadd v18.4s, v16.4s, v18.4s */
   { uint8_t* A = (uint8_t*)X[5] + 0; memcpy(&V[29], A+0, 16);  }  /* 11c4: ld1 { v29.4s }, [x5] */
-  V[28] = ext16(V[19], V[19], 12);  /* 11c8: ext v28.16b, v19.16b, v19.16b, #0xc */
+  V[28] = ext_12(V[19], V[19]);  /* 11c8: ext v28.16b, v19.16b, v19.16b, #0xc */
   V[28] = rev64_4s(V[28]);  /* 11cc: rev64 v28.4s, v28.4s */
-  V[26] = ext16(V[18], V[28], 8);  /* 11d0: ext v26.16b, v18.16b, v28.16b, #0x8 */
-  { uint64_t t_ = V[28].d[1]; V[18].d[1] = t_; }  /* 11d4: mov v18.d[1], v28.d[1] */
+  V[26] = ext_8(V[18], V[28]);  /* 11d0: ext v26.16b, v18.16b, v28.16b, #0x8 */
+  V[18] = movd_11(V[18], V[28]);  /* 11d4: mov v18.d[1], v28.d[1] */
   V[17] = fsub_4s(V[17], V[18], V[26]);  /* 11d8: fsub v17.4s, v18.4s, v26.4s */
   V[26] = fadd_4s(V[26], V[18], V[26]);  /* 11dc: fadd v26.4s, v18.4s, v26.4s */
   V[30] = rev64_4s(V[31]);  /* 11e0: rev64 v30.4s, v31.4s */
-  { uint64_t t_ = V[24].d[0]; V[18].d[0] = t_; V[18].d[1] = t_; }  /* 11e4: dup v18.2d, v24.d[0] */
-  { uint64_t t_ = V[24].d[1]; V[19].d[0] = t_; V[19].d[1] = t_; }  /* 11e8: dup v19.2d, v24.d[1] */
+  V[18] = dupd_0(V[24]);  /* 11e4: dup v18.2d, v24.d[0] */
+  V[19] = dupd_1(V[24]);  /* 11e8: dup v19.2d, v24.d[1] */
   V[28] = rev64_4s(V[17]);  /* 11ec: rev64 v28.4s, v17.4s */
   V[19] = rev64_4s(V[19]);  /* 11f0: rev64 v19.4s, v19.4s */
-  V[30] = ext16(V[31], V[30], 8);  /* 11f4: ext v30.16b, v31.16b, v30.16b, #0x8 */
+  V[30] = ext_8(V[31], V[30]);  /* 11f4: ext v30.16b, v31.16b, v30.16b, #0x8 */
   V[27] = zip1_2d(V[27], V[26], V[17]);  /* 11f8: zip1 v27.2d, v26.2d, v17.2d */
   V[26] = zip2_2d(V[26], V[26], V[28]);  /* 11fc: zip2 v26.2d, v26.2d, v28.2d */
   V[16] = fadd_4s(V[16], V[27], V[26]);  /* 1200: fadd v16.4s, v27.4s, v26.4s */
@@ -1309,7 +1340,7 @@ static void neonemu_run(int entry, NRegs* R) {
   V[28] = rev64_4s(V[25]);  /* 1210: rev64 v28.4s, v25.4s */
   V[25] = fmla_4s(V[25], V[28], V[31]);  /* 1214: fmla v25.4s, v28.4s, v31.4s */
   V[28] = rev64_4s(V[25]);  /* 1218: rev64 v28.4s, v25.4s */
-  V[28] = ext16(V[28], V[28], 8);  /* 121c: ext v28.16b, v28.16b, v28.16b, #0x8 */
+  V[28] = ext_8(V[28], V[28]);  /* 121c: ext v28.16b, v28.16b, v28.16b, #0x8 */
   V[28] = fmla_4s(V[28], V[25], V[31]);  /* 1220: fmla v28.4s, v25.4s, v31.4s */
   V[19] = fadd_4s(V[19], V[18], V[28]);  /* 1224: fadd v19.4s, v18.4s, v28.4s */
   V[18] = fsub_4s(V[18], V[18], V[28]);  /* 1228: fsub v18.4s, v18.4s, v28.4s */
@@ -1323,8 +1354,8 @@ static void neonemu_run(int entry, NRegs* R) {
   V[23] = zip2_2d(V[23], V[26], V[29]);  /* 1248: zip2 v23.2d, v26.2d, v29.2d */
   V[27] = fneg_4s(V[28]);  /* 124c: fneg v27.4s, v28.4s */
   V[28] = fneg_4s(V[29]);  /* 1250: fneg v28.4s, v29.4s */
-  { uint64_t t_ = V[27].s[3]; V[22].s[3] = t_; }  /* 1254: mov v22.s[3], v27.s[3] */
-  { uint64_t t_ = V[28].s[3]; V[23].s[3] = t_; }  /* 1258: mov v23.s[3], v28.s[3] */
+  V[22] = movs_33(V[22], V[27]);  /* 1254: mov v22.s[3], v27.s[3] */
+  V[23] = movs_33(V[23], V[28]);  /* 1258: mov v23.s[3], v28.s[3] */
   V[25] = zip1_2d(V[25], V[24], V[20]);  /* 125c: zip1 v25.2d, v24.2d, v20.2d */
   V[27] = zip1_2d(V[27], V[26], V[21]);  /* 1260: zip1 v27.2d, v26.2d, v21.2d */
   V[28] = fsub_4s(V[28], V[25], V[22]);  /* 1264: fsub v28.4s, v25.4s, v22.4s */
@@ -1372,8 +1403,8 @@ static void neonemu_run(int entry, NRegs* R) {
   V[17] = fadd_4s(V[17], V[17], V[25]);  /* 130c: fadd v17.4s, v17.4s, v25.4s */
   { uint8_t* A = (uint8_t*)X[8]; memcpy(&V[26], A+0, 16); memcpy(&V[27], A+16, 16);  X[8] += X[9]; }  /* 1310: ld1 { v26.4s, v27.4s }, [x8], x9 */
   { uint8_t* A = (uint8_t*)X[7]; memcpy(&V[24], A+0, 16); memcpy(&V[25], A+16, 16);  X[7] += 32; }  /* 1314: ldp q24, q25, [x7], #0x20 */
-  V[26] = ext16(V[26], V[26], 8);  /* 1318: ext v26.16b, v26.16b, v26.16b, #0x8 */
-  V[27] = ext16(V[27], V[27], 8);  /* 131c: ext v27.16b, v27.16b, v27.16b, #0x8 */
+  V[26] = ext_8(V[26], V[26]);  /* 1318: ext v26.16b, v26.16b, v26.16b, #0x8 */
+  V[27] = ext_8(V[27], V[27]);  /* 131c: ext v27.16b, v27.16b, v27.16b, #0x8 */
   { uint32_t a_ = (uint32_t)(uint32_t)X[19], b_ = (uint32_t)64ull, r_ = a_ - b_; F_N = (int32_t)r_ < 0; F_Z = r_ == 0; F_V = (((int32_t)a_ < 0) != ((int32_t)b_ < 0)) && (((int32_t)r_ < 0) != ((int32_t)a_ < 0)); }  /* 1320: cmp w19, #0x40 */
   if (F_Z) goto L_15b8;  /* 1324: b.eq 0x15b8 <celt_tx_fft_sr_ns_float_neon+0x9a8> */
   V[28] = rev64_4s(V[2]);  /* 1328: rev64 v28.4s, v2.4s */
@@ -1461,8 +1492,8 @@ static void neonemu_run(int entry, NRegs* R) {
   { uint8_t* A = (uint8_t*)X[1] + 224; memcpy(&V[16], A+0, 16); memcpy(&V[17], A+16, 16);  }  /* 1470: ldp q16, q17, [x1, #0xe0] */
   { uint8_t* A = (uint8_t*)X[8]; memcpy(&V[0], A+0, 16); memcpy(&V[1], A+16, 16);  X[8] += X[9]; }  /* 1474: ld1 { v0.4s, v1.4s }, [x8], x9 */
   { uint8_t* A = (uint8_t*)X[7]; memcpy(&V[24], A+0, 16); memcpy(&V[25], A+16, 16);  X[7] += 32; }  /* 1478: ld1 { v24.4s, v25.4s }, [x7], #32 */
-  V[26] = ext16(V[0], V[0], 8);  /* 147c: ext v26.16b, v0.16b, v0.16b, #0x8 */
-  V[27] = ext16(V[1], V[1], 8);  /* 1480: ext v27.16b, v1.16b, v1.16b, #0x8 */
+  V[26] = ext_8(V[0], V[0]);  /* 147c: ext v26.16b, v0.16b, v0.16b, #0x8 */
+  V[27] = ext_8(V[1], V[1]);  /* 1480: ext v27.16b, v1.16b, v1.16b, #0x8 */
   V[28] = trn1_4s(V[28], V[24], V[24]);  /* 1484: trn1 v28.4s, v24.4s, v24.4s */
   V[24] = trn2_4s(V[24], V[24], V[24]);  /* 1488: trn2 v24.4s, v24.4s, v24.4s */
   V[29] = trn1_4s(V[29], V[25], V[25]);  /* 148c: trn1 v29.4s, v25.4s, v25.4s */
@@ -1647,8 +1678,8 @@ static void neonemu_run(int entry, NRegs* R) {
   { uint8_t* A = (uint8_t*)X[1] + 224; memcpy(&V[16], A+0, 16); memcpy(&V[17], A+16, 16);  }  /* 1758: ldp q16, q17, [x1, #0xe0] */
   { uint8_t* A = (uint8_t*)X[8]; memcpy(&V[0], A+0, 16); memcpy(&V[1], A+16, 16);  X[8] += X[9]; }  /* 175c: ld1 { v0.4s, v1.4s }, [x8], x9 */
   { uint8_t* A = (uint8_t*)X[7]; memcpy(&V[24], A+0, 16); memcpy(&V[25], A+16, 16);  X[7] += 32; }  /* 1760: ld1 { v24.4s, v25.4s }, [x7], #32 */
-  V[26] = ext16(V[0], V[0], 8);  /* 1764: ext v26.16b, v0.16b, v0.16b, #0x8 */
-  V[27] = ext16(V[1], V[1], 8);  /* 1768: ext v27.16b, v1.16b, v1.16b, #0x8 */
+  V[26] = ext_8(V[0], V[0]);  /* 1764: ext v26.16b, v0.16b, v0.16b, #0x8 */
+  V[27] = ext_8(V[1], V[1]);  /* 1768: ext v27.16b, v1.16b, v1.16b, #0x8 */
   V[28] = trn1_4s(V[28], V[24], V[24]);  /* 176c: trn1 v28.4s, v24.4s, v24.4s */
   V[24] = trn2_4s(V[24], V[24], V[24]);  /* 1770: trn2 v24.4s, v24.4s, v24.4s */
   V[29] = trn1_4s(V[29], V[25], V[25]);  /* 1774: trn1 v29.4s, v25.4s, v25.4s */
@@ -1738,10 +1769,10 @@ static void neonemu_run(int entry, NRegs* R) {
   V[7] = zip2_2d(V[7], V[15], V[23]);  /* 18c4: zip2 v7.2d, v15.2d, v23.2d */
   { uint8_t* A = (uint8_t*)X[15] + 0; memcpy(A+0, &V[4], 16); memcpy(A+16, &V[5], 16); memcpy(A+32, &V[6], 16); memcpy(A+48, &V[7], 16);  }  /* 18c8: st1 { v4.4s, v5.4s, v6.4s, v7.4s }, [x15] */
   { uint8_t* A = (uint8_t*)X[31] + 16; memcpy(&X[19], A+0, 8); memcpy(&X[20], A+8, 8);  }  /* 18cc: ldp x19, x20, [sp, #0x10] */
-  { uint8_t* A = (uint8_t*)X[31] + 32; memcpy(&V[14].d[0], A+0, 8); V[14].d[1] = 0; memcpy(&V[15].d[0], A+8, 8); V[15].d[1] = 0;  }  /* 18d0: ldp d14, d15, [sp, #0x20] */
-  { uint8_t* A = (uint8_t*)X[31] + 48; memcpy(&V[12].d[0], A+0, 8); V[12].d[1] = 0; memcpy(&V[13].d[0], A+8, 8); V[13].d[1] = 0;  }  /* 18d4: ldp d12, d13, [sp, #0x30] */
-  { uint8_t* A = (uint8_t*)X[31] + 64; memcpy(&V[10].d[0], A+0, 8); V[10].d[1] = 0; memcpy(&V[11].d[0], A+8, 8); V[11].d[1] = 0;  }  /* 18d8: ldp d10, d11, [sp, #0x40] */
-  { uint8_t* A = (uint8_t*)X[31] + 80; memcpy(&V[8].d[0], A+0, 8); V[8].d[1] = 0; memcpy(&V[9].d[0], A+8, 8); V[9].d[1] = 0;  }  /* 18dc: ldp d8, d9, [sp, #0x50] */
+  { uint8_t* A = (uint8_t*)X[31] + 32; V[14] = ldrd_(A+0); V[15] = ldrd_(A+8);  }  /* 18d0: ldp d14, d15, [sp, #0x20] */
+  { uint8_t* A = (uint8_t*)X[31] + 48; V[12] = ldrd_(A+0); V[13] = ldrd_(A+8);  }  /* 18d4: ldp d12, d13, [sp, #0x30] */
+  { uint8_t* A = (uint8_t*)X[31] + 64; V[10] = ldrd_(A+0); V[11] = ldrd_(A+8);  }  /* 18d8: ldp d10, d11, [sp, #0x40] */
+  { uint8_t* A = (uint8_t*)X[31] + 80; V[8] = ldrd_(A+0); V[9] = ldrd_(A+8);  }  /* 18dc: ldp d8, d9, [sp, #0x50] */
   { uint8_t* A = (uint8_t*)X[31]; memcpy(&X[21], A+0, 8); memcpy(&X[22], A+8, 8);  X[31] += 96; }  /* 18e0: ldp x21, x22, [sp], #0x60 */
   RET();  /* 18e4: ret  */
 }

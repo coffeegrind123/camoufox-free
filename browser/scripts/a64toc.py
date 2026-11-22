@@ -270,6 +270,10 @@ def tr(a, mn, ops, rel):
             m_, t2, l2 = vlane(s)
             assert t == t2
             f = {'d': 'd', 's': 's'}[t]
+            if f == 'd':
+                return f'V[{n}] = movd_{l}{l2}(V[{n}], V[{m_}]);'
+            if (l, l2) == (3, 3):
+                return f'V[{n}] = movs_33(V[{n}], V[{m_}]);'
             return f'{{ uint64_t t_ = V[{m_}].{f}[{l2}]; V[{n}].{f}[{l}] = t_; }}'
         n, t = V(d); m_, t2 = V(s)
         assert t == t2 == '16b'
@@ -285,10 +289,13 @@ def tr(a, mn, ops, rel):
         return f'V[{d}] = {mn}_{td}(V[{n}]);'
     if mn == 'ext':
         d, td = V(o[0]); n, _ = V(o[1]); m_, _ = V(o[2]); assert td == '16b'
-        return f'V[{d}] = ext16(V[{n}], V[{m_}], {imm(o[3])});'
+        k = imm(o[3])
+        if str(k) in ('8', '12'):
+            return f'V[{d}] = ext_{k}(V[{n}], V[{m_}]);'
+        return f'V[{d}] = ext16(V[{n}], V[{m_}], {k});'
     if mn == 'dup':
         d, td = V(o[0]); n, t, l = vlane(o[1]); assert td == '2d' and t == 'd'
-        return f'{{ uint64_t t_ = V[{n}].d[{l}]; V[{d}].d[0] = t_; V[{d}].d[1] = t_; }}'
+        return f'V[{d}] = dupd_{l}(V[{n}]);'
     if mn in ('ldr', 'str', 'ldp', 'stp', 'ldrh'):
         regs = o[:2] if mn in ('ldp', 'stp') else o[:1]
         rest = o[len(regs):]
@@ -319,7 +326,7 @@ def tr(a, mn, ops, rel):
                     elif k == 'w':
                         code += f'{{ uint32_t t_; memcpy(&t_, {A}+{pos}, 4); X[{idx}] = t_; }} '
                     elif k == 'd':
-                        code += f'memcpy(&V[{idx}].d[0], {A}+{pos}, 8); V[{idx}].d[1] = 0; '
+                        code += f'V[{idx}] = ldrd_({A}+{pos}); '
                     elif k == 'q':
                         code += f'memcpy(&V[{idx}], {A}+{pos}, 16); '
                 else:
@@ -570,6 +577,37 @@ static inline NV uzp1_2d(NV d, NV n, NV m) { NV r_; r_.d[0] = n.d[0]; r_.d[1] = 
 static inline NV uzp2_2d(NV d, NV n, NV m) { NV r_; r_.d[0] = n.d[1]; r_.d[1] = m.d[1]; return r_; }
 #endif
 static inline NV ext16(NV n, NV m, int k) { NV r_; for (int i = 0; i < 16; i++) r_.b[i] = i + k < 16 ? n.b[i + k] : m.b[i + k - 16]; return r_; }
+/* Lane moves as register shuffles, not 64-bit round trips through memory:
+ * movd_LK is MOV Vd.D[L], Vn.D[K]; movs_33 MOV Vd.S[3], Vn.S[3]; dupd_K
+ * DUP Vd.2D, Vn.D[K]; ext_8 and ext_12 EXT #8 and #12; ldrd_ LDR Dt. */
+#if NEONEMU_SSE
+static inline NV movd_00(NV d, NV n) { return nv_(_mm_castpd_ps(_mm_move_sd(_mm_castps_pd(d.m), _mm_castps_pd(n.m)))); }
+static inline NV movd_01(NV d, NV n) { return nv_(_mm_castpd_ps(_mm_shuffle_pd(_mm_castps_pd(n.m), _mm_castps_pd(d.m), 3))); }
+static inline NV movd_10(NV d, NV n) { return nv_(_mm_movelh_ps(d.m, n.m)); }
+static inline NV movd_11(NV d, NV n) { return nv_(_mm_castpd_ps(_mm_shuffle_pd(_mm_castps_pd(d.m), _mm_castps_pd(n.m), 2))); }
+static inline NV movs_33(NV d, NV n) {
+    __m128 t = _mm_shuffle_ps(d.m, n.m, _MM_SHUFFLE(3, 3, 2, 2));
+    return nv_(_mm_shuffle_ps(d.m, t, _MM_SHUFFLE(2, 0, 1, 0)));
+}
+static inline NV dupd_0(NV n) { return nv_(_mm_movelh_ps(n.m, n.m)); }
+static inline NV dupd_1(NV n) { return nv_(_mm_movehl_ps(n.m, n.m)); }
+static inline NV ext_8(NV n, NV m) { return nv_(_mm_castpd_ps(_mm_shuffle_pd(_mm_castps_pd(n.m), _mm_castps_pd(m.m), 1))); }
+static inline NV ext_12(NV n, NV m) {
+    return nv_(_mm_castsi128_ps(_mm_or_si128(_mm_srli_si128(_mm_castps_si128(n.m), 12), _mm_slli_si128(_mm_castps_si128(m.m), 4))));
+}
+static inline NV ldrd_(const uint8_t* p) { return nv_(_mm_castsi128_ps(_mm_loadl_epi64((const __m128i*)p))); }
+#else
+static inline NV movd_00(NV d, NV n) { d.d[0] = n.d[0]; return d; }
+static inline NV movd_01(NV d, NV n) { d.d[0] = n.d[1]; return d; }
+static inline NV movd_10(NV d, NV n) { d.d[1] = n.d[0]; return d; }
+static inline NV movd_11(NV d, NV n) { d.d[1] = n.d[1]; return d; }
+static inline NV movs_33(NV d, NV n) { d.s[3] = n.s[3]; return d; }
+static inline NV dupd_0(NV n) { n.d[1] = n.d[0]; return n; }
+static inline NV dupd_1(NV n) { n.d[0] = n.d[1]; return n; }
+static inline NV ext_8(NV n, NV m) { return ext16(n, m, 8); }
+static inline NV ext_12(NV n, NV m) { return ext16(n, m, 12); }
+static inline NV ldrd_(const uint8_t* p) { NV r_; memcpy(&r_.d[0], p, 8); r_.d[1] = 0; return r_; }
+#endif
 ''' + EXTRA + r'''
 #define CALL(target, site) do { RS[rsp++] = &&site; goto target; } while (0)
 #define RET() do { if (rsp == 0) return; goto *RS[--rsp]; } while (0)
