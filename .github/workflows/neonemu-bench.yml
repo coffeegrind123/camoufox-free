@@ -33,17 +33,17 @@ jobs:
         run: |
           sudo apt-get install -y -qq linux-tools-common linux-tools-$(uname -r) >/dev/null 2>&1 || sudo apt-get install -y -qq linux-tools-generic >/dev/null
           sudo sysctl -w kernel.perf_event_paranoid=-1 kernel.kptr_restrict=0
-          for job in "0 hue" "3 hue" "0 color-dodge" "3 color-dodge"; do
+          for job in "0 hue" "3 hue" "0 color-dodge" "3 color-dodge" "0 multiply" "3 multiply"; do
             set -- $job
             echo "=========== pref $1 $2"
             xvfb-run -a python3 .github/prof/prof.py $1 $2 "$CAMOUFOX_BINARY" > prof.log 2>&1 &
             for i in $(seq 1 60); do grep -q READY prof.log && break; sleep 1; done
             sleep 3
-            sudo perf record -a -F 999 -o perf.data -- sleep 10 2>/dev/null
+            sudo perf stat -a -e instructions,cycles,branches,branch-misses -o stat.txt -- sleep 10 2>/dev/null; cat stat.txt | grep -E "instructions|cycles|branch"; sudo perf record -a -F 999 -o perf.data -- sleep 2 2>/dev/null
             wait
             tail -20 prof.log
             sudo perf report -i perf.data --stdio --sort dso,sym --percent-limit 0.4 2>/dev/null | grep -v "^#" | grep -v "^$" | grep -v kallsyms | head -45
-            [ "$1" = 0 ] && continue
+            continue
             sudo perf report -i perf.data --stdio --sort sym --percent-limit 3 2>/dev/null | grep "\[\.\]" | grep -v kallsyms | sed 's/.*\[\.\] //' | head -4 > syms.txt
             while IFS= read -r sym; do
               echo "--- annotate: ${sym:0:80}"
