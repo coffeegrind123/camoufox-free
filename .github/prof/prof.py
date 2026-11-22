@@ -23,6 +23,17 @@ while (performance.now() - t0 < 20000) {
 return n; }"""
 with Camoufox(executable_path=sys.argv[3], os="linux", headless=True, i_know_what_im_doing=True,
               firefox_user_prefs={"general.cpu_identity": pref}) as b:
-    p = b.new_page(); p.goto("about:blank")
-    print("READY", flush=True)
-    print(f"pref {pref} {mode}: runs in 20 s:", p.evaluate(AUDIO if mode == "webaudio" else CANVAS, mode), flush=True)
+    p = b.new_page()
+    if mode == "webaudio":
+        # The page's own script: Playwright's isolated world may not touch typed-array data.
+        url = "https://prof.test/"
+        html = "<!doctype html><script>(%s)().then(n => { document.documentElement.dataset.n = n; });</script>" % AUDIO
+        p.route(url, lambda route: route.fulfill(body=html, content_type="text/html"))
+        print("READY", flush=True)
+        p.goto(url)
+        p.wait_for_function("document.documentElement.dataset.n", timeout=60000)
+        print(f"pref {pref} {mode}: runs in 20 s:", p.evaluate("document.documentElement.dataset.n"), flush=True)
+    else:
+        p.goto("about:blank")
+        print("READY", flush=True)
+        print(f"pref {pref} {mode}: runs in 20 s:", p.evaluate(CANVAS, mode), flush=True)
