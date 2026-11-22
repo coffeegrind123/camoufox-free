@@ -21,7 +21,7 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           name: camoufox-dist
-          run-id: 45045973156
+          run-id: 45055585616
           github-token: ${{ github.token }}
       - run: |
           mkdir -p .ci-browser && zstd -d -c camoufox-dist.tar.zst | tar -C .ci-browser -xf -
@@ -48,7 +48,7 @@ jobs:
             while IFS= read -r sym; do
               echo "--- annotate: ${sym:0:80}"
               sudo perf annotate -i perf.data --stdio "$sym" 2>/dev/null > ann.txt || true
-              grep -E "^ +[0-9]+\.[0-9]+ +:" ann.txt | sort -rn | head -60
+              grep -E "^ +[0-9]+\.[0-9]+ +:" ann.txt | sort -rn | head -45
               echo "--- calls:"; grep -oE "call +[0-9a-f]+ <[^>]+>" ann.txt | sed 's/.*<//; s/>//' | sort | uniq -c | sort -rn | head -10
             done < syms.txt
           done
