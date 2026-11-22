@@ -28,12 +28,12 @@ jobs:
           echo "CAMOUFOX_BINARY=$(realpath .ci-browser/bin/camoufox-bin)" >> $GITHUB_ENV
           pip install -e python
       - uses: ./.github/actions/fpgen-model
-      - run: grep -m1 "model name" /proc/cpuinfo
+      - run: grep -m1 "model name" /proc/cpuinfo; grep -o -m1 "gather_data_sampling[^ ]*" /proc/cpuinfo || true; cat /sys/devices/system/cpu/vulnerabilities/gather_data_sampling || true
       - name: perf
         run: |
           sudo apt-get install -y -qq linux-tools-common linux-tools-$(uname -r) >/dev/null 2>&1 || sudo apt-get install -y -qq linux-tools-generic >/dev/null
           sudo sysctl -w kernel.perf_event_paranoid=-1 kernel.kptr_restrict=0
-          for job in "0 webaudio" "3 webaudio"; do
+          for job in "0 hue" "2 hue" "1 hue" "0 color-dodge" "2 color-dodge"; do
             set -- $job
             echo "=========== pref $1 $2"
             xvfb-run -a python3 .github/prof/prof.py $1 $2 "$CAMOUFOX_BINARY" > prof.log 2>&1 &
@@ -43,7 +43,7 @@ jobs:
             wait
             tail -20 prof.log
             sudo perf report -i perf.data --stdio --sort dso,sym --percent-limit 0.4 2>/dev/null | grep -v "^#" | grep -v "^$" | grep -v kallsyms | head -45
-            [ "$1" = 3 ] || continue
+            [ "$1" = 0 ] && continue
             sudo perf report -i perf.data --stdio --sort sym --percent-limit 3 2>/dev/null | grep "\[\.\]" | grep -v kallsyms | sed 's/.*\[\.\] //' | head -4 > syms.txt
             while IFS= read -r sym; do
               echo "--- annotate: ${sym:0:80}"
