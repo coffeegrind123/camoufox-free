@@ -208,15 +208,20 @@ NEON_EMU_COLD __m256 neon_emu_rsqrte8_slow(__m256 a) {
   return neon_emu_join8(vrsqrteq_f32(neon_emu_lo8(a)), vrsqrteq_f32(neon_emu_hi8(a)));
 }
 // FRECPE's table computed, not gathered: RecipEstimate(a) for a = 256 + the
-// top 8 mantissa bits is ((2^19 / (2a + 1)) + 1) / 2. The float quotient is
-// exact to well within the gap to the next integer (at least 1/1023, against
-// half an ulp of 2^-15 near 1022), so truncating it gives the integer
-// quotient; all 256 entries match armest_recip_tab. A gather costs several
-// times a division on AMD and on Intel with the GDS microcode.
+// top 8 mantissa bits is ((2^19 / (2a + 1)) + 1) / 2. The quotient is RCPPS
+// and one fused Newton step: with any estimate inside RCPPS's specified
+// 1.5 * 2^-12 the result is within 4.25 * 2^-24 relative, 2.6e-4 absolute,
+// and the true quotient is at least 1/1023 = 9.8e-4 from an integer, so
+// truncating gives the integer quotient. All 256 entries match
+// armest_recip_tab with Intel's and AMD's recorded RCPPS and at both ends of
+// the specified error. A gather costs several times this on AMD and on Intel
+// with the GDS microcode; a division's latency showed in a Zen 3 profile.
 NEON_EMU_SI __m256i neon_emu_recpe8_normal(__m256i u, __m256i e) {
   __m256i k = _mm256_srli_epi32(_mm256_and_si256(u, _mm256_set1_epi32(0x7fffff)), 15);
   __m256i odd = _mm256_add_epi32(_mm256_slli_epi32(k, 1), _mm256_set1_epi32(513));
-  __m256i q = _mm256_cvttps_epi32(_mm256_div_ps(_mm256_set1_ps(524288.0f), _mm256_cvtepi32_ps(odd)));
+  __m256 a = _mm256_cvtepi32_ps(odd), est = _mm256_rcp_ps(a);
+  __m256 step = _mm256_fnmadd_ps(a, est, _mm256_set1_ps(2.0f));
+  __m256i q = _mm256_cvttps_epi32(_mm256_mul_ps(_mm256_mul_ps(est, _mm256_set1_ps(524288.0f)), step));
   __m256i f = _mm256_and_si256(_mm256_slli_epi32(_mm256_add_epi32(q, _mm256_set1_epi32(1)), 14),
                                _mm256_set1_epi32(0x7f8000));
   __m256i re = _mm256_slli_epi32(_mm256_sub_epi32(_mm256_set1_epi32(253), e), 23);
