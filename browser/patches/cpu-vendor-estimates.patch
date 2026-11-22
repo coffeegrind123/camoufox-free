@@ -2023,7 +2023,7 @@ index 0000000000..747ae8cd9f
 +
 +#include "src/opts/SkOpts_ml3.cpp"
 diff --git a/gfx/skia/skia/src/opts/SkRasterPipeline_opts.h b/gfx/skia/skia/src/opts/SkRasterPipeline_opts.h
-index 9a0edd9594..92dcd9b8c4 100644
+index 9a0edd9594..346a207074 100644
 --- a/gfx/skia/skia/src/opts/SkRasterPipeline_opts.h
 +++ b/gfx/skia/skia/src/opts/SkRasterPipeline_opts.h
 @@ -108,7 +108,11 @@
@@ -2059,7 +2059,7 @@ index 9a0edd9594..92dcd9b8c4 100644
  // Notes:
  // * rcp_fast and rcp_precise both produce a reciprocal, but rcp_fast is an estimate with at least
  //   12 bits of precision while rcp_precise should be accurate for float size. For ARM rcp_precise
-@@ -594,22 +609,88 @@
+@@ -594,22 +609,92 @@
      using U16 = V<uint16_t>;
      using U8  = V<uint8_t >;
  
@@ -2106,6 +2106,10 @@ index 9a0edd9594..92dcd9b8c4 100644
 +        return sk_bit_cast<F>((sk_bit_cast<I32>(t) & c) | (sk_bit_cast<I32>(e) & ~c));
 +    }
 +    SI I32 if_then_else(I32 c, I32 t, I32 e) { return (t & c) | (e & ~c); }
++    // BSL with a compare's mask (each lane all ones or all zeros): one blend.
++    SI F   arm_sel(I32 c, F t, F e) {
++        return arm_f(_mm256_blendv_ps(arm_m(e), arm_m(t), sk_bit_cast<__m256>(c)));
++    }
 +#else
      SI F   mad(F f, F m, F a) { return _mm256_fmadd_ps(f, m, a); }
      SI F  nmad(F f, F m, F a) { return _mm256_fnmadd_ps(f, m, a); }
@@ -2156,7 +2160,7 @@ index 9a0edd9594..92dcd9b8c4 100644
      SI F   sqrt_ (F v)       { return _mm256_sqrt_ps (v);    }
      SI F   rcp_precise (F v) {
          F e = rcp_approx(v);
-@@ -631,6 +712,13 @@
+@@ -631,6 +716,13 @@
      SI I32 if_then_else(I32 c, I32 t, I32 e) {
          return (I32)_mm256_blendv_ps((__m256)e, (__m256)t, (__m256)c);
      }
@@ -2170,7 +2174,7 @@ index 9a0edd9594..92dcd9b8c4 100644
  
      // NOTE: This version of 'all' only works with mask values (true == all bits set)
      SI bool any(I32 c) { return !_mm256_testz_si256((__m256i)c, _mm256_set1_epi32(-1)); }
-@@ -809,9 +897,37 @@
+@@ -809,9 +901,37 @@
  #else
      SI I32 abs_(I32 v)         { return max(v, -v); }
  #endif
@@ -2210,7 +2214,7 @@ index 9a0edd9594..92dcd9b8c4 100644
      SI F    sqrt_(F v)         { return _mm_sqrt_ps (v);    }
  
      SI I32 iround(F v)         { return (I32)_mm_cvtps_epi32(v); }
-@@ -1427,6 +1543,10 @@
+@@ -1427,6 +1547,10 @@
  #if defined(SKRP_CPU_NEON) && defined(SK_CPU_ARM64)
      return vcvt_f32_f16((float16x4_t)h);
  
@@ -2221,7 +2225,7 @@ index 9a0edd9594..92dcd9b8c4 100644
  #elif defined(SKRP_CPU_ML4)
      return _mm512_cvtph_ps((__m256i)h);
  
-@@ -1450,6 +1570,10 @@
+@@ -1450,6 +1574,10 @@
  #if defined(SKRP_CPU_NEON) && defined(SK_CPU_ARM64)
      return (U16)vcvt_f16_f32(f);
  
@@ -2232,7 +2236,7 @@ index 9a0edd9594..92dcd9b8c4 100644
  #elif defined(SKRP_CPU_ML4)
      return (U16)_mm512_cvtps_ph(f, _MM_FROUND_CUR_DIRECTION);
  
-@@ -2042,8 +2166,13 @@
+@@ -2042,8 +2170,13 @@
  // In most cases bias is 0 and the max value equals `scale`, but you can adjust the expected input
  // by tweaking `maxI` relative to `scale`.
  SI U32 to_unorm(F v, float scale, float bias, int maxI) {
@@ -2246,7 +2250,7 @@ index 9a0edd9594..92dcd9b8c4 100644
  }
  SI U32 to_unorm(F v, int scale) {
      return to_unorm(v, (float) scale, /*bias=*/0.f, /*maxI=*/scale);
-@@ -2213,6 +2342,18 @@
+@@ -2213,6 +2346,18 @@
  SI F inv(F x) { return 1.0f - x; }
  SI F two(F x) { return x + x; }
  
@@ -2256,7 +2260,7 @@ index 9a0edd9594..92dcd9b8c4 100644
 +// pixel of a grey layer; the lanes kept give the same bits either way.
 +SI F rcp_fast_unless(I32 dropped, F v) {
 +#if defined(SKRP_ARM_SEMANTICS)
-+    return rcp_fast(if_then_else(dropped, F1, v));
++    return rcp_fast(arm_sel(dropped, F1, v));
 +#else
 +    return rcp_fast(v);
 +#endif
@@ -2265,7 +2269,7 @@ index 9a0edd9594..92dcd9b8c4 100644
  BLEND_MODE(clear)    { return F0; }
  BLEND_MODE(srcatop)  { return mad(s, da, d*inv(sa)); }
  BLEND_MODE(dstatop)  { return mad(d, sa, s*inv(da)); }
-@@ -2249,12 +2390,12 @@
+@@ -2249,12 +2394,12 @@
  BLEND_MODE(colorburn) {
      return if_then_else(d == da,    d +    s*inv(da),
             if_then_else(s ==  0, /* s + */ d*inv(sa),
@@ -2280,7 +2284,7 @@ index 9a0edd9594..92dcd9b8c4 100644
  }
  BLEND_MODE(hardlight) {
      return s*inv(da) + d*inv(sa)
-@@ -2299,7 +2440,7 @@
+@@ -2299,7 +2444,7 @@
        sat = mx - mn;
  
      // Map min channel to 0, max channel to s, and scale the middle proportionally.
@@ -2289,7 +2293,7 @@ index 9a0edd9594..92dcd9b8c4 100644
      *r = (*r - mn) * s;
      *g = (*g - mn) * s;
      *b = (*b - mn) * s;
-@@ -2319,18 +2460,152 @@
+@@ -2319,18 +2464,152 @@
  SI void clip_color(F* r, F* g, F* b, F a) {
      F   mn        = min(*r, min(*g, *b)),
          mx        = max(*r, max(*g, *b)),
@@ -2348,7 +2352,7 @@ index 9a0edd9594..92dcd9b8c4 100644
 +      sat = mx - mn;
 +
 +    // Map min channel to 0, max channel to s, and scale the middle proportionally.
-+    s = if_then_else(sat == 0.0f, 0.0f, s * rcp_fast_unless(sat == 0.0f, sat));
++    s = arm_sel(sat == 0.0f, 0.0f, s * rcp_fast_unless(sat == 0.0f, sat));
 +    *r = (*r - mn) * s;
 +    *g = (*g - mn) * s;
 +    *b = (*b - mn) * s;
@@ -2360,8 +2364,8 @@ index 9a0edd9594..92dcd9b8c4 100644
 +    *b += diff;
 +}
 +template <class P> SI F arm_clip_channel(F c, F l, I32 clip_low, I32 clip_high, F mn_scale, F mx_scale) {
-+    c = if_then_else(clip_low,  P::mad(mn_scale, c - l, l), c);
-+    c = if_then_else(clip_high, P::mad(mx_scale, c - l, l), c);
++    c = arm_sel(clip_low,  P::mad(mn_scale, c - l, l), c);
++    c = arm_sel(clip_high, P::mad(mx_scale, c - l, l), c);
 +    c = P::max(c, 0.0f);  // Sometimes without this we may dip just a little negative.
 +    return c;
 +}
@@ -2445,7 +2449,7 @@ index 9a0edd9594..92dcd9b8c4 100644
      F R = r*a,
        G = g*a,
        B = b*a;
-@@ -2343,8 +2618,12 @@
+@@ -2343,8 +2622,12 @@
      g = mad(g, inv(da), mad(dg, inv(a), G));
      b = mad(b, inv(da), mad(db, inv(a), B));
      a = a + nmad(a, da, da);
@@ -2458,7 +2462,7 @@ index 9a0edd9594..92dcd9b8c4 100644
      F R = dr*a,
        G = dg*a,
        B = db*a;
-@@ -2357,8 +2636,12 @@
+@@ -2357,8 +2640,12 @@
      g = mad(g, inv(da), mad(dg, inv(a), G));
      b = mad(b, inv(da), mad(db, inv(a), B));
      a = a + nmad(a, da, da);
@@ -2471,7 +2475,7 @@ index 9a0edd9594..92dcd9b8c4 100644
      F R = r*da,
        G = g*da,
        B = b*da;
-@@ -2370,8 +2653,12 @@
+@@ -2370,8 +2657,12 @@
      g = mad(g, inv(da), mad(dg, inv(a), G));
      b = mad(b, inv(da), mad(db, inv(a), B));
      a = a + nmad(a, da, da);
@@ -2484,7 +2488,7 @@ index 9a0edd9594..92dcd9b8c4 100644
      F R = dr*a,
        G = dg*a,
        B = db*a;
-@@ -2383,6 +2670,7 @@
+@@ -2383,6 +2674,7 @@
      g = mad(g, inv(da), mad(dg, inv(a), G));
      b = mad(b, inv(da), mad(db, inv(a), B));
      a = a + nmad(a, da, da);
@@ -2492,7 +2496,7 @@ index 9a0edd9594..92dcd9b8c4 100644
  }
  
  HIGHP_STAGE(srcover_rgba_8888, const SkRasterPipelineContexts::MemoryCtx* ctx) {
-@@ -2410,7 +2698,11 @@
+@@ -2410,7 +2702,11 @@
      store(ptr, dst);
  }
  
@@ -2504,7 +2508,7 @@ index 9a0edd9594..92dcd9b8c4 100644
  
  HIGHP_STAGE(clamp_01, NoCtx) {
      r = clamp_01_(r);
-@@ -5476,6 +5768,10 @@
+@@ -5476,6 +5772,10 @@
      // With NEON we can compute [2] just as fast as [3], so let's be correct.
      // First we compute v + ((v+128)>>8), then one more round of (...+128)>>8 to finish up:
      return vrshrq_n_u16(vrsraq_n_u16(v, v, 8), 8);
@@ -2515,7 +2519,7 @@ index 9a0edd9594..92dcd9b8c4 100644
  #else
      // Otherwise, use [3], which is never wrong by more than 1:
      return (v+255)/256;
-@@ -5486,7 +5782,7 @@
+@@ -5486,7 +5786,7 @@
   * div255_accurate guarantees the right answer on all platforms, at the expense of performance.
   */
  SI U16 div255_accurate(U16 v) {
@@ -2524,7 +2528,7 @@ index 9a0edd9594..92dcd9b8c4 100644
      // Our NEON implementation of div255 is already correct for all inputs:
      return div255(v);
  #else
-@@ -5600,9 +5896,22 @@
+@@ -5600,9 +5900,22 @@
  
  SI U32 trunc_(F x) { return (U32)cast<I32>(x); }
  
@@ -2548,7 +2552,7 @@ index 9a0edd9594..92dcd9b8c4 100644
      F e = _mm512_rcp14_ps(x);
      return _mm512_fnmadd_ps(x, e, _mm512_set1_ps(2.0f)) * e;
  #elif defined(SKRP_CPU_AVX2)
-@@ -5630,7 +5939,9 @@
+@@ -5630,7 +5943,9 @@
  #endif
  }
  SI F sqrt_(F x) {
@@ -2559,7 +2563,7 @@ index 9a0edd9594..92dcd9b8c4 100644
      return _mm512_sqrt_ps(x);
  #elif defined(SKRP_CPU_AVX2)
      __m256 lo,hi;
-@@ -5675,6 +5986,8 @@
+@@ -5675,6 +5990,8 @@
      float32x4_t lo,hi;
      split(x, &lo,&hi);
      return join<F>(vrndmq_f32(lo), vrndmq_f32(hi));
@@ -2568,7 +2572,7 @@ index 9a0edd9594..92dcd9b8c4 100644
  #elif defined(SKRP_CPU_ML4)
      return _mm512_floor_ps(x);
  #elif defined(SKRP_CPU_AVX2)
-@@ -5705,7 +6018,15 @@
+@@ -5705,7 +6022,15 @@
  // The result is a number on [-1, 1).
  // Note: on neon this is a saturating multiply while the others are not.
  SI I16 scaled_mult(I16 a, I16 b) {
