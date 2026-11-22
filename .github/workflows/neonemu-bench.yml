@@ -21,7 +21,7 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           name: camoufox-dist
-          run-id: 45055585616
+          run-id: 45064662467
           github-token: ${{ github.token }}
       - run: |
           mkdir -p .ci-browser && zstd -d -c camoufox-dist.tar.zst | tar -C .ci-browser -xf -
@@ -29,18 +29,22 @@ jobs:
           pip install -e python
       - uses: ./.github/actions/fpgen-model
       - run: grep -m1 "model name" /proc/cpuinfo; grep -o -m1 "gather_data_sampling[^ ]*" /proc/cpuinfo || true; cat /sys/devices/system/cpu/vulnerabilities/gather_data_sampling || true
-      - name: disasm
+      - name: perf
         run: |
-          X=.ci-browser/lib/camoufox/libxul.so; [ -f $X ] || X=$(find .ci-browser -name libxul.so | head -1)
-          nm -C --size-sort -S $X | grep -E " (ml3|armhsw)::(hue|saturation|luminosity|colordodge|multiply|store_8888)\(" > syms.txt || true
-          cat syms.txt
-          while read addr size t name; do
-            s=$((16#$addr)); e=$((s + 16#$size))
-            objdump -d --no-show-raw-insn --start-address=$s --stop-address=$e $X > fn.txt
-            n=$(grep -cE "^ +[0-9a-f]+:" fn.txt); sp=$(grep -cE "\(%rsp\)" fn.txt); br=$(grep -cE "\sj[a-z]+ " fn.txt); cl=$(grep -cE "call" fn.txt)
-            echo "${name%%(*} insns=$n rsp=$sp branches=$br calls=$cl"
-          done < syms.txt
-          for f in "armhsw::hue(" ; do
-            line=$(grep -F "$f" syms.txt | head -1); set -- $line; s=$((16#$1)); e=$((s + 16#$2))
-            objdump -d --no-show-raw-insn --start-address=$s --stop-address=$e $X | grep -E "call" | sed 's/.*call/call/' | sort | uniq -c | sort -rn | head
+          sudo apt-get install -y -qq linux-tools-common linux-tools-$(uname -r) >/dev/null 2>&1 || sudo apt-get install -y -qq linux-tools-generic >/dev/null
+          sudo sysctl -w kernel.perf_event_paranoid=-1 kernel.kptr_restrict=0
+          for job in "0 hue" "3 hue"; do
+            set -- $job
+            echo "=========== pref $1 $2"
+            xvfb-run -a python3 .github/prof/prof.py $1 $2 "$CAMOUFOX_BINARY" > prof.log 2>&1 &
+            for i in $(seq 1 60); do grep -q READY prof.log && break; sleep 1; done
+            sleep 3
+            sudo perf record -a -F 999 -o perf.data -- sleep 10 2>/dev/null
+            wait
+            tail -3 prof.log
+            sudo perf report -i perf.data --stdio --sort dso,sym --percent-limit 1 2>/dev/null | grep -v "^#" | grep -v "^$" | grep -v kallsyms | head -12
+            sym=$(sudo perf report -i perf.data --stdio --sort sym --percent-limit 3 2>/dev/null | grep "\[\.\]" | grep "::hue(" | sed 's/.*\[\.\] //' | head -1)
+            echo "--- annotate: ${sym:0:40}"
+            sudo perf annotate -i perf.data --stdio "$sym" 2>/dev/null > ann.txt || true
+            python3 .github/prof/cat.py ann.txt
           done
