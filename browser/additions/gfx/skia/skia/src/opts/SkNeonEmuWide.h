@@ -207,26 +207,24 @@ NEON_EMU_COLD __m256 neon_emu_recpe8_slow(__m256 a) {
 NEON_EMU_COLD __m256 neon_emu_rsqrte8_slow(__m256 a) {
   return neon_emu_join8(vrsqrteq_f32(neon_emu_lo8(a)), vrsqrteq_f32(neon_emu_hi8(a)));
 }
-// FRECPE's table computed, not gathered: RecipEstimate(a) for a = 256 + the
-// top 8 mantissa bits is ((2^19 / (2a + 1)) + 1) / 2. The quotient is RCPPS
-// and one fused Newton step: with any estimate inside RCPPS's specified
-// 1.5 * 2^-12 the result is within 4.25 * 2^-24 relative, 2.6e-4 absolute,
-// and the true quotient is at least 1/1023 = 9.8e-4 from an integer, so
-// truncating gives the integer quotient. All 256 entries match
-// armest_recip_tab with Intel's and AMD's recorded RCPPS and at both ends of
-// the specified error. A gather costs several times this on AMD and on Intel
-// with the GDS microcode; a division's latency showed in a Zen 3 profile.
-NEON_EMU_SI __m256i neon_emu_recpe8_normal(__m256i u, __m256i e) {
-  __m256i k = _mm256_srli_epi32(_mm256_and_si256(u, _mm256_set1_epi32(0x7fffff)), 15);
-  __m256i odd = _mm256_add_epi32(_mm256_slli_epi32(k, 1), _mm256_set1_epi32(513));
-  __m256 a = _mm256_cvtepi32_ps(odd), est = _mm256_rcp_ps(a);
-  __m256 step = _mm256_fnmadd_ps(a, est, _mm256_set1_ps(2.0f));
-  __m256i q = _mm256_cvttps_epi32(_mm256_mul_ps(_mm256_mul_ps(est, _mm256_set1_ps(524288.0f)), step));
-  __m256i f = _mm256_and_si256(_mm256_slli_epi32(_mm256_add_epi32(q, _mm256_set1_epi32(1)), 14),
-                               _mm256_set1_epi32(0x7f8000));
-  __m256i re = _mm256_slli_epi32(_mm256_sub_epi32(_mm256_set1_epi32(253), e), 23);
-  __m256i sign = _mm256_and_si256(u, _mm256_set1_epi32((int)0x80000000u));
-  return _mm256_or_si256(_mm256_or_si256(sign, re), f);
+// FRECPE without its table: for a normal input whose reciprocal is normal,
+// RecipEstimate's ((2^19 / (2a + 1)) + 1) / 2 (a = 256 + the top 8 mantissa
+// bits) is 2^18 / (2a + 1) rounded half up, which is the reciprocal of the
+// input truncated to 8 mantissa bits plus half a unit (bit 14), rounded to 8
+// mantissa bits; sign and exponent come out as FRECPE's. 2a + 1 is odd, so the
+// true value is never a tie and lies at least 2^-20 (relative) from a rounding
+// boundary. RCPPS and one fused Newton step are within 4.25 * 2^-24 of it for
+// any estimate inside RCPPS's specified 1.5 * 2^-12, so rounding the bits gives
+// FRECPE's. Checked for every mantissa with Intel's and AMD's recorded RCPPS
+// and at both ends of the specified error. A gather or a division cost several
+// times this (AMD, Intel with the GDS microcode; a Zen 3 profile).
+NEON_EMU_SI __m256i neon_emu_recpe8_normal(__m256i u) {
+  __m256 v = _mm256_castsi256_ps(_mm256_or_si256(_mm256_and_si256(u, _mm256_set1_epi32((int)0xffff8000u)),
+                                                 _mm256_set1_epi32(0x4000)));
+  __m256 est = _mm256_rcp_ps(v);
+  __m256 w = _mm256_mul_ps(est, _mm256_fnmadd_ps(v, est, _mm256_set1_ps(2.0f)));
+  return _mm256_and_si256(_mm256_add_epi32(_mm256_castps_si256(w), _mm256_set1_epi32(0x4000)),
+                          _mm256_set1_epi32((int)0xffff8000u));
 }
 // +-0 gives +-infinity, a select: Skia's blends take the reciprocal of zero on
 // every pixel of a grey layer (set_sat's sat, clip_color's l - mn), and the
@@ -234,12 +232,12 @@ NEON_EMU_SI __m256i neon_emu_recpe8_normal(__m256i u, __m256i e) {
 NEON_EMU_SI __m256 neon_emu_recpe8(__m256 a) {
   __m256i u = _mm256_castps_si256(a), e = neon_emu_exp8(u);
   __m256i ok = neon_emu_within8(e, 1, 252);
-  if (neon_emu_all8(ok)) return _mm256_castsi256_ps(neon_emu_recpe8_normal(u, e));
+  if (neon_emu_all8(ok)) return _mm256_castsi256_ps(neon_emu_recpe8_normal(u));
   __m256i zero = _mm256_cmpeq_epi32(_mm256_and_si256(u, _mm256_set1_epi32(0x7fffffff)), _mm256_setzero_si256());
   if (neon_emu_all8(_mm256_or_si256(ok, zero))) {
     __m256i inf = _mm256_or_si256(_mm256_and_si256(u, _mm256_set1_epi32((int)0x80000000u)),
                                   _mm256_set1_epi32(0x7f800000));
-    return _mm256_castsi256_ps(neon_emu_sel8(zero, inf, neon_emu_recpe8_normal(u, e)));
+    return _mm256_castsi256_ps(neon_emu_sel8(zero, inf, neon_emu_recpe8_normal(u)));
   }
   return neon_emu_recpe8_slow(a);
 }
