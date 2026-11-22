@@ -155,15 +155,33 @@ NEON_EMU_SI __m256 neon_emu_minmax8_nan(__m256 r, __m256 x, __m256 y) {
 }
 NEON_EMU_SI __m256 neon_emu_min8_nan(__m256 r, __m256 x, __m256 y) { return neon_emu_minmax8_nan(r, x, y); }
 NEON_EMU_SI __m256 neon_emu_min8(__m256 x, __m256 y) {
-  __m256 r = _mm256_blendv_ps(_mm256_min_ps(x, y), _mm256_or_ps(x, y), _mm256_cmp_ps(x, y, _CMP_EQ_OQ));
+  // MINPS returns its second operand on a tie, so the two orders differ only
+  // at +0 against -0, where their OR is FMIN's -0.
+  __m256 r = _mm256_or_ps(_mm256_min_ps(x, y), _mm256_min_ps(y, x));
   if (__builtin_expect(!_mm256_movemask_ps(_mm256_cmp_ps(x, y, _CMP_UNORD_Q)), 1)) return r;
   return neon_emu_min8_nan(r, x, y);
 }
 NEON_EMU_SI __m256 neon_emu_max8_nan(__m256 r, __m256 x, __m256 y) { return neon_emu_minmax8_nan(r, x, y); }
 NEON_EMU_SI __m256 neon_emu_max8(__m256 x, __m256 y) {
-  __m256 r = _mm256_blendv_ps(_mm256_max_ps(x, y), _mm256_and_ps(x, y), _mm256_cmp_ps(x, y, _CMP_EQ_OQ));
+  __m256 r = _mm256_and_ps(_mm256_max_ps(x, y), _mm256_max_ps(y, x));  // FMAX's +0
   if (__builtin_expect(!_mm256_movemask_ps(_mm256_cmp_ps(x, y, _CMP_UNORD_Q)), 1)) return r;
   return neon_emu_max8_nan(r, x, y);
+}
+// Skia's clamp_01_, min(max(0, v), 1), as FMAX then FMIN give it: MAXPS with
+// zero second turns -0 into +0 as FMAX does, and a NaN lane takes itself
+// quieted, by select: no NaN branch in the stages that run on every pixel.
+NEON_EMU_SI __m256 neon_emu_clamp01_8(__m256 v) {
+  __m256 r = _mm256_min_ps(_mm256_set1_ps(1.0f), _mm256_max_ps(v, _mm256_setzero_ps()));
+  __m256 quiet = _mm256_or_ps(v, _mm256_castsi256_ps(_mm256_set1_epi32(0x400000)));
+  return _mm256_blendv_ps(r, quiet, _mm256_cmp_ps(v, v, _CMP_UNORD_Q));
+}
+// Skia's to_unorm, round(min(max(0, v*scale + bias), maxI)), as FMLA, FMAX,
+// FMIN and FCVTNU give it, with no checks: a NaN anywhere reaches FCVTNU,
+// which gives 0, and MAXPS with zero second gives 0 for it; every other lane
+// is a number in [0, maxI], where CVTPS2DQ rounds to nearest even as FCVTNU.
+NEON_EMU_SI __m256i neon_emu_unorm8(__m256 v, float scale, float bias, float maxI) {
+  __m256 t = _mm256_fmadd_ps(v, _mm256_set1_ps(scale), _mm256_set1_ps(bias));
+  return _mm256_cvtps_epi32(_mm256_min_ps(_mm256_set1_ps(maxI), _mm256_max_ps(t, _mm256_setzero_ps())));
 }
 NEON_EMU_SI __m256 neon_emu_abs8(__m256 x) {
   return _mm256_and_ps(x, _mm256_castsi256_ps(_mm256_set1_epi32(0x7fffffff)));

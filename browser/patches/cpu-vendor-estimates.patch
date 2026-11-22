@@ -1965,7 +1965,7 @@ index 0000000000..747ae8cd9f
 +
 +#include "src/opts/SkOpts_ml3.cpp"
 diff --git a/gfx/skia/skia/src/opts/SkRasterPipeline_opts.h b/gfx/skia/skia/src/opts/SkRasterPipeline_opts.h
-index 9a0edd9594..b7d6aad9e6 100644
+index 9a0edd9594..4fe6a5ac98 100644
 --- a/gfx/skia/skia/src/opts/SkRasterPipeline_opts.h
 +++ b/gfx/skia/skia/src/opts/SkRasterPipeline_opts.h
 @@ -108,7 +108,11 @@
@@ -2174,7 +2174,21 @@ index 9a0edd9594..b7d6aad9e6 100644
  #elif defined(SKRP_CPU_ML4)
      return (U16)_mm512_cvtps_ph(f, _MM_FROUND_CUR_DIRECTION);
  
-@@ -2213,6 +2337,18 @@
+@@ -2042,8 +2166,13 @@
+ // In most cases bias is 0 and the max value equals `scale`, but you can adjust the expected input
+ // by tweaking `maxI` relative to `scale`.
+ SI U32 to_unorm(F v, float scale, float bias, int maxI) {
++#if defined(SKRP_ARM_SEMANTICS)
++    // The same FMLA, FMAX, FMIN and FCVTNU, at AVX2's cost (SkNeonEmuWide.h).
++    return sk_bit_cast<U32>(neon_emu_unorm8(arm_m(v), scale, bias, (float) maxI));
++#else
+     // Any time we use round() we probably want to use to_unorm().
+     return round(min(max(0.0f, mad(v, scale, bias)), (float) maxI));
++#endif
+ }
+ SI U32 to_unorm(F v, int scale) {
+     return to_unorm(v, (float) scale, /*bias=*/0.f, /*maxI=*/scale);
+@@ -2213,6 +2342,18 @@
  SI F inv(F x) { return 1.0f - x; }
  SI F two(F x) { return x + x; }
  
@@ -2193,7 +2207,7 @@ index 9a0edd9594..b7d6aad9e6 100644
  BLEND_MODE(clear)    { return F0; }
  BLEND_MODE(srcatop)  { return mad(s, da, d*inv(sa)); }
  BLEND_MODE(dstatop)  { return mad(d, sa, s*inv(da)); }
-@@ -2249,12 +2385,12 @@
+@@ -2249,12 +2390,12 @@
  BLEND_MODE(colorburn) {
      return if_then_else(d == da,    d +    s*inv(da),
             if_then_else(s ==  0, /* s + */ d*inv(sa),
@@ -2208,7 +2222,7 @@ index 9a0edd9594..b7d6aad9e6 100644
  }
  BLEND_MODE(hardlight) {
      return s*inv(da) + d*inv(sa)
-@@ -2299,7 +2435,7 @@
+@@ -2299,7 +2440,7 @@
        sat = mx - mn;
  
      // Map min channel to 0, max channel to s, and scale the middle proportionally.
@@ -2217,7 +2231,7 @@ index 9a0edd9594..b7d6aad9e6 100644
      *r = (*r - mn) * s;
      *g = (*g - mn) * s;
      *b = (*b - mn) * s;
-@@ -2319,11 +2455,11 @@
+@@ -2319,11 +2460,11 @@
  SI void clip_color(F* r, F* g, F* b, F a) {
      F   mn        = min(*r, min(*g, *b)),
          mx        = max(*r, max(*g, *b)),
@@ -2232,7 +2246,19 @@ index 9a0edd9594..b7d6aad9e6 100644
  
      *r = clip_channel(*r, l, clip_low, clip_high, mn_scale, mx_scale);
      *g = clip_channel(*g, l, clip_low, clip_high, mn_scale, mx_scale);
-@@ -5476,6 +5612,10 @@
+@@ -2410,7 +2551,11 @@
+     store(ptr, dst);
+ }
+ 
++#if defined(SKRP_ARM_SEMANTICS)
++SI F clamp_01_(F v) { return arm_f(neon_emu_clamp01_8(arm_m(v))); }
++#else
+ SI F clamp_01_(F v) { return min(max(0.0f, v), 1.0f); }
++#endif
+ 
+ HIGHP_STAGE(clamp_01, NoCtx) {
+     r = clamp_01_(r);
+@@ -5476,6 +5621,10 @@
      // With NEON we can compute [2] just as fast as [3], so let's be correct.
      // First we compute v + ((v+128)>>8), then one more round of (...+128)>>8 to finish up:
      return vrshrq_n_u16(vrsraq_n_u16(v, v, 8), 8);
@@ -2243,7 +2269,7 @@ index 9a0edd9594..b7d6aad9e6 100644
  #else
      // Otherwise, use [3], which is never wrong by more than 1:
      return (v+255)/256;
-@@ -5486,7 +5626,7 @@
+@@ -5486,7 +5635,7 @@
   * div255_accurate guarantees the right answer on all platforms, at the expense of performance.
   */
  SI U16 div255_accurate(U16 v) {
@@ -2252,7 +2278,7 @@ index 9a0edd9594..b7d6aad9e6 100644
      // Our NEON implementation of div255 is already correct for all inputs:
      return div255(v);
  #else
-@@ -5600,9 +5740,22 @@
+@@ -5600,9 +5749,22 @@
  
  SI U32 trunc_(F x) { return (U32)cast<I32>(x); }
  
@@ -2276,7 +2302,7 @@ index 9a0edd9594..b7d6aad9e6 100644
      F e = _mm512_rcp14_ps(x);
      return _mm512_fnmadd_ps(x, e, _mm512_set1_ps(2.0f)) * e;
  #elif defined(SKRP_CPU_AVX2)
-@@ -5630,7 +5783,9 @@
+@@ -5630,7 +5792,9 @@
  #endif
  }
  SI F sqrt_(F x) {
@@ -2287,7 +2313,7 @@ index 9a0edd9594..b7d6aad9e6 100644
      return _mm512_sqrt_ps(x);
  #elif defined(SKRP_CPU_AVX2)
      __m256 lo,hi;
-@@ -5675,6 +5830,8 @@
+@@ -5675,6 +5839,8 @@
      float32x4_t lo,hi;
      split(x, &lo,&hi);
      return join<F>(vrndmq_f32(lo), vrndmq_f32(hi));
@@ -2296,7 +2322,7 @@ index 9a0edd9594..b7d6aad9e6 100644
  #elif defined(SKRP_CPU_ML4)
      return _mm512_floor_ps(x);
  #elif defined(SKRP_CPU_AVX2)
-@@ -5705,7 +5862,15 @@
+@@ -5705,7 +5871,15 @@
  // The result is a number on [-1, 1).
  // Note: on neon this is a saturating multiply while the others are not.
  SI I16 scaled_mult(I16 a, I16 b) {

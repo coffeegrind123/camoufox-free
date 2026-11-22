@@ -364,3 +364,34 @@ extern "C" void NEON_EMU_CAT(NS, op_w8_cvtnu)(unsigned char* o, const unsigned c
 #endif
   }
 }
+
+// SkRasterPipeline_opts.h's clamp_01_ and to_unorm(v, 255) under
+// SKRP_ARM_SEMANTICS, against the 4-lane FMAX, FMIN, FMLA and FCVTNU they
+// stand for, in Skia's operand order.
+extern "C" void NEON_EMU_CAT(NS, op_w8_clamp01)(unsigned char* o, const unsigned char* a,
+                                          const unsigned char* b, const unsigned char* c,
+                                          unsigned long n) { (void)b; (void)c;
+  for (unsigned long i = 0; i < n; i++) {
+#if NEON_EMU_FAST
+    __m256 WA = _mm256_loadu_ps((const float*)(a + i * 32));
+    _mm256_storeu_ps((float*)(o + i * 32), neon_emu_clamp01_8(WA));
+#else
+    for (int h = 0; h < 2; h++) st(o + i * 32 + h * 16, vminq_f32(vmaxq_f32(vdupq_n_f32(0.0f), ld<float32x4_t>(a + i * 32 + h * 16)), vdupq_n_f32(1.0f)));
+#endif
+  }
+}
+extern "C" void NEON_EMU_CAT(NS, op_w8_unorm255)(unsigned char* o, const unsigned char* a,
+                                          const unsigned char* b, const unsigned char* c,
+                                          unsigned long n) { (void)b; (void)c;
+  for (unsigned long i = 0; i < n; i++) {
+#if NEON_EMU_FAST
+    __m256 WA = _mm256_loadu_ps((const float*)(a + i * 32));
+    _mm256_storeu_ps((float*)(o + i * 32), _mm256_castsi256_ps(neon_emu_unorm8(WA, 255.0f, 0.0f, 255.0f)));
+#else
+    for (int h = 0; h < 2; h++) {
+      float32x4_t t = vfmaq_f32(vdupq_n_f32(0.0f), ld<float32x4_t>(a + i * 32 + h * 16), vdupq_n_f32(255.0f));
+      st(o + i * 32 + h * 16, vcvtnq_u32_f32(vminq_f32(vmaxq_f32(vdupq_n_f32(0.0f), t), vdupq_n_f32(255.0f))));
+    }
+#endif
+  }
+}
