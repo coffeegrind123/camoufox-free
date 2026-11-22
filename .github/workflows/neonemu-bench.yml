@@ -1,0 +1,54 @@
+name: emulation profile (throwaway)
+on:
+  push:
+    branches: [tmp/neonemu-bench]
+permissions:
+  contents: read
+  actions: read
+jobs:
+  profile:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.12"}
+      - run: |
+          pip install -r ci/requirements.txt
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends xvfb libgtk-3-0 libasound2t64 libdbus-glib-1-2 libx11-xcb1 \
+            libxcb-shm0 libxcomposite1 libxcursor1 libxdamage1 libxfixes3 libxi6 libxrandr2 libxtst6 libpci3 zstd \
+            libegl1 libegl-mesa0 libgl1-mesa-dri libgles2
+      - uses: actions/download-artifact@v4
+        with:
+          name: camoufox-dist
+          run-id: 45018543579
+          github-token: ${{ github.token }}
+      - run: |
+          mkdir -p .ci-browser && zstd -d -c camoufox-dist.tar.zst | tar -C .ci-browser -xf -
+          echo "CAMOUFOX_BINARY=$(realpath .ci-browser/bin/camoufox-bin)" >> $GITHUB_ENV
+          pip install -e python
+      - uses: ./.github/actions/fpgen-model
+      - run: grep -m1 "model name" /proc/cpuinfo
+      - name: perf
+        run: |
+          sudo apt-get install -y -qq linux-tools-common linux-tools-$(uname -r) >/dev/null 2>&1 || sudo apt-get install -y -qq linux-tools-generic >/dev/null
+          sudo sysctl -w kernel.perf_event_paranoid=-1 kernel.kptr_restrict=0
+          for job in "0 webaudio" "3 webaudio" "0 soft-light" "3 soft-light" "0 source-over" "3 source-over"; do
+            set -- $job
+            echo "=========== pref $1 $2"
+            xvfb-run -a python3 .github/prof/prof.py $1 $2 "$CAMOUFOX_BINARY" > prof.log 2>&1 &
+            for i in $(seq 1 60); do grep -q READY prof.log && break; sleep 1; done
+            sleep 3
+            sudo perf record -a -F 999 -o perf.data -- sleep 10 2>/dev/null
+            wait
+            tail -1 prof.log
+            sudo perf report -i perf.data --stdio --sort dso,sym --percent-limit 0.7 2>/dev/null | grep -v "^#" | grep -v "^$" | grep -v kallsyms | head -30
+            [ "$1" = 3 ] || continue
+            sudo perf report -i perf.data --stdio --sort sym --percent-limit 5 2>/dev/null | grep "\[\.\]" | grep -v kallsyms | sed 's/.*\[\.\] //' | head -3 > syms.txt
+            while IFS= read -r sym; do
+              echo "--- annotate: ${sym:0:80}"
+              sudo perf annotate -i perf.data --stdio "$sym" 2>/dev/null > ann.txt || true
+              grep -E "^ +[0-9]+\.[0-9]+ +:" ann.txt | sort -rn | head -40
+              echo "--- calls:"; grep -oE "call +[0-9a-f]+ <[^>]+>" ann.txt | sed 's/.*<//; s/>//' | sort | uniq -c | sort -rn | head -10
+            done < syms.txt
+          done
