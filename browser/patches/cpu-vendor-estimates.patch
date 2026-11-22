@@ -467,18 +467,67 @@ index 1342a6f462..ff59e8b7d7 100644
  struct Engine {
    static void AudioBufferAddWithScale(const float* aInput, float aScale,
 diff --git a/dom/media/webaudio/AudioNodeEngineGenericImpl.h b/dom/media/webaudio/AudioNodeEngineGenericImpl.h
-index 78a24ce7bf..10d664d2c0 100644
+index 78a24ce7bf..38d88c0ae4 100644
 --- a/dom/media/webaudio/AudioNodeEngineGenericImpl.h
 +++ b/dom/media/webaudio/AudioNodeEngineGenericImpl.h
-@@ -18,8 +18,73 @@
+@@ -18,8 +18,127 @@
  #  define MOZ_UNROLL(_)
  #endif
  
 +#include <cmath>
 +#include <type_traits>
++#ifdef MOZ_AUDIO_NEON_EMU
++#  include "mozilla/SSE.h"
++#  ifdef _MSC_VER
++#    include <intrin.h>
++#  else
++#    include <cpuid.h>
++#  endif
++#endif
 +
  namespace mozilla {
  
++#ifdef MOZ_AUDIO_NEON_EMU
++// The emulated NEON engine is built for SSE2, where std::fma is a libm call
++// per lane. On a CPU with FMA the helpers below run the instruction instead;
++// fmaf rounds once either way, so the bits are the same.
++static inline bool NeonEmuHasFma() {
++  static const bool sHasFma = [] {
++    if (!supports_avx()) {
++      return false;  // FMA's VEX encoding needs the OS to save AVX state.
++    }
++#  ifdef _MSC_VER
++    int info[4];
++    __cpuid(info, 1);
++    return (info[2] & (1 << 12)) != 0;
++#  else
++    unsigned a, b, c, d;
++    return __get_cpuid(1, &a, &b, &c, &d) && (c & (1u << 12)) != 0;
++#  endif
++  }();
++  return sHasFma;
++}
++__attribute__((target("fma"))) static inline void NeonEmuFma4(float* aX,
++                                                              const float* aY,
++                                                              const float* aZ) {
++  for (size_t i = 0; i < 4; ++i) {
++    aX[i] = __builtin_fmaf(aX[i], aY[i], aZ[i]);
++  }
++}
++__attribute__((target("fma"))) static inline void NeonEmuComplexMultiplyFma(
++    const float* aInput, const float* aScale, float* aOutput,
++    unsigned aSize) {
++  for (unsigned i = 0; i < aSize * 2; i += 2) {
++    float ar = aInput[i], ai = aInput[i + 1];
++    float br = aScale[i], bi = aScale[i + 1];
++    float re = __builtin_fmaf(ar, br, -(ai * bi));
++    float im = __builtin_fmaf(ar, bi, ai * br);
++    aOutput[i] = re;
++    aOutput[i + 1] = im;
++  }
++}
++#endif
++
 +template <class Arch>
 +struct EngineBatchArch {
 +  using type = Arch;
@@ -513,6 +562,11 @@ index 78a24ce7bf..10d664d2c0 100644
 +    aX.store_aligned(x);
 +    aY.store_aligned(y);
 +    aZ.store_aligned(z);
++    static_assert(EBatch<Arch>::size == 4);
++    if (NeonEmuHasFma()) {
++      NeonEmuFma4(x, y, z);
++      return EBatch<Arch>::load_aligned(x);
++    }
 +    for (size_t i = 0; i < EBatch<Arch>::size; ++i) {
 +      x[i] = std::fma(x[i], y[i], z[i]);
 +    }
@@ -544,7 +598,7 @@ index 78a24ce7bf..10d664d2c0 100644
  template <class Arch>
  static bool is_aligned(const void* ptr) {
    return (reinterpret_cast<uintptr_t>(ptr) &
-@@ -52,13 +117,13 @@ void Engine<Arch>::AudioBufferAddWithScale(const float* aInput, float aScale,
+@@ -52,13 +171,13 @@
    MOZ_ASSERT(is_aligned<Arch>(aInput), "aInput is aligned");
    MOZ_ASSERT(is_aligned<Arch>(aOutput), "aOutput is aligned");
  
@@ -563,7 +617,7 @@ index 78a24ce7bf..10d664d2c0 100644
      // Avoid xsimd::fma here: it lowers to vfmadd*ps on x86 FMA3 builds and
      // vfmaq_f32 on aarch64 NEON, an explicit single-rounded fused
      // multiply-add that bypasses the project-wide -ffp-contract=off and
-@@ -83,15 +148,15 @@ void Engine<Arch>::AudioBlockCopyChannelWithScale(const float* aInput,
+@@ -83,15 +202,15 @@
    MOZ_ASSERT(is_aligned<Arch>(aInput), "aInput is aligned");
    MOZ_ASSERT(is_aligned<Arch>(aOutput), "aOutput is aligned");
  
@@ -583,7 +637,7 @@ index 78a24ce7bf..10d664d2c0 100644
      auto vout = vin * vgain;
      vout.store_aligned(&aOutput[i]);
    }
-@@ -106,14 +171,14 @@ void Engine<Arch>::AudioBlockCopyChannelWithScale(
+@@ -106,14 +225,14 @@
    MOZ_ASSERT(is_aligned<Arch>(aOutput), "aOutput is aligned");
    MOZ_ASSERT(is_aligned<Arch>(aScale), "aScale is aligned");
  
@@ -602,7 +656,7 @@ index 78a24ce7bf..10d664d2c0 100644
      auto vout = vin * vscaled;
      vout.store_aligned(&aOutput[i]);
    }
-@@ -124,12 +189,12 @@ void Engine<Arch>::AudioBufferInPlaceScale(float* aBlock, float aScale,
+@@ -124,12 +243,12 @@
                                             uint32_t aSize) {
    MOZ_ASSERT(is_aligned<Arch>(aBlock), "aBlock is aligned");
  
@@ -619,7 +673,7 @@ index 78a24ce7bf..10d664d2c0 100644
      auto vout = vin * vgain;
      vout.store_aligned(&aBlock[i]);
    }
-@@ -142,11 +207,11 @@ void Engine<Arch>::AudioBufferInPlaceScale(float* aBlock, float* aScale,
+@@ -142,11 +261,11 @@
    MOZ_ASSERT(is_aligned<Arch>(aBlock), "aBlock is aligned");
    MOZ_ASSERT(is_aligned<Arch>(aScale), "aScale is aligned");
  
@@ -635,7 +689,7 @@ index 78a24ce7bf..10d664d2c0 100644
      auto vout = vin * vgain;
      vout.store_aligned(&aBlock[i]);
    }
-@@ -166,21 +231,21 @@ void Engine<Arch>::AudioBlockPanStereoToStereo(
+@@ -166,21 +285,21 @@
    MOZ_ASSERT(is_aligned<Arch>(aOutputL), "aOutputL is aligned");
    MOZ_ASSERT(is_aligned<Arch>(aOutputR), "aOutputR is aligned");
  
@@ -664,7 +718,7 @@ index 78a24ce7bf..10d664d2c0 100644
        vout.store_aligned(&aOutputL[i]);
  
        /* right channel : aOutputR = aInputR * gainR */
-@@ -190,16 +255,16 @@ void Engine<Arch>::AudioBlockPanStereoToStereo(
+@@ -190,16 +309,16 @@
    } else {
      MOZ_UNROLL(2)
      for (unsigned i = 0; i < WEBAUDIO_BLOCK_SIZE;
@@ -685,7 +739,7 @@ index 78a24ce7bf..10d664d2c0 100644
        vout.store_aligned(&aOutputR[i]);
      }
    }
-@@ -212,9 +277,37 @@ void Engine<Arch>::BufferComplexMultiply(const float* aInput,
+@@ -212,9 +331,41 @@
    MOZ_ASSERT(is_aligned<Arch>(aInput), "aInput is aligned");
    MOZ_ASSERT(is_aligned<Arch>(aOutput), "aOutput is aligned");
    MOZ_ASSERT(is_aligned<Arch>(aScale), "aScale is aligned");
@@ -697,6 +751,10 @@ index 78a24ce7bf..10d664d2c0 100644
 +  if constexpr (std::is_same_v<Arch, NeonEmuArch>) {
 +    // xsimd on NEON: re = vfmaq(-(ai*bi), ar, br), im = vfmaq(ai*br, ar, bi),
 +    // one rounding for the fused product.
++    if (NeonEmuHasFma()) {
++      NeonEmuComplexMultiplyFma(aInput, aScale, aOutput, aSize);
++      return;
++    }
 +    for (unsigned i = 0; i < aSize * 2; i += 2) {
 +      float ar = aInput[i], ai = aInput[i + 1];
 +      float br = aScale[i], bi = aScale[i + 1];
@@ -724,7 +782,7 @@ index 78a24ce7bf..10d664d2c0 100644
    MOZ_UNROLL(2)
    for (unsigned i = 0; i < aSize * 2;
         i += 2 * xsimd::batch<std::complex<float>, Arch>::size) {
-@@ -246,22 +339,22 @@ float Engine<Arch>::AudioBufferSumOfSquares(const float* aInput,
+@@ -246,22 +397,22 @@
    MOZ_ASSERT(is_aligned<Arch>(aInput), "aInput is aligned");
  
    constexpr uint32_t unroll_factor = 4;
@@ -754,7 +812,7 @@ index 78a24ce7bf..10d664d2c0 100644
    for (uint32_t i = vLength; i < aLength; ++i) sum += aInput[i] * aInput[i];
    return sum;
  };
-@@ -283,13 +376,13 @@ void Engine<Arch>::NaNToZeroInPlace(float* aSamples, size_t aCount) {
+@@ -283,13 +434,13 @@
  
    MOZ_ASSERT(is_aligned<Arch>(aSamples), "aSamples is aligned");
  
@@ -772,7 +830,7 @@ index 78a24ce7bf..10d664d2c0 100644
      vout.store_aligned(&aSamples[i]);
    }
  
-@@ -316,24 +409,24 @@ void Engine<Arch>::AudioBlockPanStereoToStereo(
+@@ -316,24 +467,24 @@
    MOZ_ASSERT(is_aligned<Arch>(aOutputL), "aOutputL is aligned");
    MOZ_ASSERT(is_aligned<Arch>(aOutputR), "aOutputR is aligned");
  
