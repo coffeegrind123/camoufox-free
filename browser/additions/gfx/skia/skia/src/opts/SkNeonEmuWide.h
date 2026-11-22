@@ -189,9 +189,18 @@ NEON_EMU_COLD __m256 neon_emu_recpe8_slow(__m256 a) {
 NEON_EMU_COLD __m256 neon_emu_rsqrte8_slow(__m256 a) {
   return neon_emu_join8(vrsqrteq_f32(neon_emu_lo8(a)), vrsqrteq_f32(neon_emu_hi8(a)));
 }
+// FRECPE's table computed, not gathered: RecipEstimate(a) for a = 256 + the
+// top 8 mantissa bits is ((2^19 / (2a + 1)) + 1) / 2. The float quotient is
+// exact to well within the gap to the next integer (at least 1/1023, against
+// half an ulp of 2^-15 near 1022), so truncating it gives the integer
+// quotient; all 256 entries match armest_recip_tab. A gather costs several
+// times a division on AMD and on Intel with the GDS microcode.
 NEON_EMU_SI __m256i neon_emu_recpe8_normal(__m256i u, __m256i e) {
-  __m256i f = _mm256_i32gather_epi32((const int*)kNeonEmuEstimateWords.recip,
-                                     _mm256_srli_epi32(_mm256_and_si256(u, _mm256_set1_epi32(0x7fffff)), 15), 4);
+  __m256i k = _mm256_srli_epi32(_mm256_and_si256(u, _mm256_set1_epi32(0x7fffff)), 15);
+  __m256i odd = _mm256_add_epi32(_mm256_slli_epi32(k, 1), _mm256_set1_epi32(513));
+  __m256i q = _mm256_cvttps_epi32(_mm256_div_ps(_mm256_set1_ps(524288.0f), _mm256_cvtepi32_ps(odd)));
+  __m256i f = _mm256_and_si256(_mm256_slli_epi32(_mm256_add_epi32(q, _mm256_set1_epi32(1)), 14),
+                               _mm256_set1_epi32(0x7f8000));
   __m256i re = _mm256_slli_epi32(_mm256_sub_epi32(_mm256_set1_epi32(253), e), 23);
   __m256i sign = _mm256_and_si256(u, _mm256_set1_epi32((int)0x80000000u));
   return _mm256_or_si256(_mm256_or_si256(sign, re), f);
