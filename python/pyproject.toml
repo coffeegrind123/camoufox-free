@@ -54,7 +54,7 @@ inquirer = "*"
 # Python and TypeScript, and in every install of one camoufox release. myuri
 # itself pins cursory only as >=2.1.0,<3, so cursory is pinned here too: a new
 # cursory release must not reach users without review.
-myuri = "4.0.0"
+myuri = "5.1.0"
 cursory = "2.1.0"
 maxminddb = {version = "*", optional = true}
 

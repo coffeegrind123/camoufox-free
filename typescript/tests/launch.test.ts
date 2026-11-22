@@ -951,9 +951,10 @@ describe("test_humanize", () => {
 		{ mouse: raw() },
 		{
 			mouse: myuri({ move: noop }),
-			keyboard: myuri({ type: noop, wpm: 70 }),
+			keyboard: myuri({ type: noop }),
 			scroll: myuri({ wheel: noop }),
 			seed: 9,
+			settings: { typing: { wpm: 70 } },
 		},
 		{ keyboard: raw(), seed: 2 ** 32 - 1 },
 	])("a driver engine tells the browser only that (%#)", async (humanize) => {
@@ -969,16 +970,19 @@ describe("test_humanize", () => {
 		for (const off of [null, false, 0, true, 1.5])
 			expect(normalize(off)).toEqual({
 				engines: { mouse: raw(), keyboard: raw(), scroll: raw() },
+				settings: {},
 			});
-		const { engines, seed } = normalize({
+		const { engines, seed, settings } = normalize({
 			scroll: myuri({ intoView: noop }),
-			keyboard: { engine: "myuri", options: { wpm: 70 } },
+			keyboard: { engine: "myuri", options: {} },
 			seed: 5,
+			settings: { typing: { wpm: 70 } },
 		});
 		expect(engines.mouse).toEqual(myuri());
-		expect(engines.keyboard).toEqual(myuri({ wpm: 70 }));
+		expect(engines.keyboard).toEqual(myuri());
 		expect(engines.scroll).toEqual(myuri({ intoView: noop }));
 		expect(seed).toBe(5);
+		expect(settings).toEqual({ typing: { wpm: 70 } });
 	});
 
 	it("takes cursory() as myuri()", () => {
@@ -1032,8 +1036,13 @@ describe("test_humanize", () => {
 			'humanize["mouse"]: myuri({ type }) is not a mouse part',
 		],
 		[
-			{ mouse: { engine: "myuri", options: { wpm: 70 } } },
-			"myuri({ wpm }) is not a mouse part",
+			{ keyboard: { engine: "myuri", options: { wpm: 70 } } },
+			"myuri() has no part 'wpm'",
+		],
+		[{ settings: 70 }, "humanize.settings must be an object"],
+		[
+			{ settings: { typing: { speed: 70 } } },
+			"humanize.settings: myuri: unknown setting 'typing.speed'",
 		],
 		[
 			{ keyboard: { engine: "myuri", options: { type: "fast" } } },

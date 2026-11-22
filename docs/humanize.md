@@ -39,7 +39,7 @@ events it sends, never a second layer of delays on top of its own.
 ```python
 from camoufox.humanize import myuri, raw
 
-humanize = {"mouse": myuri(), "keyboard": myuri(wpm=70), "scroll": raw(), "seed": 1234}
+humanize = {"mouse": myuri(), "scroll": raw(), "seed": 1234, "settings": {"typing": {"wpm": 70}}}
 ```
 
 - `myuri()` is [myuri](https://github.com/JWriter20/Myuri)'s smart actions, fitted
@@ -58,6 +58,11 @@ humanize = {"mouse": myuri(), "keyboard": myuri(wpm=70), "scroll": raw(), "seed"
 - A channel a dict leaves out is `myuri()`. `humanize=None` or `False` (the
   default) is `raw()` everywhere; `humanize=True` is the browser's engine, not
   a driver one.
+- `settings` are [myuri's](https://github.com/JWriter20/Myuri#settings), checked by myuri before launch. The seed
+  draws one person around them for the whole browser (myuri's
+  `profile_from_seed(seed, settings, os)`), so one seed types, moves and
+  scrolls at one speed. A Camoufox identity points with a mouse unless
+  `settings["scroll"]["device"]` says otherwise.
 - Of a driver engine, the browser's config gets only `humanize:driver`.
 
 The engine owns timing and motion: the path, the dwell before a press, the hold,
