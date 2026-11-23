@@ -15,8 +15,11 @@ emulated tier are what keep it fast; this guard keeps them from regressing.
 The same page runs under the host's own identity (0), the other x86 vendor
 and ARM64, in interleaved launches on one machine, so a busy runner slows all
 three alike. Each operation's time is the median over launches of the median
-over repetitions. The guard fails when an emulated operation takes more than
-SLOWER_FACTOR times the host's and at least MIN_GAP_MS more.
+over repetitions, and its ratio is the median over launches of the ratio
+within a launch round, so a runner that drifts between rounds moves both
+sides of each ratio (the host's own dodge read 0.22 and 0.29 ms in two runs
+on one EPYC 9V74 model). The guard fails when an emulated operation's ratio is more
+than SLOWER_FACTOR and it takes at least MIN_GAP_MS more than the host.
 
     python browser/tests/playwright/patches/cpu-emulation-timing.py
 """
@@ -207,7 +210,8 @@ def main() -> int:
         cells = [f"{ms['host'][key]:14.2f}"]
         for name in list(identities)[1:]:
             got, base = ms[name][key], ms["host"][key]
-            ratio = got / base if base else float("inf")
+            ratio = statistics.median(
+                e[key] / h[key] if h[key] else float("inf") for e, h in zip(runs[name], runs["host"]))
             cells.append(f"{got:7.2f} {ratio:5.2f}x")
             factor = SLOWER_FACTOR["arm64" if name == "arm64" else "x86 vendor"]
             if ratio > factor and got - base >= MIN_GAP_MS:
