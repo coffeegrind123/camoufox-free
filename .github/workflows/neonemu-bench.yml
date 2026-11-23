@@ -1,21 +1,51 @@
-name: estimate lookup bench (throwaway)
+name: emulation profile (throwaway)
 on:
   push:
     branches: [tmp/neonemu-bench]
 permissions:
   contents: read
+  actions: read
 jobs:
-  bench:
-    strategy:
-      fail-fast: false
-      matrix:
-        run: [1, 2, 3, 4, 5, 6]
+  profile:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.12"}
       - run: |
-          grep -m1 "model name" /proc/cpuinfo
-          echo "GDS: $(cat /sys/devices/system/cpu/vulnerabilities/gather_data_sampling 2>/dev/null || echo n/a)"
-          clang -O3 -mavx2 -mfma -mf16c -I browser/additions/gfx/skia/skia .github/prof/gather.c -o gather
-          ./gather
-          ./gather
+          pip install -r ci/requirements.txt
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends xvfb libgtk-3-0 libasound2t64 libdbus-glib-1-2 libx11-xcb1 \
+            libxcb-shm0 libxcomposite1 libxcursor1 libxdamage1 libxfixes3 libxi6 libxrandr2 libxtst6 libpci3 zstd \
+            libegl1 libegl-mesa0 libgl1-mesa-dri libgles2
+      - uses: actions/download-artifact@v4
+        with:
+          name: camoufox-dist
+          run-id: 45167662818
+          github-token: ${{ github.token }}
+      - run: |
+          mkdir -p .ci-browser && zstd -d -c camoufox-dist.tar.zst | tar -C .ci-browser -xf -
+          echo "CAMOUFOX_BINARY=$(realpath .ci-browser/bin/camoufox-bin)" >> $GITHUB_ENV
+          pip install -e python
+      - uses: ./.github/actions/fpgen-model
+      - run: grep -m1 "model name" /proc/cpuinfo; grep -o -m1 "gather_data_sampling[^ ]*" /proc/cpuinfo || true; cat /sys/devices/system/cpu/vulnerabilities/gather_data_sampling || true
+      - name: perf
+        run: |
+          sudo apt-get install -y -qq linux-tools-common linux-tools-$(uname -r) >/dev/null 2>&1 || sudo apt-get install -y -qq linux-tools-generic >/dev/null
+          sudo sysctl -w kernel.perf_event_paranoid=-1 kernel.kptr_restrict=0
+          for job in "0 hue" "3 hue" "3 color-dodge"; do
+            set -- $job
+            echo "=========== pref $1 $2"
+            xvfb-run -a python3 .github/prof/prof.py $1 $2 "$CAMOUFOX_BINARY" > prof.log 2>&1 &
+            for i in $(seq 1 60); do grep -q READY prof.log && break; sleep 1; done
+            sleep 3
+            sudo perf record -a -F 999 -o perf.data -- sleep 10 2>/dev/null
+            wait
+            tail -3 prof.log
+            sudo perf report -i perf.data --stdio --sort dso,sym --percent-limit 0.7 2>/dev/null | grep -v "^#" | grep -v "^$" | grep -v kallsyms | cut -c1-110 | head -25
+            sym=$(sudo perf report -i perf.data --stdio --sort sym --percent-limit 3 2>/dev/null | grep "\[\.\]" | grep -E "(armhsw|ml3)::" | sed 's/.*\[\.\] //' | head -1)
+            echo "--- annotate: ${sym:0:40}"
+            sudo perf annotate -i perf.data --stdio "$sym" 2>/dev/null > ann.txt || true
+            python3 .github/prof/cat.py ann.txt
+            echo "--- hottest"; grep -E "^\s+[0-9]+\.[0-9]+ +:" ann.txt | sort -rn | head -70 | cut -c1-120
+          done
