@@ -366,6 +366,22 @@ extern "C" void NEON_EMU_CAT(NS, op_w8_cvtnu)(unsigned char* o, const unsigned c
   }
 }
 
+// SkRasterPipeline_opts.h's ArmUnchecked::max0, MAXPS(0, v + 0), against
+// FMAX(v, 0) (clip_channel's max(c, 0.0f)), every input.
+extern "C" void NEON_EMU_CAT(NS, op_w8_max0)(unsigned char* o, const unsigned char* a,
+                                          const unsigned char* b, const unsigned char* c,
+                                          unsigned long n) { (void)b; (void)c;
+  for (unsigned long i = 0; i < n; i++) {
+#if NEON_EMU_FAST
+    __m256 z = _mm256_setzero_ps();
+    __m256 WA = _mm256_loadu_ps((const float*)(a + i * 32));
+    _mm256_storeu_ps((float*)(o + i * 32), _mm256_max_ps(z, _mm256_add_ps(WA, z)));
+#else
+    for (int h = 0; h < 2; h++) st(o + i * 32 + h * 16, vmaxq_f32(ld<float32x4_t>(a + i * 32 + h * 16), vdupq_n_f32(0.0f)));
+#endif
+  }
+}
+
 // SkNeonEmuAffine.h against filter_affine<clamp, clamp>'s loop as
 // SkBitmapProcState_matrixProcs.cpp writes it. Random positions and steps,
 // each shifted down by 0..31 bits so that every magnitude occurs, from
