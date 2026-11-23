@@ -166,6 +166,23 @@ def measure(pref: int) -> dict:
     return result
 
 
+def cpu_model() -> str:
+    try:
+        for line in Path("/proc/cpuinfo").read_text().splitlines():
+            if line.startswith("model name"):
+                return line.split(":", 1)[1].strip()
+    except OSError:
+        pass
+    return platform.processor() or "unknown"
+
+
+def gds_status() -> str:
+    try:
+        return Path("/sys/devices/system/cpu/vulnerabilities/gather_data_sampling").read_text().strip()
+    except OSError:
+        return "n/a"
+
+
 def main() -> int:
     host = host_vendor()
     if platform.machine().lower() not in ("x86_64", "amd64") or not host:
@@ -182,6 +199,9 @@ def main() -> int:
 
     failures = []
     keys = list(ms["host"])
+    # Ratios differ between runner CPUs (gathers are slow under the GDS
+    # microcode fix), so the CPU is part of the result.
+    print(f"  host CPU: {cpu_model()}; gather_data_sampling: {gds_status()}")
     print(f"  {'ms per operation':26} " + " ".join(f"{n.split()[0]:>14}" for n in identities))
     for key in keys:
         cells = [f"{ms['host'][key]:14.2f}"]
