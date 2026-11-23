@@ -370,6 +370,7 @@ extern "C" void NEON_EMU_CAT(NS, op_w8_cvtnu)(unsigned char* o, const unsigned c
 // SkBitmapProcState_matrixProcs.cpp writes it. Random positions and steps,
 // each shifted down by 0..31 bits so that every magnitude occurs, from
 // in-range draws to wrapping sums; maxima up to 14 bits; 0..13 pixels.
+#if !NEON_EMU_FAST
 // SkTPin(f >> 16, 0, max): std::max(0, std::min(v, max)).
 static uint32_t stock_clamp(int32_t f, int max) {
   int v = f >> 16;
@@ -382,6 +383,7 @@ static uint32_t stock_pack(int32_t f, int max) {
   p = (p << 14) | stock_clamp((int32_t)((uint32_t)f + 0x10000u), max);
   return p;
 }
+#endif
 extern "C" void NEON_EMU_CAT(NS, op_affine_clamp)(unsigned char* o, const unsigned char* a,
                                           const unsigned char* b, const unsigned char* c,
                                           unsigned long n) { (void)c;
