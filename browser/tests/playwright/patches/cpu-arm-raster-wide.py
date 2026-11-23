@@ -6,9 +6,11 @@ raster pipeline runs at AVX2's width with the AArch64 tier's helpers
 (SkOpts_armhsw.cpp, SKRP_ARM_SEMANTICS in cpu-vendor-estimates.patch): a pixel
 does not depend on how many are computed at once, and every helper whose
 AArch64 definition differs from AVX2's is that definition, run through
-SkNeonEmu.h. MOZ_CAMOUFOX_ARM_RASTER_NARROW keeps the 4-wide emulated tier
+SkNeonEmu.h. Rotated and skewed drawImage go through AArch64's legacy
+samplers instead, four pixels at a time (SkNeonEmuAffine.h).
+MOZ_CAMOUFOX_ARM_RASTER_NARROW keeps the 4-wide emulated tier
 (SkOpts_neonemu_hsw.cpp), which the cpu-vendor-estimates guard checks against
-stock Firefox on an Apple M4.
+stock Firefox on an Apple M4, and the emulated samplers.
 
 This guard draws a battery that reaches the pipeline's helpers -- every
 composite operation over translucent gradients, scaled and rotated drawImage

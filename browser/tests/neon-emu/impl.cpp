@@ -408,6 +408,70 @@ extern "C" void NEON_EMU_CAT(NS, op_affine_clamp)(unsigned char* o, const unsign
   }
 }
 
+// SkNeonEmuAffine.h's four-pixel bilerp against SkBitmapProcState_opts.h's
+// NEON filter_and_scale_by_alpha, one pixel at a time. Texels are random
+// bytes; weights 0..16 (decoding gives 0..15); alpha scales 0..256.
+#if !NEON_EMU_FAST
+static void neon_filter_and_scale_by_alpha(unsigned x, unsigned y, uint32_t a00, uint32_t a01,
+                                           uint32_t a10, uint32_t a11, uint32_t* dst, uint16_t scale) {
+  uint8x8_t vy, vconst16_8, v16_y, vres;
+  uint16x4_t vx, vconst16_16, v16_x, tmp, vscale;
+  uint32x2_t va0, va1;
+  uint16x8_t tmp1, tmp2;
+  vy = vdup_n_u8(y);
+  vconst16_8 = vmov_n_u8(16);
+  v16_y = vsub_u8(vconst16_8, vy);
+  va0 = vdup_n_u32(a00);
+  va1 = vdup_n_u32(a10);
+  va0 = vset_lane_u32(a01, va0, 1);
+  va1 = vset_lane_u32(a11, va1, 1);
+  tmp1 = vmull_u8(vreinterpret_u8_u32(va0), v16_y);
+  tmp2 = vmull_u8(vreinterpret_u8_u32(va1), vy);
+  vx = vdup_n_u16(x);
+  vconst16_16 = vmov_n_u16(16);
+  v16_x = vsub_u16(vconst16_16, vx);
+  tmp = vmul_u16(vget_high_u16(tmp1), vx);
+  tmp = vmla_u16(tmp, vget_high_u16(tmp2), vx);
+  tmp = vmla_u16(tmp, vget_low_u16(tmp1), v16_x);
+  tmp = vmla_u16(tmp, vget_low_u16(tmp2), v16_x);
+  if (scale < 256) {
+    vscale = vdup_n_u16(scale);
+    tmp = vshr_n_u16(tmp, 8);
+    tmp = vmul_u16(tmp, vscale);
+  }
+  vres = vshrn_n_u16(vcombine_u16(tmp, vcreate_u16((uint64_t)0)), 8);
+  vst1_lane_u32(dst, vreinterpret_u32_u8(vres), 0);
+}
+#endif
+extern "C" void NEON_EMU_CAT(NS, op_bilerp4)(unsigned char* o, const unsigned char* a,
+                                          const unsigned char* b, const unsigned char* c,
+                                          unsigned long n) { (void)c;
+  for (unsigned long i = 0; i < n; i++) {
+    uint32_t px[16], w[8], out[4];
+    memcpy(px, a + i * 64, sizeof px);
+    memcpy(w, b + i * 32, sizeof w);
+    unsigned scale = (w[0] >> 8) % 257;
+    for (int k = 0; k < 8; k++) w[k] = (w[k] & 0xff) % 17;
+#if NEON_EMU_FAST
+    __m128i r = sk_neon_emu_bilerp4(_mm_loadu_si128((const __m128i*)(px + 0)), _mm_loadu_si128((const __m128i*)(px + 4)),
+                                    _mm_loadu_si128((const __m128i*)(px + 8)), _mm_loadu_si128((const __m128i*)(px + 12)),
+                                    _mm_loadu_si128((const __m128i*)(w + 0)), _mm_loadu_si128((const __m128i*)(w + 4)),
+                                    scale);
+    _mm_storeu_si128((__m128i*)out, r);
+    // The tail form, on the same pixels, must agree with both.
+    for (int p = 0; p < 4; p++) {
+      if (sk_neon_emu_bilerp1(px[p], px[4 + p], px[8 + p], px[12 + p], w[p], w[4 + p], scale) != out[p]) out[p] ^= 1;
+    }
+#else
+    for (int p = 0; p < 4; p++) {
+      neon_filter_and_scale_by_alpha(w[p], w[4 + p], px[p], px[4 + p], px[8 + p], px[12 + p], &out[p],
+                                     (uint16_t)scale);
+    }
+#endif
+    memcpy(o + i * 16, out, sizeof out);
+  }
+}
+
 // SkRasterPipeline_opts.h's lowp div255 under SKRP_ARM_SEMANTICS, against
 // the AArch64 tier's VRSRA and VRSHR.
 extern "C" void NEON_EMU_CAT(NS, op_w16_div255)(unsigned char* o, const unsigned char* a,
