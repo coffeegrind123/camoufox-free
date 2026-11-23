@@ -2023,7 +2023,7 @@ index 0000000000..747ae8cd9f
 +
 +#include "src/opts/SkOpts_ml3.cpp"
 diff --git a/gfx/skia/skia/src/opts/SkRasterPipeline_opts.h b/gfx/skia/skia/src/opts/SkRasterPipeline_opts.h
-index 9a0edd9594..2dca600aa6 100644
+index 9a0edd9594..a9190dcc7e 100644
 --- a/gfx/skia/skia/src/opts/SkRasterPipeline_opts.h
 +++ b/gfx/skia/skia/src/opts/SkRasterPipeline_opts.h
 @@ -108,7 +108,11 @@
@@ -2269,73 +2269,21 @@ index 9a0edd9594..2dca600aa6 100644
  BLEND_MODE(clear)    { return F0; }
  BLEND_MODE(srcatop)  { return mad(s, da, d*inv(sa)); }
  BLEND_MODE(dstatop)  { return mad(d, sa, s*inv(da)); }
-@@ -2246,16 +2391,23 @@
+@@ -2246,6 +2391,106 @@
  BLEND_MODE(difference) { return s + d - two(min(s*da, d*sa)); }
  BLEND_MODE(exclusion)  { return s + d - two(s*d); }
  
 +#if defined(SKRP_ARM_SEMANTICS)
-+    // The selects are on compares: one blend each instead of BSL's three.
-+    #define SKRP_BLEND_SEL arm_sel
-+#else
-+    #define SKRP_BLEND_SEL if_then_else
-+#endif
- BLEND_MODE(colorburn) {
--    return if_then_else(d == da,    d +    s*inv(da),
--           if_then_else(s ==  0, /* s + */ d*inv(sa),
--                                sa*(da - min(da, (da-d)*sa*rcp_fast(s))) + s*inv(da) + d*inv(sa)));
-+    return SKRP_BLEND_SEL(d == da,    d +    s*inv(da),
-+           SKRP_BLEND_SEL(s ==  0, /* s + */ d*inv(sa),
-+                                sa*(da - min(da, (da-d)*sa*rcp_fast_unless(s == 0, s))) + s*inv(da) + d*inv(sa)));
- }
- BLEND_MODE(colordodge) {
--    return if_then_else(d ==  0, /* d + */ s*inv(da),
--           if_then_else(s == sa,    s +    d*inv(sa),
--                                 sa*min(da, (d*sa)*rcp_fast(sa - s)) + s*inv(da) + d*inv(sa)));
-+    return SKRP_BLEND_SEL(d ==  0, /* d + */ s*inv(da),
-+           SKRP_BLEND_SEL(s == sa,    s +    d*inv(sa),
-+                                 sa*min(da, (d*sa)*rcp_fast_unless(s == sa, sa - s)) + s*inv(da) + d*inv(sa)));
- }
-+#undef SKRP_BLEND_SEL
- BLEND_MODE(hardlight) {
-     return s*inv(da) + d*inv(sa)
-          + if_then_else(two(s) <= sa, two(s*d), sa*da - two((da-d)*(sa-s)));
-@@ -2299,7 +2451,7 @@
-       sat = mx - mn;
- 
-     // Map min channel to 0, max channel to s, and scale the middle proportionally.
--    s = if_then_else(sat == 0.0f, 0.0f, s * rcp_fast(sat));
-+    s = if_then_else(sat == 0.0f, 0.0f, s * rcp_fast_unless(sat == 0.0f, sat));
-     *r = (*r - mn) * s;
-     *g = (*g - mn) * s;
-     *b = (*b - mn) * s;
-@@ -2319,18 +2471,168 @@
- SI void clip_color(F* r, F* g, F* b, F a) {
-     F   mn        = min(*r, min(*g, *b)),
-         mx        = max(*r, max(*g, *b)),
--        l         = lum(*r, *g, *b),
--        mn_scale  = (    l) * rcp_fast(l - mn),
--        mx_scale  = (a - l) * rcp_fast(mx - l);
-+        l         = lum(*r, *g, *b);
-     I32 clip_low  = cond_to_mask(mn < 0 && l != mn),
-         clip_high = cond_to_mask(mx > a && l != mx);
-+    F   mn_scale  = (    l) * rcp_fast_unless(~clip_low,  l - mn),
-+        mx_scale  = (a - l) * rcp_fast_unless(~clip_high, mx - l);
- 
-     *r = clip_channel(*r, l, clip_low, clip_high, mn_scale, mx_scale);
-     *g = clip_channel(*g, l, clip_low, clip_high, mn_scale, mx_scale);
-     *b = clip_channel(*b, l, clip_low, clip_high, mn_scale, mx_scale);
- }
- 
-+#if defined(SKRP_ARM_SEMANTICS)
 +// The non-separable modes run every pixel through about forty FMIN, FMAX and
-+// FMLA and three FRECPE/FRECPS, and each emulated one checks its lanes and
-+// branches. Here the stage runs first with unchecked forms (ArmUnchecked) that
-+// keep each lane's NaN-ness what AArch64's would be: FMLA is FMA; FMIN is the
-+// OR of both MINPS orders (which also gives -0 for +0 against -0, and a NaN
-+// for a NaN operand); FMAX is the AND of both MAXPS orders (+0 for the tie),
-+// all ones where an operand is a NaN; FRECPE is SkNeonEmuWide.h's form and
-+// FRECPS one FNMADD, exact while the divisor's exponent field is 1..252, and
-+// a lane outside that marks the vector bad. Selects, compares and the other
++// FMLA and three FRECPE/FRECPS, dodge and burn through FMIN and FRECPE/FRECPS
++// per channel, and each emulated one checks its lanes and branches. Here the
++// stage runs first with unchecked forms (ArmUnchecked) that keep each lane's
++// NaN-ness what AArch64's would be: FMLA is FMA; FMIN is the OR of both MINPS
++// orders (which also gives -0 for +0 against -0, and a NaN for a NaN
++// operand); FMAX is the AND of both MAXPS orders (+0 for the tie), all ones
++// where an operand is a NaN; FRECPE is SkNeonEmuWide.h's form and FRECPS one
++// FNMADD, exact while the divisor's exponent field is 1..252, and a lane
++// outside that marks the vector bad. Selects, compares and the other
 +// arithmetic are IEEE on both ISAs, so the NaN lanes are the same at every
 +// step and a lane that is not NaN has the same bits. When nothing is marked
 +// bad and no output lane is a NaN the outputs are exact; otherwise the stage
@@ -2374,6 +2322,96 @@ index 9a0edd9594..2dca600aa6 100644
 +    }
 +};
 +
++// Out of line and cold, so the common path keeps its registers.
++template <class Body>
++static __attribute__((noinline, cold)) void arm_checked(F* rgba, F dr, F dg, F db, F da) {
++    ArmChecked p;
++    Body::run(p, rgba[0], rgba[1], rgba[2], rgba[3], dr, dg, db, da);
++}
++template <class Body>
++SI void arm_verified(F& r, F& g, F& b, F& a, F dr, F dg, F db, F da) {
++    F in[4] = {r, g, b, a};
++    ArmUnchecked p;
++    Body::run(p, r, g, b, a, dr, dg, db, da);
++    __m256 redo = _mm256_or_ps(
++            _mm256_or_ps(_mm256_cmp_ps(arm_m(r), arm_m(g), _CMP_UNORD_Q),
++                         _mm256_cmp_ps(arm_m(b), arm_m(a), _CMP_UNORD_Q)),
++            p.bad);
++    if (__builtin_expect(_mm256_movemask_ps(redo) != 0, 0)) {
++        arm_checked<Body>(in, dr, dg, db, da);
++        r = in[0];
++        g = in[1];
++        b = in[2];
++        a = in[3];
++    }
++}
++
++// colorburn and colordodge (below, without SKRP_ARM_SEMANTICS) through the
++// policy; the selects are on compares, one blend each instead of BSL's three.
++template <class P> SI F arm_colorburn(P& p, F s, F d, F sa, F da) {
++    return arm_sel(d == da,    d +    s*inv(da),
++           arm_sel(s ==  0, /* s + */ d*inv(sa),
++                            sa*(da - p.min(da, (da-d)*sa*p.rcp(s == 0, s))) + s*inv(da) + d*inv(sa)));
++}
++template <class P> SI F arm_colordodge(P& p, F s, F d, F sa, F da) {
++    return arm_sel(d ==  0, /* d + */ s*inv(da),
++           arm_sel(s == sa,    s +    d*inv(sa),
++                            sa*p.min(da, (d*sa)*p.rcp(s == sa, sa - s)) + s*inv(da) + d*inv(sa)));
++}
++#define SKRP_ARM_SEP_BODY(name)                                                         \
++    struct Arm_##name {                                                                 \
++        template <class P>                                                              \
++        static void run(P& p, F& r, F& g, F& b, F& a, F dr, F dg, F db, F da) {         \
++            r = arm_##name(p, r, dr, a, da);                                            \
++            g = arm_##name(p, g, dg, a, da);                                            \
++            b = arm_##name(p, b, db, a, da);                                            \
++            a = p.mad(da, inv(a), a);                                                   \
++        }                                                                               \
++    };                                                                                  \
++    HIGHP_STAGE(name, NoCtx) { arm_verified<Arm_##name>(r,g,b,a, dr,dg,db,da); }
++SKRP_ARM_SEP_BODY(colorburn)
++SKRP_ARM_SEP_BODY(colordodge)
++#undef SKRP_ARM_SEP_BODY
++#else
+ BLEND_MODE(colorburn) {
+     return if_then_else(d == da,    d +    s*inv(da),
+            if_then_else(s ==  0, /* s + */ d*inv(sa),
+@@ -2256,6 +2501,7 @@
+            if_then_else(s == sa,    s +    d*inv(sa),
+                                  sa*min(da, (d*sa)*rcp_fast(sa - s)) + s*inv(da) + d*inv(sa)));
+ }
++#endif
+ BLEND_MODE(hardlight) {
+     return s*inv(da) + d*inv(sa)
+          + if_then_else(two(s) <= sa, two(s*d), sa*da - two((da-d)*(sa-s)));
+@@ -2299,7 +2545,7 @@
+       sat = mx - mn;
+ 
+     // Map min channel to 0, max channel to s, and scale the middle proportionally.
+-    s = if_then_else(sat == 0.0f, 0.0f, s * rcp_fast(sat));
++    s = if_then_else(sat == 0.0f, 0.0f, s * rcp_fast_unless(sat == 0.0f, sat));
+     *r = (*r - mn) * s;
+     *g = (*g - mn) * s;
+     *b = (*b - mn) * s;
+@@ -2319,18 +2565,103 @@
+ SI void clip_color(F* r, F* g, F* b, F a) {
+     F   mn        = min(*r, min(*g, *b)),
+         mx        = max(*r, max(*g, *b)),
+-        l         = lum(*r, *g, *b),
+-        mn_scale  = (    l) * rcp_fast(l - mn),
+-        mx_scale  = (a - l) * rcp_fast(mx - l);
++        l         = lum(*r, *g, *b);
+     I32 clip_low  = cond_to_mask(mn < 0 && l != mn),
+         clip_high = cond_to_mask(mx > a && l != mx);
++    F   mn_scale  = (    l) * rcp_fast_unless(~clip_low,  l - mn),
++        mx_scale  = (a - l) * rcp_fast_unless(~clip_high, mx - l);
+ 
+     *r = clip_channel(*r, l, clip_low, clip_high, mn_scale, mx_scale);
+     *g = clip_channel(*g, l, clip_low, clip_high, mn_scale, mx_scale);
+     *b = clip_channel(*b, l, clip_low, clip_high, mn_scale, mx_scale);
+ }
+ 
++#if defined(SKRP_ARM_SEMANTICS)
 +template <class P> SI F arm_sat(P& p, F r, F g, F b) { return p.max(r, p.max(g,b)) - p.min(r, p.min(g,b)); }
 +template <class P> SI F arm_lum(P& p, F r, F g, F b) { return p.mad(r, 0.30f, p.mad(g, 0.59f, b*0.11f)); }
 +
@@ -2448,39 +2486,21 @@ index 9a0edd9594..2dca600aa6 100644
 +    b = p.mad(b, inv(da), p.mad(db, inv(a), B));
 +    a = a + p.nmad(a, da, da);
 +}
-+// Out of line and cold, so the common path keeps its registers.
-+template <ArmNonSep M>
-+static __attribute__((noinline, cold)) void arm_nonsep_checked(F* rgba, F dr, F dg, F db, F da) {
-+    ArmChecked p;
-+    arm_nonsep_body<M>(p, rgba[0], rgba[1], rgba[2], rgba[3], dr, dg, db, da);
-+}
-+template <ArmNonSep M>
-+SI void arm_nonsep(F& r, F& g, F& b, F& a, F dr, F dg, F db, F da) {
-+    F in[4] = {r, g, b, a};
-+    ArmUnchecked p;
-+    arm_nonsep_body<M>(p, r, g, b, a, dr, dg, db, da);
-+    __m256 redo = _mm256_or_ps(
-+            _mm256_or_ps(_mm256_cmp_ps(arm_m(r), arm_m(g), _CMP_UNORD_Q),
-+                         _mm256_cmp_ps(arm_m(b), arm_m(a), _CMP_UNORD_Q)),
-+            p.bad);
-+    if (__builtin_expect(_mm256_movemask_ps(redo) != 0, 0)) {
-+        arm_nonsep_checked<M>(in, dr, dg, db, da);
-+        r = in[0];
-+        g = in[1];
-+        b = in[2];
-+        a = in[3];
++template <ArmNonSep M> struct ArmNonSepBody {
++    template <class P> static void run(P& p, F& r, F& g, F& b, F& a, F dr, F dg, F db, F da) {
++        arm_nonsep_body<M>(p, r, g, b, a, dr, dg, db, da);
 +    }
-+}
++};
 +#endif  // SKRP_ARM_SEMANTICS
 +
  HIGHP_STAGE(hue, NoCtx) {
 +#if defined(SKRP_ARM_SEMANTICS)
-+    arm_nonsep<ArmNonSep::Hue>(r,g,b,a, dr,dg,db,da);
++    arm_verified<ArmNonSepBody<ArmNonSep::Hue>>(r,g,b,a, dr,dg,db,da);
 +#else
      F R = r*a,
        G = g*a,
        B = b*a;
-@@ -2343,8 +2645,12 @@
+@@ -2343,8 +2674,12 @@
      g = mad(g, inv(da), mad(dg, inv(a), G));
      b = mad(b, inv(da), mad(db, inv(a), B));
      a = a + nmad(a, da, da);
@@ -2488,12 +2508,12 @@ index 9a0edd9594..2dca600aa6 100644
  }
  HIGHP_STAGE(saturation, NoCtx) {
 +#if defined(SKRP_ARM_SEMANTICS)
-+    arm_nonsep<ArmNonSep::Saturation>(r,g,b,a, dr,dg,db,da);
++    arm_verified<ArmNonSepBody<ArmNonSep::Saturation>>(r,g,b,a, dr,dg,db,da);
 +#else
      F R = dr*a,
        G = dg*a,
        B = db*a;
-@@ -2357,8 +2663,12 @@
+@@ -2357,8 +2692,12 @@
      g = mad(g, inv(da), mad(dg, inv(a), G));
      b = mad(b, inv(da), mad(db, inv(a), B));
      a = a + nmad(a, da, da);
@@ -2501,12 +2521,12 @@ index 9a0edd9594..2dca600aa6 100644
  }
  HIGHP_STAGE(color, NoCtx) {
 +#if defined(SKRP_ARM_SEMANTICS)
-+    arm_nonsep<ArmNonSep::Color>(r,g,b,a, dr,dg,db,da);
++    arm_verified<ArmNonSepBody<ArmNonSep::Color>>(r,g,b,a, dr,dg,db,da);
 +#else
      F R = r*da,
        G = g*da,
        B = b*da;
-@@ -2370,8 +2680,12 @@
+@@ -2370,8 +2709,12 @@
      g = mad(g, inv(da), mad(dg, inv(a), G));
      b = mad(b, inv(da), mad(db, inv(a), B));
      a = a + nmad(a, da, da);
@@ -2514,12 +2534,12 @@ index 9a0edd9594..2dca600aa6 100644
  }
  HIGHP_STAGE(luminosity, NoCtx) {
 +#if defined(SKRP_ARM_SEMANTICS)
-+    arm_nonsep<ArmNonSep::Luminosity>(r,g,b,a, dr,dg,db,da);
++    arm_verified<ArmNonSepBody<ArmNonSep::Luminosity>>(r,g,b,a, dr,dg,db,da);
 +#else
      F R = dr*a,
        G = dg*a,
        B = db*a;
-@@ -2383,6 +2697,7 @@
+@@ -2383,6 +2726,7 @@
      g = mad(g, inv(da), mad(dg, inv(a), G));
      b = mad(b, inv(da), mad(db, inv(a), B));
      a = a + nmad(a, da, da);
@@ -2527,7 +2547,7 @@ index 9a0edd9594..2dca600aa6 100644
  }
  
  HIGHP_STAGE(srcover_rgba_8888, const SkRasterPipelineContexts::MemoryCtx* ctx) {
-@@ -2410,7 +2725,11 @@
+@@ -2410,7 +2754,11 @@
      store(ptr, dst);
  }
  
@@ -2539,7 +2559,7 @@ index 9a0edd9594..2dca600aa6 100644
  
  HIGHP_STAGE(clamp_01, NoCtx) {
      r = clamp_01_(r);
-@@ -5476,6 +5795,10 @@
+@@ -5476,6 +5824,10 @@
      // With NEON we can compute [2] just as fast as [3], so let's be correct.
      // First we compute v + ((v+128)>>8), then one more round of (...+128)>>8 to finish up:
      return vrshrq_n_u16(vrsraq_n_u16(v, v, 8), 8);
@@ -2550,7 +2570,7 @@ index 9a0edd9594..2dca600aa6 100644
  #else
      // Otherwise, use [3], which is never wrong by more than 1:
      return (v+255)/256;
-@@ -5486,7 +5809,7 @@
+@@ -5486,7 +5838,7 @@
   * div255_accurate guarantees the right answer on all platforms, at the expense of performance.
   */
  SI U16 div255_accurate(U16 v) {
@@ -2559,7 +2579,7 @@ index 9a0edd9594..2dca600aa6 100644
      // Our NEON implementation of div255 is already correct for all inputs:
      return div255(v);
  #else
-@@ -5600,9 +5923,22 @@
+@@ -5600,9 +5952,22 @@
  
  SI U32 trunc_(F x) { return (U32)cast<I32>(x); }
  
@@ -2583,7 +2603,7 @@ index 9a0edd9594..2dca600aa6 100644
      F e = _mm512_rcp14_ps(x);
      return _mm512_fnmadd_ps(x, e, _mm512_set1_ps(2.0f)) * e;
  #elif defined(SKRP_CPU_AVX2)
-@@ -5630,7 +5966,9 @@
+@@ -5630,7 +5995,9 @@
  #endif
  }
  SI F sqrt_(F x) {
@@ -2594,7 +2614,7 @@ index 9a0edd9594..2dca600aa6 100644
      return _mm512_sqrt_ps(x);
  #elif defined(SKRP_CPU_AVX2)
      __m256 lo,hi;
-@@ -5675,6 +6013,8 @@
+@@ -5675,6 +6042,8 @@
      float32x4_t lo,hi;
      split(x, &lo,&hi);
      return join<F>(vrndmq_f32(lo), vrndmq_f32(hi));
@@ -2603,7 +2623,7 @@ index 9a0edd9594..2dca600aa6 100644
  #elif defined(SKRP_CPU_ML4)
      return _mm512_floor_ps(x);
  #elif defined(SKRP_CPU_AVX2)
-@@ -5705,7 +6045,15 @@
+@@ -5705,7 +6074,15 @@
  // The result is a number on [-1, 1).
  // Note: on neon this is a saturating multiply while the others are not.
  SI I16 scaled_mult(I16 a, I16 b) {
