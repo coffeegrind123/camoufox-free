@@ -3,7 +3,9 @@ The wide ARM64 raster tier draws what the 4-wide emulated one draws.
 
 With general.cpu_identity = ARM64 on a CPU with AVX2, FMA and F16C, Skia's
 raster pipeline runs at AVX2's width with the AArch64 tier's helpers
-(SkOpts_armhsw.cpp, SKRP_ARM_SEMANTICS in cpu-vendor-estimates.patch): a pixel
+(SkOpts_armhsw.cpp, or SkOpts_armskx.cpp, the same built for AVX-512VL's 32
+registers, where the CPU has them; SKRP_ARM_SEMANTICS in
+cpu-vendor-estimates.patch): a pixel
 does not depend on how many are computed at once, and every helper whose
 AArch64 definition differs from AVX2's is that definition, run through
 SkNeonEmu.h. Rotated and skewed drawImage go through AArch64's legacy

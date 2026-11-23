@@ -910,7 +910,7 @@ index 7c81493630..3f171d0fa7 100644
      'skia/src/sksl/SkSLLexer.cpp',
      'skia/src/utils/SkParse.cpp',
      'skia/src/utils/SkParsePath.cpp',
-@@ -583,6 +584,51 @@
+@@ -583,6 +584,58 @@
      ]
      SOURCES['skia/modules/skcms/src/skcms_TransformHsw.cc'].flags += skia_opt_flags
      SOURCES['skia/src/opts/SkOpts_ml3.cpp'].flags += skia_opt_flags
@@ -939,6 +939,13 @@ index 7c81493630..3f171d0fa7 100644
 +    SOURCES += ['skia/src/opts/SkOpts_armhsw.cpp']
 +    SOURCES['skia/src/opts/SkOpts_armhsw.cpp'].flags += skia_opt_flags + [
 +        '-Dskvx=skvx_hsw', '-mavx2', '-mf16c', '-mfma']
++    # The same with AVX-512 F/DQ/BW/VL: 32 vector registers and EVEX forms at
++    # 256 bits. Without AVX512CD Skia keeps its AVX2 tier (SkFeatures.h), and
++    # 256-bit vectors keep auto-vectorised loops off the 512-bit units.
++    SOURCES += ['skia/src/opts/SkOpts_armskx.cpp']
++    SOURCES['skia/src/opts/SkOpts_armskx.cpp'].flags += skia_opt_flags + [
++        '-Dskvx=skvx_armskx', '-mavx2', '-mf16c', '-mfma', '-mavx512f',
++        '-mavx512dq', '-mavx512bw', '-mavx512vl', '-mprefer-vector-width=256']
 +elif CONFIG['TARGET_CPU'] == 'aarch64':
 +    # general.cpu_identity = Intel or AMD: Skia's x86-64 code built against
 +    # simde's x86emu, chosen at startup. Each tier keeps its own skvx, as on x86.
@@ -1751,17 +1758,18 @@ index adfbdc30f0..88e729ecf4 100644
  #define SK_OPTS_TARGET SK_OPTS_TARGET_DEFAULT
  #include "src/opts/SkOpts_SetTarget.h"
  
-@@ -45,6 +48,9 @@
+@@ -45,6 +48,10 @@
  
      // Each Init_foo() is defined in src/opts/SkOpts_foo.cpp.
      void Init_ml3();
 +    void Init_neonemu();
 +    void Init_neonemu_hsw();
 +    void Init_armhsw();
++    void Init_armskx();
      void Init_ml4();
      void Init_lasx();
  
-@@ -63,6 +69,27 @@
+@@ -63,6 +70,32 @@
              #endif
          #endif
  
@@ -1778,6 +1786,11 @@ index adfbdc30f0..88e729ecf4 100644
 +                Init_neonemu();
 +            } else if (getenv("MOZ_CAMOUFOX_ARM_RASTER_NARROW")) {
 +                Init_neonemu_hsw();
++            } else if (SkCpu::Supports(SkX64::AVX512F | SkX64::AVX512DQ | SkX64::AVX512BW |
++                                       SkX64::AVX512VL)) {
++                // The same tier with AVX-512VL's 32 vector registers
++                // (SkOpts_armskx.cpp).
++                Init_armskx();
 +            } else {
 +                Init_armhsw();
 +            }
