@@ -55,6 +55,18 @@ BATTERY = """async () => {
                     "exclusion", "hue", "saturation", "color", "luminosity"]) {
     const [, ctx] = canvas(); base(ctx); ctx.globalCompositeOperation = op; over(ctx); out["op:" + op] = hash(ctx);
   }
+  // Grey under or over part of the layer: runs of pixels where every lane of
+  // set_sat's or clip_color's reciprocal is selected away, which the wide tier
+  // skips, next to runs where only some are.
+  for (const op of ["color-dodge", "color-burn", "hue", "saturation", "color", "luminosity"]) {
+    for (const greyOver of [false, true]) {
+      const [, ctx] = canvas(); base(ctx);
+      if (!greyOver) { ctx.fillStyle = "#808080"; ctx.fillRect(0, 0, W * 0.6, H); }
+      ctx.globalCompositeOperation = op; over(ctx);
+      if (greyOver) { ctx.fillStyle = "rgba(128,128,128,0.7)"; ctx.fillRect(W * 0.3, 0, W * 0.5, H); }
+      out[`op-grey:${op}:${greyOver ? "over" : "under"}`] = hash(ctx);
+    }
+  }
   const [src, sctx] = canvas(); base(sctx); over(sctx);
   for (const q of ["low", "medium", "high"]) {
     for (const [name, m] of [["scale", [1.37, 0, 0, 0.71, 3.5, -2.25]], ["rotate", [0.86, 0.5, -0.5, 0.86, 40, -20]],
