@@ -2072,7 +2072,7 @@ index 0000000000..747ae8cd9f
 +
 +#include "src/opts/SkOpts_ml3.cpp"
 diff --git a/gfx/skia/skia/src/opts/SkRasterPipeline_opts.h b/gfx/skia/skia/src/opts/SkRasterPipeline_opts.h
-index 9a0edd9594..a9190dcc7e 100644
+index 9a0edd9594..11d837cef2 100644
 --- a/gfx/skia/skia/src/opts/SkRasterPipeline_opts.h
 +++ b/gfx/skia/skia/src/opts/SkRasterPipeline_opts.h
 @@ -108,7 +108,11 @@
@@ -2318,7 +2318,7 @@ index 9a0edd9594..a9190dcc7e 100644
  BLEND_MODE(clear)    { return F0; }
  BLEND_MODE(srcatop)  { return mad(s, da, d*inv(sa)); }
  BLEND_MODE(dstatop)  { return mad(d, sa, s*inv(da)); }
-@@ -2246,6 +2391,106 @@
+@@ -2246,6 +2391,113 @@
  BLEND_MODE(difference) { return s + d - two(min(s*da, d*sa)); }
  BLEND_MODE(exclusion)  { return s + d - two(s*d); }
  
@@ -2345,7 +2345,15 @@ index 9a0edd9594..a9190dcc7e 100644
 +    F rcp(I32 dropped, F v) { return rcp_fast_unless(dropped, v); }
 +};
 +struct ArmUnchecked {
-+    __m256 bad = _mm256_setzero_ps();
++    // The smallest and largest divisor exponent fields so far; a lane is
++    // out of range if either is (bad()).
++    __m256i exlo = _mm256_set1_epi32(0x7f800000),
++            exhi = _mm256_setzero_si256();
++    __m256 bad() const {
++        return _mm256_castsi256_ps(_mm256_or_si256(
++                _mm256_cmpeq_epi32(exlo, _mm256_setzero_si256()),
++                _mm256_cmpgt_epi32(exhi, _mm256_set1_epi32(252 << 23))));
++    }
 +
 +    F min(F a, F b) {
 +        __m256 x = arm_m(a), y = arm_m(b);
@@ -2363,9 +2371,8 @@ index 9a0edd9594..a9190dcc7e 100644
 +        __m256 x = arm_m(arm_sel(dropped, F1, v));
 +        __m256i u = _mm256_castps_si256(x),
 +                ex = _mm256_and_si256(u, _mm256_set1_epi32(0x7f800000));
-+        bad = _mm256_or_ps(bad, _mm256_castsi256_ps(
-+                _mm256_or_si256(_mm256_cmpeq_epi32(ex, _mm256_setzero_si256()),
-+                                _mm256_cmpgt_epi32(ex, _mm256_set1_epi32(252 << 23)))));
++        exlo = _mm256_min_epu32(exlo, ex);
++        exhi = _mm256_max_epu32(exhi, ex);
 +        __m256 e = _mm256_castsi256_ps(neon_emu_recpe8_normal(u));
 +        return arm_f(_mm256_mul_ps(_mm256_fnmadd_ps(x, e, _mm256_set1_ps(2.0f)), e));
 +    }
@@ -2385,7 +2392,7 @@ index 9a0edd9594..a9190dcc7e 100644
 +    __m256 redo = _mm256_or_ps(
 +            _mm256_or_ps(_mm256_cmp_ps(arm_m(r), arm_m(g), _CMP_UNORD_Q),
 +                         _mm256_cmp_ps(arm_m(b), arm_m(a), _CMP_UNORD_Q)),
-+            p.bad);
++            p.bad());
 +    if (__builtin_expect(_mm256_movemask_ps(redo) != 0, 0)) {
 +        arm_checked<Body>(in, dr, dg, db, da);
 +        r = in[0];
@@ -2425,7 +2432,7 @@ index 9a0edd9594..a9190dcc7e 100644
  BLEND_MODE(colorburn) {
      return if_then_else(d == da,    d +    s*inv(da),
             if_then_else(s ==  0, /* s + */ d*inv(sa),
-@@ -2256,6 +2501,7 @@
+@@ -2256,6 +2508,7 @@
             if_then_else(s == sa,    s +    d*inv(sa),
                                   sa*min(da, (d*sa)*rcp_fast(sa - s)) + s*inv(da) + d*inv(sa)));
  }
@@ -2433,7 +2440,7 @@ index 9a0edd9594..a9190dcc7e 100644
  BLEND_MODE(hardlight) {
      return s*inv(da) + d*inv(sa)
           + if_then_else(two(s) <= sa, two(s*d), sa*da - two((da-d)*(sa-s)));
-@@ -2299,7 +2545,7 @@
+@@ -2299,7 +2552,7 @@
        sat = mx - mn;
  
      // Map min channel to 0, max channel to s, and scale the middle proportionally.
@@ -2442,7 +2449,7 @@ index 9a0edd9594..a9190dcc7e 100644
      *r = (*r - mn) * s;
      *g = (*g - mn) * s;
      *b = (*b - mn) * s;
-@@ -2319,18 +2565,103 @@
+@@ -2319,18 +2572,103 @@
  SI void clip_color(F* r, F* g, F* b, F a) {
      F   mn        = min(*r, min(*g, *b)),
          mx        = max(*r, max(*g, *b)),
@@ -2549,7 +2556,7 @@ index 9a0edd9594..a9190dcc7e 100644
      F R = r*a,
        G = g*a,
        B = b*a;
-@@ -2343,8 +2674,12 @@
+@@ -2343,8 +2681,12 @@
      g = mad(g, inv(da), mad(dg, inv(a), G));
      b = mad(b, inv(da), mad(db, inv(a), B));
      a = a + nmad(a, da, da);
@@ -2562,7 +2569,7 @@ index 9a0edd9594..a9190dcc7e 100644
      F R = dr*a,
        G = dg*a,
        B = db*a;
-@@ -2357,8 +2692,12 @@
+@@ -2357,8 +2699,12 @@
      g = mad(g, inv(da), mad(dg, inv(a), G));
      b = mad(b, inv(da), mad(db, inv(a), B));
      a = a + nmad(a, da, da);
@@ -2575,7 +2582,7 @@ index 9a0edd9594..a9190dcc7e 100644
      F R = r*da,
        G = g*da,
        B = b*da;
-@@ -2370,8 +2709,12 @@
+@@ -2370,8 +2716,12 @@
      g = mad(g, inv(da), mad(dg, inv(a), G));
      b = mad(b, inv(da), mad(db, inv(a), B));
      a = a + nmad(a, da, da);
@@ -2588,7 +2595,7 @@ index 9a0edd9594..a9190dcc7e 100644
      F R = dr*a,
        G = dg*a,
        B = db*a;
-@@ -2383,6 +2726,7 @@
+@@ -2383,6 +2733,7 @@
      g = mad(g, inv(da), mad(dg, inv(a), G));
      b = mad(b, inv(da), mad(db, inv(a), B));
      a = a + nmad(a, da, da);
@@ -2596,7 +2603,7 @@ index 9a0edd9594..a9190dcc7e 100644
  }
  
  HIGHP_STAGE(srcover_rgba_8888, const SkRasterPipelineContexts::MemoryCtx* ctx) {
-@@ -2410,7 +2754,11 @@
+@@ -2410,7 +2761,11 @@
      store(ptr, dst);
  }
  
@@ -2608,7 +2615,7 @@ index 9a0edd9594..a9190dcc7e 100644
  
  HIGHP_STAGE(clamp_01, NoCtx) {
      r = clamp_01_(r);
-@@ -5476,6 +5824,10 @@
+@@ -5476,6 +5831,10 @@
      // With NEON we can compute [2] just as fast as [3], so let's be correct.
      // First we compute v + ((v+128)>>8), then one more round of (...+128)>>8 to finish up:
      return vrshrq_n_u16(vrsraq_n_u16(v, v, 8), 8);
@@ -2619,7 +2626,7 @@ index 9a0edd9594..a9190dcc7e 100644
  #else
      // Otherwise, use [3], which is never wrong by more than 1:
      return (v+255)/256;
-@@ -5486,7 +5838,7 @@
+@@ -5486,7 +5845,7 @@
   * div255_accurate guarantees the right answer on all platforms, at the expense of performance.
   */
  SI U16 div255_accurate(U16 v) {
@@ -2628,7 +2635,7 @@ index 9a0edd9594..a9190dcc7e 100644
      // Our NEON implementation of div255 is already correct for all inputs:
      return div255(v);
  #else
-@@ -5600,9 +5952,22 @@
+@@ -5600,9 +5959,22 @@
  
  SI U32 trunc_(F x) { return (U32)cast<I32>(x); }
  
@@ -2652,7 +2659,7 @@ index 9a0edd9594..a9190dcc7e 100644
      F e = _mm512_rcp14_ps(x);
      return _mm512_fnmadd_ps(x, e, _mm512_set1_ps(2.0f)) * e;
  #elif defined(SKRP_CPU_AVX2)
-@@ -5630,7 +5995,9 @@
+@@ -5630,7 +6002,9 @@
  #endif
  }
  SI F sqrt_(F x) {
@@ -2663,7 +2670,7 @@ index 9a0edd9594..a9190dcc7e 100644
      return _mm512_sqrt_ps(x);
  #elif defined(SKRP_CPU_AVX2)
      __m256 lo,hi;
-@@ -5675,6 +6042,8 @@
+@@ -5675,6 +6049,8 @@
      float32x4_t lo,hi;
      split(x, &lo,&hi);
      return join<F>(vrndmq_f32(lo), vrndmq_f32(hi));
@@ -2672,7 +2679,7 @@ index 9a0edd9594..a9190dcc7e 100644
  #elif defined(SKRP_CPU_ML4)
      return _mm512_floor_ps(x);
  #elif defined(SKRP_CPU_AVX2)
-@@ -5705,7 +6074,15 @@
+@@ -5705,7 +6081,15 @@
  // The result is a number on [-1, 1).
  // Note: on neon this is a saturating multiply while the others are not.
  SI I16 scaled_mult(I16 a, I16 b) {
