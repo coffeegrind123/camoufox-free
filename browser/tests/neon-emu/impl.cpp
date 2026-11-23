@@ -365,6 +365,24 @@ extern "C" void NEON_EMU_CAT(NS, op_w8_cvtnu)(unsigned char* o, const unsigned c
   }
 }
 
+// SkRasterPipeline_opts.h's lowp div255 under SKRP_ARM_SEMANTICS, against
+// the AArch64 tier's VRSRA and VRSHR.
+extern "C" void NEON_EMU_CAT(NS, op_w16_div255)(unsigned char* o, const unsigned char* a,
+                                          const unsigned char* b, const unsigned char* c,
+                                          unsigned long n) { (void)b; (void)c;
+  for (unsigned long i = 0; i < n; i++) {
+#if NEON_EMU_FAST
+    __m256i WA = _mm256_loadu_si256((const __m256i*)(a + i * 32));
+    _mm256_storeu_si256((__m256i*)(o + i * 32), neon_emu_div255_16(WA));
+#else
+    for (int h = 0; h < 2; h++) {
+      uint16x8_t v = ld<uint16x8_t>(a + i * 32 + h * 16);
+      st(o + i * 32 + h * 16, vrshrq_n_u16(vrsraq_n_u16(v, v, 8), 8));
+    }
+#endif
+  }
+}
+
 // SkRasterPipeline_opts.h's clamp_01_ and to_unorm(v, 255) under
 // SKRP_ARM_SEMANTICS, against the 4-lane FMAX, FMIN, FMLA and FCVTNU they
 // stand for, in Skia's operand order.

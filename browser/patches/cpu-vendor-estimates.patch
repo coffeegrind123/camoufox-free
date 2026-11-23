@@ -2544,9 +2544,9 @@ index 9a0edd9594..2dca600aa6 100644
      // First we compute v + ((v+128)>>8), then one more round of (...+128)>>8 to finish up:
      return vrshrq_n_u16(vrsraq_n_u16(v, v, 8), 8);
 +#elif defined(SKRP_ARM_SEMANTICS)
-+    // The same, in the lane width: a rounding shift by 8 is (v >> 8) plus bit 7.
-+    U16 t = v + ((v >> 8) + ((v >> 7) & 1));
-+    return (t >> 8) + ((t >> 7) & 1);
++    // The same VRSRA and VRSHR, each a PAVGW in the lane width (SkNeonEmuWide.h).
++    static_assert(sizeof(U16) == 32, "lowp runs 16 lanes at AVX2's width");
++    return sk_bit_cast<U16>(neon_emu_div255_16(sk_bit_cast<__m256i>(v)));
  #else
      // Otherwise, use [3], which is never wrong by more than 1:
      return (v+255)/256;

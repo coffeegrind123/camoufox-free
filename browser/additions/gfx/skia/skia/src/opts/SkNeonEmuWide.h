@@ -183,6 +183,15 @@ NEON_EMU_SI __m256i neon_emu_unorm8(__m256 v, float scale, float bias, float max
   __m256 t = _mm256_fmadd_ps(v, _mm256_set1_ps(scale), _mm256_set1_ps(bias));
   return _mm256_cvtps_epi32(_mm256_min_ps(_mm256_set1_ps(maxI), _mm256_max_ps(t, _mm256_setzero_ps())));
 }
+// Skia's AArch64 div255, vrshrq_n_u16(vrsraq_n_u16(v, v, 8), 8), 16 lanes.
+// A rounding shift by 8 is ((v >> 7) + 1) >> 1, which PAVGW against zero
+// gives without overflow; VRSRA's sum wraps as the lane add does.
+NEON_EMU_SI __m256i neon_emu_rshr8_16(__m256i v) {
+  return _mm256_avg_epu16(_mm256_srli_epi16(v, 7), _mm256_setzero_si256());
+}
+NEON_EMU_SI __m256i neon_emu_div255_16(__m256i v) {
+  return neon_emu_rshr8_16(_mm256_add_epi16(v, neon_emu_rshr8_16(v)));
+}
 NEON_EMU_SI __m256 neon_emu_abs8(__m256 x) {
   return _mm256_and_ps(x, _mm256_castsi256_ps(_mm256_set1_epi32(0x7fffffff)));
 }
