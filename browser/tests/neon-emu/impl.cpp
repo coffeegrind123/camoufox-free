@@ -5,6 +5,7 @@
 #include <cstring>
 
 #include "src/opts/SkNeonEmu.h"
+#include "src/opts/SkNeonEmuAffine.h"
 #include "src/opts/SkNeonEmuBlit.h"
 #include "ops.h"
 
@@ -362,6 +363,48 @@ extern "C" void NEON_EMU_CAT(NS, op_w8_cvtnu)(unsigned char* o, const unsigned c
 #else
     for (int h = 0; h < 2; h++) st(o + i * 32 + h * 16, vcvtnq_u32_f32(ld<float32x4_t>(a + i * 32 + h * 16)));
 #endif
+  }
+}
+
+// SkNeonEmuAffine.h against filter_affine<clamp, clamp>'s loop as
+// SkBitmapProcState_matrixProcs.cpp writes it. Random positions and steps,
+// each shifted down by 0..31 bits so that every magnitude occurs, from
+// in-range draws to wrapping sums; maxima up to 14 bits; 0..13 pixels.
+// SkTPin(f >> 16, 0, max): std::max(0, std::min(v, max)).
+static uint32_t stock_clamp(int32_t f, int max) {
+  int v = f >> 16;
+  v = v < max ? v : max;
+  return (uint32_t)(v > 0 ? v : 0);
+}
+static uint32_t stock_pack(int32_t f, int max) {
+  uint32_t p = stock_clamp(f, max);
+  p = (p << 4) | ((uint32_t)(f >> 12) & 0xf);
+  p = (p << 14) | stock_clamp((int32_t)((uint32_t)f + 0x10000u), max);
+  return p;
+}
+extern "C" void NEON_EMU_CAT(NS, op_affine_clamp)(unsigned char* o, const unsigned char* a,
+                                          const unsigned char* b, const unsigned char* c,
+                                          unsigned long n) { (void)c;
+  for (unsigned long i = 0; i < n; i++) {
+    int64_t r[4];
+    uint32_t m[4];
+    memcpy(r, a + i * 32, sizeof r);
+    memcpy(m, b + i * 16, sizeof m);
+    for (int k = 0; k < 4; k++) r[k] >>= (m[3] >> (5 * k)) & 31;
+    int maxX = (int)(m[0] & 0x3fff), maxY = (int)(m[1] & 0x3fff), count = (int)(m[2] % 14);
+    uint32_t xy[26] = {};
+#if NEON_EMU_FAST
+    sk_neon_emu_filter_affine_clamp(xy, count, r[0], r[1], r[2], r[3], maxX, maxY);
+#else
+    int64_t fx = r[0], fy = r[1];
+    for (int k = 0; k < count; k++) {
+      xy[2 * k] = stock_pack((int32_t)(fy >> 16), maxY);
+      xy[2 * k + 1] = stock_pack((int32_t)(fx >> 16), maxX);
+      fy = (int64_t)((uint64_t)fy + (uint64_t)r[3]);
+      fx = (int64_t)((uint64_t)fx + (uint64_t)r[2]);
+    }
+#endif
+    memcpy(o + i * 104, xy, sizeof xy);
   }
 }
 

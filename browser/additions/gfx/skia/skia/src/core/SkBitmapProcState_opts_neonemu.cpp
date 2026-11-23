@@ -32,11 +32,17 @@
 #include "src/opts/SkOpts_NeonEmuTarget.h"
 
 #include "src/opts/SkBitmapProcState_opts.h"
+#include "src/opts/SkNeonEmuAffine.h"
 
 namespace SkOpts {
     void SK_NEON_EMU_NAME(Init_BitmapProcState_neonemu)() {
         S32_alpha_D32_filter_DX   = SK_OPTS_NS::S32_alpha_D32_filter_DX;
         S32_alpha_D32_filter_DXDY = SK_OPTS_NS::S32_alpha_D32_filter_DXDY;
+#if defined(SK_NEON_EMU_HSW) && defined(__AVX2__)
+        // Not emulation: the generic coordinate loop AArch64's samplers take
+        // for rotated draws, 4 pixels at a time.
+        filter_affine_clamp = sk_neon_emu_filter_affine_clamp;
+#endif
     }
 }  // namespace SkOpts
 

@@ -85,7 +85,8 @@
   X(w8_cvtnu, 32, 0, 0, 32, F) \
   X(w8_clamp01, 32, 0, 0, 32, F) \
   X(w8_unorm255, 32, 0, 0, 32, F) \
-  X(w16_div255, 32, 0, 0, 32, U)
+  X(w16_div255, 32, 0, 0, 32, U) \
+  X(affine_clamp, 32, 16, 0, 104, U)
 
 typedef void (*neon_emu_op)(unsigned char* out, const unsigned char* a, const unsigned char* b,
                             const unsigned char* c, unsigned long n);

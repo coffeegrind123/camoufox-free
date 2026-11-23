@@ -1003,7 +1003,7 @@ index 7dc4d8e24d..6607736e0b 100644
          return sk_bit_cast<Vec<N,float>>(vcvt_f32_f16(sk_bit_cast<float16x4_t>(x)));
      }
 diff --git a/gfx/skia/skia/src/core/SkBitmapProcState_opts.cpp b/gfx/skia/skia/src/core/SkBitmapProcState_opts.cpp
-index 58cbdda37b..1cab148f41 100644
+index 58cbdda37b..0d3514507d 100644
 --- a/gfx/skia/skia/src/core/SkBitmapProcState_opts.cpp
 +++ b/gfx/skia/skia/src/core/SkBitmapProcState_opts.cpp
 @@ -5,6 +5,7 @@
@@ -1014,8 +1014,11 @@ index 58cbdda37b..1cab148f41 100644
  #include "include/private/base/SkFeatures.h"
  #include "src/core/SkBitmapProcState.h"
  #include "src/core/SkCpu.h"
-@@ -22,6 +23,9 @@
+@@ -20,8 +21,12 @@
+ namespace SkOpts {
+     DEFINE_DEFAULT(S32_alpha_D32_filter_DX);
      DEFINE_DEFAULT(S32_alpha_D32_filter_DXDY);
++    decltype(filter_affine_clamp) filter_affine_clamp = nullptr;
  
      void Init_BitmapProcState_ssse3();
 +    void Init_BitmapProcState_neonemu();
@@ -1024,7 +1027,7 @@ index 58cbdda37b..1cab148f41 100644
      void Init_BitmapProcState_lasx();
  
      static bool init() {
-@@ -31,6 +35,14 @@
+@@ -31,6 +36,14 @@
          #if SK_CPU_X64_LEVEL < SK_CPU_X64_LEVEL_SSSE3
              if (SkCpu::Supports(SkX64::SSSE3)) { Init_BitmapProcState_ssse3(); }
          #endif
@@ -1039,6 +1042,52 @@ index 58cbdda37b..1cab148f41 100644
      #elif defined(SK_CPU_LOONGARCH)
          #if SK_CPU_LSX_LEVEL < SK_CPU_LSX_LEVEL_LASX
              if (SkCpu::Supports(SkLoongArch::ASX)) { Init_BitmapProcState_lasx(); }
+diff --git a/gfx/skia/skia/src/core/SkBitmapProcState.h b/gfx/skia/skia/src/core/SkBitmapProcState.h
+index 382683be79..6d95ce4bd1 100644
+--- a/gfx/skia/skia/src/core/SkBitmapProcState.h
++++ b/gfx/skia/skia/src/core/SkBitmapProcState.h
+@@ -210,6 +210,10 @@
+                                            const uint32_t* xy, int count, SkPMColor*);
+     extern void (*S32_alpha_D32_filter_DXDY)(const SkBitmapProcState&,
+                                              const uint32_t* xy, int count, SkPMColor*);
++    // filter_affine<clamp, clamp>'s loop from its mapped start, or null
++    // (general.cpu_identity = ARM64 on an AVX2 host: SkNeonEmuAffine.h).
++    extern void (*filter_affine_clamp)(uint32_t xy[], int count, SkFixed3232 fx, SkFixed3232 fy,
++                                       SkFixed3232 dx, SkFixed3232 dy, int maxX, int maxY);
+ 
+     void Init_BitmapProcState();
+ }  // namespace SkOpts
+diff --git a/gfx/skia/skia/src/core/SkBitmapProcState_matrixProcs.cpp b/gfx/skia/skia/src/core/SkBitmapProcState_matrixProcs.cpp
+index 95126546f7..64a9926363 100644
+--- a/gfx/skia/skia/src/core/SkBitmapProcState_matrixProcs.cpp
++++ b/gfx/skia/skia/src/core/SkBitmapProcState_matrixProcs.cpp
+@@ -287,6 +287,16 @@
+     return SkTPin(fx >> 16, 0, max);
+ }
+ 
++// filter_affine<clamp, clamp> with its loop in SkOpts::filter_affine_clamp;
++// the start is mapped here, in this file's code, as filter_affine maps it.
++static void filter_affine_clamp_opts(const SkBitmapProcState& s,
++                                     uint32_t xy[], int count, int x, int y) {
++    const SkBitmapProcStateAutoMapper mapper(s, x, y);
++    SkOpts::filter_affine_clamp(xy, count, mapper.fixed3232X(), mapper.fixed3232Y(),
++                                s.fInvSx, s.fInvKy,
++                                s.fPixmap.width() - 1, s.fPixmap.height() - 1);
++}
++
+ static const SkBitmapProcState::MatrixProc ClampX_ClampY_Procs[] = {
+     nofilter_scale <clamp, clamp, true>, filter_scale <clamp, clamp, extract_low_bits_clamp_clamp, true>,
+     nofilter_affine<clamp, clamp>,       filter_affine<clamp, clamp, extract_low_bits_clamp_clamp>,
+@@ -533,6 +543,9 @@
+             // clamp gets special version of filterOne, working in non-normalized space (allowing decal)
+             fFilterOneX = SK_Fixed1;
+             fFilterOneY = SK_Fixed1;
++            if (index == 3 && SkOpts::filter_affine_clamp) {
++                return filter_affine_clamp_opts;
++            }
+             return ClampX_ClampY_Procs[index];
+         }
+ 
 diff --git a/gfx/skia/skia/src/core/SkBitmapProcState_opts_ssse3_x86emu.cpp b/gfx/skia/skia/src/core/SkBitmapProcState_opts_ssse3_x86emu.cpp
 new file mode 100644
 index 0000000000..64b5530733
