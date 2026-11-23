@@ -9,7 +9,7 @@
 
 #include "src/opts/SkCpuEstimates.h"
 
-static uint32_t table[SK_CPU_ESTIMATE_TABLE_SIZE];
+uint32_t table[SK_CPU_ESTIMATE_TABLE_SIZE];
 
 #define FAST_BODY(LOOKUP)                                                                       \
   const __m256i expo = _mm256_set1_epi32(0x7f800000);                                           \
@@ -52,7 +52,7 @@ static inline __m256i v_native(__m256i b) {
 
 #define N (1 << 16)
 static float in[N] __attribute__((aligned(32)));
-static float out[N] __attribute__((aligned(32)));
+float out[N] __attribute__((aligned(32)));
 
 static double now(void) {
   struct timespec ts;
@@ -76,6 +76,7 @@ static double now(void) {
           y = _mm256_fmadd_ps(y, s, _mm256_sub_ps(v, s));                                      \
           _mm256_store_ps(out + i, y);                                                         \
         }                                                                                      \
+        __asm__ volatile("" : : "r"(out) : "memory");                                          \
       }                                                                                        \
       double t = (now() - t0) / (20.0 * N / 8);                                                \
       best = t < best ? t : best;                                                              \
@@ -102,6 +103,9 @@ int main(void) {
     }
   }
   double n = bench_native(), g = bench_gather(), m = bench_mem(), x = bench_ext();
+  double sum = 0;
+  for (int i = 0; i < N; i++) sum += out[i];
+  printf("checksum %g\n", sum);
   printf("ns per 8 lanes: native %.2f  gather %.2f  mem %.2f  ext %.2f\n", n, g, m, x);
   printf("vs native:      gather %.2fx  mem %.2fx  ext %.2fx\n", g / n, m / n, x / n);
   return 0;
