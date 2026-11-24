@@ -2085,7 +2085,7 @@ index 0000000000..747ae8cd9f
 +
 +#include "src/opts/SkOpts_ml3.cpp"
 diff --git a/gfx/skia/skia/src/opts/SkRasterPipeline_opts.h b/gfx/skia/skia/src/opts/SkRasterPipeline_opts.h
-index 9a0edd9594..5f69cfc805 100644
+index 9a0edd9594..154067d84d 100644
 --- a/gfx/skia/skia/src/opts/SkRasterPipeline_opts.h
 +++ b/gfx/skia/skia/src/opts/SkRasterPipeline_opts.h
 @@ -108,7 +108,11 @@
@@ -2331,7 +2331,7 @@ index 9a0edd9594..5f69cfc805 100644
  BLEND_MODE(clear)    { return F0; }
  BLEND_MODE(srcatop)  { return mad(s, da, d*inv(sa)); }
  BLEND_MODE(dstatop)  { return mad(d, sa, s*inv(da)); }
-@@ -2246,6 +2391,162 @@
+@@ -2246,6 +2391,193 @@
  BLEND_MODE(difference) { return s + d - two(min(s*da, d*sa)); }
  BLEND_MODE(exclusion)  { return s + d - two(s*d); }
  
@@ -2474,27 +2474,58 @@ index 9a0edd9594..5f69cfc805 100644
 +           arm_sel(s == sa,    s +    d*inv(sa),
 +                            sa*p.min(da, (d*sa)*p.rcp(s == sa, sa - s)) + s*inv(da) + d*inv(sa)));
 +}
++// Their channels are independent, so each is checked on its own and only a
++// flagged channel runs again with ArmChecked. Nothing has to live across the
++// whole stage then: with r, g, b, a saved for a whole-pixel rerun and the
++// divisor range carried through three channels, AVX2's 16 registers spilled
++// (12% of the stage in stack traffic on a Zen 3 profile). Each channel's
++// outputs are those of the whole-pixel form: a channel that is not flagged is
++// exact, as above, and a flagged one is the emulated helpers' value.
++template <class Mode>
++static __attribute__((noinline, cold)) F arm_checked_channel(F s, F d, F sa, F da) {
++    ArmChecked p;
++    return Mode::channel(p, s, d, sa, da);
++}
++template <class Mode>
++SI F arm_verified_channel(F s, F d, F sa, F da) {
++    ArmUncheckedSep p;
++    p.dst_alpha(da);
++    F out = Mode::channel(p, s, d, sa, da);
++    __m256 redo = _mm256_or_ps(_mm256_cmp_ps(arm_m(out), arm_m(out), _CMP_UNORD_Q), p.bad());
++    if (__builtin_expect(_mm256_movemask_ps(redo) != 0, 0)) {
++        out = arm_checked_channel<Mode>(s, d, sa, da);
++    }
++    return out;
++}
++// srcover's alpha, FMLA: FMA's bits unless the result is a NaN.
++static __attribute__((noinline, cold)) F arm_checked_srcover_alpha(F a, F da) {
++    return SK_OPTS_NS::mad(da, inv(a), a);
++}
++SI F arm_verified_srcover_alpha(F a, F da) {
++    __m256 out = _mm256_fmadd_ps(arm_m(da), arm_m(inv(a)), arm_m(a));
++    if (__builtin_expect(_mm256_movemask_ps(_mm256_cmp_ps(out, out, _CMP_UNORD_Q)) != 0, 0)) {
++        return arm_checked_srcover_alpha(a, da);
++    }
++    return arm_f(out);
++}
 +#define SKRP_ARM_SEP_BODY(name)                                                         \
 +    struct Arm_##name {                                                                 \
-+        using Fast = ArmUncheckedSep;                                                   \
-+        template <class P>                                                              \
-+        static void run(P& p, F& r, F& g, F& b, F& a, F dr, F dg, F db, F da) {         \
-+            p.dst_alpha(da);                                                            \
-+            r = arm_##name(p, r, dr, a, da);                                            \
-+            g = arm_##name(p, g, dg, a, da);                                            \
-+            b = arm_##name(p, b, db, a, da);                                            \
-+            a = p.mad(da, inv(a), a);                                                   \
++        template <class P> static F channel(P& p, F s, F d, F sa, F da) {               \
++            return arm_##name(p, s, d, sa, da);                                         \
 +        }                                                                               \
 +    };                                                                                  \
-+    HIGHP_STAGE(name, NoCtx) { arm_verified<Arm_##name>(r,g,b,a, dr,dg,db,da); }
-+SKRP_ARM_SEP_BODY(colorburn)
-+SKRP_ARM_SEP_BODY(colordodge)
++    HIGHP_STAGE(name, NoCtx) {                                                          \
++        r = arm_verified_channel<Arm_##name>(r, dr, a, da);                             \
++        g = arm_verified_channel<Arm_##name>(g, dg, a, da);                             \
++        b = arm_verified_channel<Arm_##name>(b, db, a, da);                             \
++        a = arm_verified_srcover_alpha(a, da);                                          \
++    }
 +#undef SKRP_ARM_SEP_BODY
 +#else
  BLEND_MODE(colorburn) {
      return if_then_else(d == da,    d +    s*inv(da),
             if_then_else(s ==  0, /* s + */ d*inv(sa),
-@@ -2256,6 +2557,7 @@
+@@ -2256,6 +2588,7 @@
             if_then_else(s == sa,    s +    d*inv(sa),
                                   sa*min(da, (d*sa)*rcp_fast(sa - s)) + s*inv(da) + d*inv(sa)));
  }
@@ -2502,7 +2533,7 @@ index 9a0edd9594..5f69cfc805 100644
  BLEND_MODE(hardlight) {
      return s*inv(da) + d*inv(sa)
           + if_then_else(two(s) <= sa, two(s*d), sa*da - two((da-d)*(sa-s)));
-@@ -2299,7 +2601,7 @@
+@@ -2299,7 +2632,7 @@
        sat = mx - mn;
  
      // Map min channel to 0, max channel to s, and scale the middle proportionally.
@@ -2511,7 +2542,7 @@ index 9a0edd9594..5f69cfc805 100644
      *r = (*r - mn) * s;
      *g = (*g - mn) * s;
      *b = (*b - mn) * s;
-@@ -2319,18 +2621,104 @@
+@@ -2319,18 +2652,104 @@
  SI void clip_color(F* r, F* g, F* b, F a) {
      F   mn        = min(*r, min(*g, *b)),
          mx        = max(*r, max(*g, *b)),
@@ -2619,7 +2650,7 @@ index 9a0edd9594..5f69cfc805 100644
      F R = r*a,
        G = g*a,
        B = b*a;
-@@ -2343,8 +2731,12 @@
+@@ -2343,8 +2762,12 @@
      g = mad(g, inv(da), mad(dg, inv(a), G));
      b = mad(b, inv(da), mad(db, inv(a), B));
      a = a + nmad(a, da, da);
@@ -2632,7 +2663,7 @@ index 9a0edd9594..5f69cfc805 100644
      F R = dr*a,
        G = dg*a,
        B = db*a;
-@@ -2357,8 +2749,12 @@
+@@ -2357,8 +2780,12 @@
      g = mad(g, inv(da), mad(dg, inv(a), G));
      b = mad(b, inv(da), mad(db, inv(a), B));
      a = a + nmad(a, da, da);
@@ -2645,7 +2676,7 @@ index 9a0edd9594..5f69cfc805 100644
      F R = r*da,
        G = g*da,
        B = b*da;
-@@ -2370,8 +2766,12 @@
+@@ -2370,8 +2797,12 @@
      g = mad(g, inv(da), mad(dg, inv(a), G));
      b = mad(b, inv(da), mad(db, inv(a), B));
      a = a + nmad(a, da, da);
@@ -2658,7 +2689,7 @@ index 9a0edd9594..5f69cfc805 100644
      F R = dr*a,
        G = dg*a,
        B = db*a;
-@@ -2383,6 +2783,7 @@
+@@ -2383,6 +2814,7 @@
      g = mad(g, inv(da), mad(dg, inv(a), G));
      b = mad(b, inv(da), mad(db, inv(a), B));
      a = a + nmad(a, da, da);
@@ -2666,7 +2697,7 @@ index 9a0edd9594..5f69cfc805 100644
  }
  
  HIGHP_STAGE(srcover_rgba_8888, const SkRasterPipelineContexts::MemoryCtx* ctx) {
-@@ -2410,7 +2811,11 @@
+@@ -2410,7 +2842,11 @@
      store(ptr, dst);
  }
  
@@ -2678,7 +2709,7 @@ index 9a0edd9594..5f69cfc805 100644
  
  HIGHP_STAGE(clamp_01, NoCtx) {
      r = clamp_01_(r);
-@@ -5476,6 +5881,10 @@
+@@ -5476,6 +5912,10 @@
      // With NEON we can compute [2] just as fast as [3], so let's be correct.
      // First we compute v + ((v+128)>>8), then one more round of (...+128)>>8 to finish up:
      return vrshrq_n_u16(vrsraq_n_u16(v, v, 8), 8);
@@ -2689,7 +2720,7 @@ index 9a0edd9594..5f69cfc805 100644
  #else
      // Otherwise, use [3], which is never wrong by more than 1:
      return (v+255)/256;
-@@ -5486,7 +5895,7 @@
+@@ -5486,7 +5926,7 @@
   * div255_accurate guarantees the right answer on all platforms, at the expense of performance.
   */
  SI U16 div255_accurate(U16 v) {
@@ -2698,7 +2729,7 @@ index 9a0edd9594..5f69cfc805 100644
      // Our NEON implementation of div255 is already correct for all inputs:
      return div255(v);
  #else
-@@ -5600,9 +6009,22 @@
+@@ -5600,9 +6040,22 @@
  
  SI U32 trunc_(F x) { return (U32)cast<I32>(x); }
  
@@ -2722,7 +2753,7 @@ index 9a0edd9594..5f69cfc805 100644
      F e = _mm512_rcp14_ps(x);
      return _mm512_fnmadd_ps(x, e, _mm512_set1_ps(2.0f)) * e;
  #elif defined(SKRP_CPU_AVX2)
-@@ -5630,7 +6052,9 @@
+@@ -5630,7 +6083,9 @@
  #endif
  }
  SI F sqrt_(F x) {
@@ -2733,7 +2764,7 @@ index 9a0edd9594..5f69cfc805 100644
      return _mm512_sqrt_ps(x);
  #elif defined(SKRP_CPU_AVX2)
      __m256 lo,hi;
-@@ -5675,6 +6099,8 @@
+@@ -5675,6 +6130,8 @@
      float32x4_t lo,hi;
      split(x, &lo,&hi);
      return join<F>(vrndmq_f32(lo), vrndmq_f32(hi));
@@ -2742,7 +2773,7 @@ index 9a0edd9594..5f69cfc805 100644
  #elif defined(SKRP_CPU_ML4)
      return _mm512_floor_ps(x);
  #elif defined(SKRP_CPU_AVX2)
-@@ -5705,7 +6131,15 @@
+@@ -5705,7 +6162,15 @@
  // The result is a number on [-1, 1).
  // Note: on neon this is a saturating multiply while the others are not.
  SI I16 scaled_mult(I16 a, I16 b) {
