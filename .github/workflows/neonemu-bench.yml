@@ -33,6 +33,10 @@ jobs:
           pip install -e python
       - uses: ./.github/actions/fpgen-model
       - run: grep -m1 "model name" /proc/cpuinfo; grep -o -m1 "gather_data_sampling[^ ]*" /proc/cpuinfo || true; cat /sys/devices/system/cpu/vulnerabilities/gather_data_sampling || true
+      - name: timing guard
+        run: |
+          curl -sSfL -o guard.py https://raw.githubusercontent.com/coffeegrind123/camoufox-free/perf/cpu-emulation/browser/tests/playwright/patches/cpu-emulation-timing.py
+          CAMOUFOX_EXECUTABLE_PATH="$CAMOUFOX_BINARY" PYTHONPATH=python/src xvfb-run -a python3 guard.py || true
       - name: perf
         run: |
           sudo apt-get install -y -qq linux-tools-common linux-tools-$(uname -r) >/dev/null 2>&1 || sudo apt-get install -y -qq linux-tools-generic >/dev/null
