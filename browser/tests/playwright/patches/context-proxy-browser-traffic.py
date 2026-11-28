@@ -11,70 +11,37 @@ proxied context's proxy (TargetRegistry.getProxyInfo).
 
 The push server is pointed at a host only a proxy can see, so the check needs
 no network: a page in the proxied context subscribes, and the push connection
-must reach the logging proxy.
+must reach the logging proxy. It runs once with an open proxy and once with one
+that demands credentials: a request no page owns still has to answer the
+proxy's 407 with the context's username and password.
 
-What PASS means:
+What PASS means, with either proxy:
     * the proxy works: the proxied context's navigation reaches it;
     * the subscription's push connection, which no page owns, reaches it too.
 
     python browser/tests/playwright/patches/context-proxy-browser-traffic.py
 """
 
-import http.server
-import socketserver
 import sys
-import threading
 import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from helpers import resolve_binary  # noqa: E402
+from helpers import PushSite, RefusingProxy, resolve_binary, subscribe_to_push, wait_for_push  # noqa: E402
 
 CONTROL_HOST = "control.camoufox.test"
 PUSH_HOST = "push.camoufox.test"
-SUBSCRIBE_SECONDS = 15
-SUBSCRIBE_ATTEMPTS = 3
+SUBSCRIBE_SECONDS = 30
+CREDENTIALS = ("camoufox", "secret")
 
 
-class Logging(http.server.BaseHTTPRequestHandler):
-    def _refuse(self) -> None:
-        self.server.seen.append(self.path)
-        self.send_error(502)
-
-    do_CONNECT = do_GET = do_POST = _refuse
-
-    def log_message(self, *args) -> None:
-        pass
-
-
-class LoggingProxy(socketserver.ThreadingMixIn, http.server.HTTPServer):
-    daemon_threads = True
-
-    def __init__(self) -> None:
-        super().__init__(("127.0.0.1", 0), Logging)
-        self.seen = []
-        threading.Thread(target=self.serve_forever, daemon=True).start()
-
-
-class Site(http.server.BaseHTTPRequestHandler):
-    def do_GET(self) -> None:
-        worker = self.path == "/sw.js"
-        self.send_response(200)
-        self.send_header("Content-Type", "text/javascript" if worker else "text/html")
-        self.end_headers()
-        self.wfile.write(b"" if worker else b"<!doctype html>")
-
-    def log_message(self, *args) -> None:
-        pass
-
-
-def main() -> int:
+def run(site: PushSite, credentials) -> bool:
     from camoufox.sync_api import Camoufox
 
-    proxy = LoggingProxy()
-    site = socketserver.ThreadingTCPServer(("127.0.0.1", 0), Site)
-    site.daemon_threads = True
-    threading.Thread(target=site.serve_forever, daemon=True).start()
+    proxy = RefusingProxy(credentials)
+    settings = {"server": f"http://127.0.0.1:{proxy.server_address[1]}"}
+    if credentials:
+        settings.update(username=credentials[0], password=credentials[1])
 
     with Camoufox(
         headless=True,
@@ -83,46 +50,44 @@ def main() -> int:
         i_know_what_im_doing=True,
         firefox_user_prefs={"dom.push.serverURL": f"wss://{PUSH_HOST}/"},
     ) as browser:
-        context = browser.new_context(proxy={"server": f"http://127.0.0.1:{proxy.server_address[1]}"})
+        context = browser.new_context(proxy=settings)
         context.grant_permissions(["notifications"])
         page = context.new_page()
+
+        # localhost is never proxied, so the page itself loads direct; only
+        # the push connection it causes is the browser's own. It goes first:
+        # once a page has answered the proxy's 407, Firefox's auth cache would
+        # answer it for the push connection too.
+        page.goto(site.url)
+        wait_for_push(page)
+        subscribe_to_push(page)
+        deadline = time.monotonic() + SUBSCRIBE_SECONDS
+        while time.monotonic() < deadline and not any(PUSH_HOST in seen for seen in proxy.seen):
+            time.sleep(0.2)
+        push = [seen for seen in proxy.seen if PUSH_HOST in seen]
+
         try:
             page.goto(f"http://{CONTROL_HOST}/", timeout=10_000)
         except Exception:
             pass
         control = [seen for seen in proxy.seen if CONTROL_HOST in seen]
 
-        # localhost is never proxied, so the page itself loads direct; only
-        # the push connection it causes is the browser's own.
-        # Firefox's own push service drops a subscription that arrives before
-        # it has started (PushService.init), in stock too: no connection is
-        # even tried. That is not what this checks, so a subscription that
-        # opened nothing is made again from a fresh load.
-        push = []
-        for _attempt in range(SUBSCRIBE_ATTEMPTS):
-            page.goto(f"http://localhost:{site.server_address[1]}/")
-            time.sleep(2)
-            page.evaluate(
-                "void navigator.serviceWorker.register('/sw.js')"
-                ".then(() => navigator.serviceWorker.ready)"
-                ".then(r => r.pushManager.subscribe({ userVisibleOnly: true }))"
-            )
-            deadline = time.monotonic() + SUBSCRIBE_SECONDS
-            while time.monotonic() < deadline and not any(PUSH_HOST in seen for seen in proxy.seen):
-                time.sleep(0.2)
-            push = [seen for seen in proxy.seen if PUSH_HOST in seen]
-            if push:
-                break
-
     checks = [
         ("the context's navigation reaches its proxy", bool(control), control),
         ("the push connection reaches it too", bool(push), push),
     ]
+    print("with credentials:" if credentials else "open proxy:")
     passed = True
     for label, ok, got in checks:
         print(f"  {'PASS' if ok else 'FAIL'} {label}: {got}")
         passed &= ok
-    return 0 if passed else 1
+    return passed
+
+
+def main() -> int:
+    site = PushSite()
+    results = [run(site, credentials) for credentials in (None, CREDENTIALS)]
+    return 0 if all(results) else 1
 
 
 if __name__ == "__main__":

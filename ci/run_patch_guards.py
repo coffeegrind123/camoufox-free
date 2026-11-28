@@ -59,6 +59,7 @@ GROUPS: Dict[str, Tuple[str, ...]] = {
         "ipv4-only-network",
         "locale-explicit-names",
         "media-devices-coherence",
+        "native-line-break",
         "navigation-preconnect-proxied",
         "offscreen-webgl2-follows-canvas",
         "spoofed-voice-speaks",
@@ -112,6 +113,7 @@ GROUPS: Dict[str, Tuple[str, ...]] = {
         "ubo-seeded-start",
         "visible-automation-cues",
         "webdriver-bidi-tabs",
+        "worker-promise-attach",
     ),
     "parity": (
         "bare-launch-host-fonts",
