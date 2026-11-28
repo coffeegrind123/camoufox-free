@@ -211,9 +211,10 @@ def main() -> int:
 
     failures = []
     keys = list(ms["host"])
+    ratios = {name: {} for name in list(identities)[1:]}
     # Ratios differ between runner CPUs (gathers are slow under the GDS
     # microcode fix), so the CPU is part of the result.
-    print(f"  host CPU: {cpu_model()}; gather_data_sampling: {gds_status()}")
+    print(f"NOTE: host CPU: {cpu_model()}; gather_data_sampling: {gds_status()}")
     print(f"  {'ms per operation':26} " + " ".join(f"{n.split()[0]:>14}" for n in identities))
     for key in keys:
         cells = [f"{ms['host'][key]:14.2f}"]
@@ -221,12 +222,16 @@ def main() -> int:
             got, base = ms[name][key], ms["host"][key]
             ratio = statistics.median(
                 e[key] / h[key] if h[key] else float("inf") for e, h in zip(runs[name], runs["host"]))
+            ratios[name][key] = ratio
             cells.append(f"{got:7.2f} {ratio:5.2f}x")
             factor = SLOWER_FACTOR["arm64" if name == "arm64" else "x86 vendor"]
             if ratio > factor and got - base >= MIN_GAP_MS:
                 failures.append(f"{name}: {key} {got:.2f} ms, {ratio:.2f}x the host's {base:.2f} ms (limit {factor}x)")
         print(f"  {key:26} " + " ".join(cells))
 
+    worst = {name: max(ratios[name], key=ratios[name].get) for name in list(identities)[1:]}
+    print("NOTE: worst ratio " + "; ".join(
+        f"{name.split()[0]} {key} {ratios[name][key]:.2f}x" for name, key in worst.items()))
     for failure in failures:
         print(f"FAIL: {failure}")
     if failures:

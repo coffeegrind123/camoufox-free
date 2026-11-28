@@ -181,6 +181,15 @@ def guards() -> List[Path]:
     return sorted(p for p in GUARD_DIR.glob("*.py") if p.name != "helpers.py")
 
 
+def notes(output: str) -> List[str]:
+    """A guard's NOTE: lines: what it wants on record even when it passes.
+
+    A passing guard's output is otherwise dropped, so a timing guard whose
+    result depends on the runner's CPU prints that CPU as a NOTE.
+    """
+    return [line.strip() for line in output.splitlines() if line.strip().startswith("NOTE:")]
+
+
 def leftover_browsers(binary: Path) -> List[str]:
     """Processes of the browser still running after a guard, with CPU seconds.
 
@@ -255,6 +264,8 @@ def main(argv: Optional[List[str]] = None) -> int:
             log(f"  ✗ {guard.name} output:\n{proc.combined().strip()}")
         else:
             log(f"  ✓ {guard.name}")
+            for note in notes(proc.combined()):
+                log(f"    {note}")
         leftovers = leftover_browsers(binary)
         if leftovers:
             log(f"  {guard.name} left {len(leftovers)} browser processes running: {', '.join(leftovers)}",
