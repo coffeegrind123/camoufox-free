@@ -41,13 +41,6 @@ appropriate.
   signal, so the page lost its sessionStorage and push subscriptions
   mid-session. Only the proxy auth cache is cleared now, on a topic of its own.
   ([66cb54c](https://github.com/coffeegrind123/camoufox-free/commit/66cb54c5cd402ff25720d7b53705a6ef4aff3f46))
-- **Context-only proxies carry the browser's own traffic.** With a proxy per
-  context and none for the launch, connections no page owns (the push
-  websocket, media plugin update checks) went out direct from the host's
-  address. They now take a proxied context's proxy; a page's own request keeps
-  its context's. Offered
-  upstream in [#1065](https://github.com/daijro/camoufox/pull/1065). ([58e3760](https://github.com/coffeegrind123/camoufox-free/commit/58e3760a83d04efa30982288f5ff00c61da0af1e), guard
-  [context-proxy-browser-traffic.py](browser/tests/playwright/patches/context-proxy-browser-traffic.py))
 - **Authenticated SOCKS5 proxies fail closed.** Upstream passes SOCKS5
   credentials to Juggler (`CAMOU_PROXY_AUTH`, and a per-context init script).
   On top of that transport, `socks5h` and credentials in the proxy URL are
@@ -81,13 +74,9 @@ appropriate.
   ([dacdda3](https://github.com/coffeegrind123/camoufox-free/commit/dacdda34ead3e11cfc94a10c25a06e4ebf127859), guard
   [ubo-seeded-start.py](browser/tests/playwright/patches/ubo-seeded-start.py),
   [fetch-ubo.py](browser/scripts/fetch-ubo.py), [41a9903](https://github.com/coffeegrind123/camoufox-free/commit/41a9903048c011b9fc9aa38aa9786d72d922a94d), [2a48d607](https://github.com/coffeegrind123/camoufox-free/commit/2a48d6072738d8ac47d428e34bbac130ae0735e2))
-- **Network and automation protocol fixes.** UA, Accept-Language and
-  per-scheme Accept-Encoding stay coherent; DNT and context locale are stable
-  across navigation. A failed promise-reaction attach rejects immediately
-  instead of leaving Juggler hanging. Upstream attaches through the Xray in a
-  window; the worker path is offered upstream in
-  [#1067](https://github.com/daijro/camoufox/pull/1067).
-  ([3cebf99](https://github.com/coffeegrind123/camoufox-free/commit/3cebf99c8f486c211a5502099c9ecfdc91164813))
+- **Network header fixes.** Accept-Language and per-scheme Accept-Encoding
+  stay coherent; DNT and context locale are stable across navigation.
+  ([f5692e9](https://github.com/coffeegrind123/camoufox-free/commit/f5692e90c05ae1859cf15f3433209c05d473d163), [8f6c776](https://github.com/coffeegrind123/camoufox-free/commit/8f6c776c6c5e30d25888f37481e8c09d809560ed), [6c25aee](https://github.com/coffeegrind123/camoufox-free/commit/6c25aeeb2acbe354635ad24d25d7e23d7c7d0609))
 - **Per-context locale follows every scope.** A context's locale reaches
   `Intl`, `navigator.languages`, Accept-Language q-values, isolated worlds,
   dedicated/shared/service workers, AudioWorklets, requests without a browsing
@@ -168,13 +157,6 @@ appropriate.
   untouched getter against stock's 0.25). Upstream merged the switch in
   [#1062](https://github.com/daijro/camoufox/pull/1062); the cached value is
   the fork's. ([PR #47](https://github.com/coffeegrind123/camoufox-free/pull/47), [1538445d](https://github.com/coffeegrind123/camoufox-free/commit/1538445d7eefc5c3270cd8b49588f3e5a2180f9e), [1849de26](https://github.com/coffeegrind123/camoufox-free/commit/1849de26e87dde339678b9d1ea7aec8e53b96d46))
-- **The x86-64 build compiles upstream's X86NaN away.** Upstream's
-  [#1034](https://github.com/daijro/camoufox/pull/1034) wraps interpreter and
-  `Math` operations in an `X86NaN` check of `EmulateX86` in every build, though
-  only an ARM64 build can set it. On x86-64 the check is now a compile-time
-  no-op, so those paths do no work stock Firefox does not. Offered
-  upstream in [#1063](https://github.com/daijro/camoufox/pull/1063).
-  ([863b196e](https://github.com/coffeegrind123/camoufox-free/commit/863b196e241a8dbede44bafbae1e389b05b9ea0d))
 - **Humanized moves report like a 125 Hz mouse.** They were resampled to
   60 Hz, but `pointerrawupdate` and `getCoalescedEvents()` show every report:
   stock under a real mouse shows about two per frame, 8 ms apart, humanize one,
@@ -214,10 +196,6 @@ appropriate.
   Linux sent some sites a macOS UA, `sec-ch-ua-platform: "Linux"` or a Chrome
   UA stock Windows never sends. The launcher sets its platform override to the
   claimed OS. ([09b5fc6](https://github.com/coffeegrind123/camoufox-free/commit/09b5fc6bf897143eedd57d73b8b8e0a936d2ad1d))
-- **The search region follows the locale's region.** Stock learns it from a
-  network lookup the launch turns off; unset, every identity got the
-  region-less engine list and the DoH rollout never decided. Offered
-  upstream in [#1066](https://github.com/daijro/camoufox/pull/1066). ([2723224](https://github.com/coffeegrind123/camoufox-free/commit/2723224cbc9bcee2e156042f203a7a8154450d95))
 
 ### Kept here after upstream declined
 
@@ -364,17 +342,6 @@ out of scope for that repository.
   `main` does not create a release. The release workflow fails before building
   unless the tag names the pinned browser and its commit is on `main` with a
   successful `All tests passed` check.
-- **The renderer strings' cost is held to stock's, both ways.** Upstream's
-  [#1039](https://github.com/daijro/camoufox/pull/1039) and
-  [#1042](https://github.com/daijro/camoufox/pull/1042) stopped failing a
-  slower `getParameter(RENDERER)` and fail a faster one only under 1/10 of
-  stock's, from two CI readings that each took a session's fastest round.
-  Measured over ten alternating launches each, the two browsers' session
-  medians differ by 4%, and resampling them never went outside 0.58-1.97x;
-  the guard takes the median round and fails beyond 2.5x either way. Offered
-  upstream in [#1064](https://github.com/daijro/camoufox/pull/1064).
-  ([450a0a23](https://github.com/coffeegrind123/camoufox-free/commit/450a0a23fc7871467f387715955965b8b5ae52cf), guard
-  [getter-cost-parity.py](browser/tests/playwright/patches/getter-cost-parity.py))
 - **No preflight of other targets.** Upstream's
   [#1055](https://github.com/daijro/camoufox/pull/1055) compiles the patched
   sources for five more targets (Windows, macOS, ARM64) on every pull request

@@ -588,9 +588,9 @@ class Runtime {
     // and sweep the pending promises from onDebuggerStatement.
     if (!this._debugger.onDebuggerStatement)
       this._debugger.onDebuggerStatement = this._onDebuggerStatement.bind(this);
-    // Page code can replace `then` in a main-world promise. The pending entry
-    // is already registered, so a failed attach must remove it and report an
-    // evaluation error or the evaluate would wait forever.
+    // The worker's own script can replace Promise.prototype.then. The pending
+    // entry is already registered, so a failed attach must remove it and
+    // report an evaluation error, or the evaluate would wait forever.
     let attached;
     try {
       attached = executionContext._debuggee.executeInGlobalWithBindings(
