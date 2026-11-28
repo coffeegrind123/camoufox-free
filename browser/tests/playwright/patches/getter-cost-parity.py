@@ -94,7 +94,7 @@ GL_SETUP = "G.getExtension('WEBGL_debug_renderer_info');"
 # it took stock 15.0 and 20.6 us for the two strings and Camoufox 31.3 and 35.0
 # (2026-11-13), and in the next run stock 33.8 us and Camoufox 15.6: the
 # fastest round of a session is as noisy as the session. Ten alternating
-# launches of each on one runner (2026-11-15, stock 159.0.1 against cg.16, five
+# launches of each on one runner (2026-11-15, stock 159.0.1 against Camoufox 159.0.1-beta.35, five
 # rounds each): the rounds of one session ranged 15-57 us in both browsers,
 # the sessions' medians 25.0-40.0 us for stock and 30.0-43.1 us for Camoufox
 # (RENDERER; UNMASKED 25.0-43.1 against 23.1-45.6), a ratio of 1.04 and 0.96.

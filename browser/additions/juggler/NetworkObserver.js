@@ -404,6 +404,9 @@ class NetworkRequest {
       return false;
     let credentials = null;
     if (authInfo.flags & Ci.nsIAuthInformation.AUTH_PROXY) {
+      // Camoufox: answered from the channel's proxy, not its page, so traffic
+      // no page owns (the push connection a context's proxy carries) can
+      // authenticate too.
       const proxy = this._networkObserver._targetRegistry.getProxyInfo(aChannel);
       credentials = proxy ? {username: proxy.username, password: proxy.password} : null;
     } else {
@@ -562,6 +565,14 @@ class NetworkRequest {
         pageNetwork._responseStorage.addResponseBody(this, body);
       this._sendOnRequestFinished();
     } else {
+      // A request that ended part-way (NS_ERROR_NET_PARTIAL_TRANSFER from a
+      // dropped connection, say) still delivered the bytes the page read, so
+      // keep them retrievable by Network.getResponseBody; requestfailed still
+      // reports the error. Storing nothing when no chunk arrived keeps the
+      // empty-body "not found" behaviour for requests that never sent data.
+      const pageNetwork = this._pageNetwork;
+      if (pageNetwork && this._responseBodyChunks.length)
+        pageNetwork._responseStorage.addResponseBody(this, this._responseBodyChunks.join(''));
       this._sendOnRequestFailed(aStatusCode);
     }
 
