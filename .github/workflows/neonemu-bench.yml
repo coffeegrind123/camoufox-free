@@ -25,7 +25,7 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           name: camoufox-dist
-          run-id: 45242336129
+          run-id: 46151616310
           github-token: ${{ github.token }}
       - run: |
           mkdir -p .ci-browser && zstd -d -c camoufox-dist.tar.zst | tar -C .ci-browser -xf -
