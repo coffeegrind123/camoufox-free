@@ -120,6 +120,8 @@ GROUPS: Dict[str, Tuple[str, ...]] = {
         "certificate-revocations",
         "contentaccessible-parity",
         "context-proxy-browser-traffic",
+        "cpu-arm-raster-wide",
+        "cpu-emulation-timing",
         "css-device-size-fractional",
         "driven-click-count",
         "driven-click-hold",
@@ -179,6 +181,15 @@ def gate_name(group: Optional[str]) -> str:
 def guards() -> List[Path]:
     """Every guard script. helpers.py is a library, not a guard."""
     return sorted(p for p in GUARD_DIR.glob("*.py") if p.name != "helpers.py")
+
+
+def notes(output: str) -> List[str]:
+    """A guard's NOTE: lines: what it wants on record even when it passes.
+
+    A passing guard's output is otherwise dropped, so a timing guard whose
+    result depends on the runner's CPU prints that CPU as a NOTE.
+    """
+    return [line.strip() for line in output.splitlines() if line.strip().startswith("NOTE:")]
 
 
 def leftover_browsers(binary: Path) -> List[str]:
@@ -255,6 +266,8 @@ def main(argv: Optional[List[str]] = None) -> int:
             log(f"  ✗ {guard.name} output:\n{proc.combined().strip()}")
         else:
             log(f"  ✓ {guard.name}")
+            for note in notes(proc.combined()):
+                log(f"    {note}")
         leftovers = leftover_browsers(binary)
         if leftovers:
             log(f"  {guard.name} left {len(leftovers)} browser processes running: {', '.join(leftovers)}",

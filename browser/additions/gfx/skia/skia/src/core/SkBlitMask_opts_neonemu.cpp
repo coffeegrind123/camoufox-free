@@ -34,8 +34,8 @@
 #include "src/opts/SkBlitMask_opts.h"
 
 namespace SkOpts {
-    void Init_BlitMask_neonemu() {
-        blit_mask_d32_a8 = neonemu::blit_mask_d32_a8;
+    void SK_NEON_EMU_NAME(Init_BlitMask_neonemu)() {
+        blit_mask_d32_a8 = SK_OPTS_NS::blit_mask_d32_a8;
     }
 }  // namespace SkOpts
 

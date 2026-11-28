@@ -3134,6 +3134,15 @@ def test_leftover_browsers_sees_content_processes(tmp_path):
     assert [f.split()[1] for f in found] == [str(proc.pid)]
 
 
+def test_passing_guard_notes_reach_the_log():
+    """A pass prints no output, so a NOTE: line is the only record of what it measured."""
+    from ci.run_patch_guards import notes
+
+    out = "  table row\nNOTE: host CPU: AMD EPYC 7763\n  NOTE: indented\nPASS: fine\n"
+    assert notes(out) == ["NOTE: host CPU: AMD EPYC 7763", "NOTE: indented"]
+    assert notes("PASS: nothing to say\n") == []
+
+
 # ---------------------------------------------------------------------------
 # memory growth: sharded onto pull requests, and gated
 # ---------------------------------------------------------------------------

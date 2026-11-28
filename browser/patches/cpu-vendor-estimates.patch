@@ -467,18 +467,67 @@ index 1342a6f462..ff59e8b7d7 100644
  struct Engine {
    static void AudioBufferAddWithScale(const float* aInput, float aScale,
 diff --git a/dom/media/webaudio/AudioNodeEngineGenericImpl.h b/dom/media/webaudio/AudioNodeEngineGenericImpl.h
-index 78a24ce7bf..10d664d2c0 100644
+index 78a24ce7bf..38d88c0ae4 100644
 --- a/dom/media/webaudio/AudioNodeEngineGenericImpl.h
 +++ b/dom/media/webaudio/AudioNodeEngineGenericImpl.h
-@@ -18,8 +18,73 @@
+@@ -18,8 +18,127 @@
  #  define MOZ_UNROLL(_)
  #endif
  
 +#include <cmath>
 +#include <type_traits>
++#ifdef MOZ_AUDIO_NEON_EMU
++#  include "mozilla/SSE.h"
++#  ifdef _MSC_VER
++#    include <intrin.h>
++#  else
++#    include <cpuid.h>
++#  endif
++#endif
 +
  namespace mozilla {
  
++#ifdef MOZ_AUDIO_NEON_EMU
++// The emulated NEON engine is built for SSE2, where std::fma is a libm call
++// per lane. On a CPU with FMA the helpers below run the instruction instead;
++// fmaf rounds once either way, so the bits are the same.
++static inline bool NeonEmuHasFma() {
++  static const bool sHasFma = [] {
++    if (!supports_avx()) {
++      return false;  // FMA's VEX encoding needs the OS to save AVX state.
++    }
++#  ifdef _MSC_VER
++    int info[4];
++    __cpuid(info, 1);
++    return (info[2] & (1 << 12)) != 0;
++#  else
++    unsigned a, b, c, d;
++    return __get_cpuid(1, &a, &b, &c, &d) && (c & (1u << 12)) != 0;
++#  endif
++  }();
++  return sHasFma;
++}
++__attribute__((target("fma"))) static inline void NeonEmuFma4(float* aX,
++                                                              const float* aY,
++                                                              const float* aZ) {
++  for (size_t i = 0; i < 4; ++i) {
++    aX[i] = __builtin_fmaf(aX[i], aY[i], aZ[i]);
++  }
++}
++__attribute__((target("fma"))) static inline void NeonEmuComplexMultiplyFma(
++    const float* aInput, const float* aScale, float* aOutput,
++    unsigned aSize) {
++  for (unsigned i = 0; i < aSize * 2; i += 2) {
++    float ar = aInput[i], ai = aInput[i + 1];
++    float br = aScale[i], bi = aScale[i + 1];
++    float re = __builtin_fmaf(ar, br, -(ai * bi));
++    float im = __builtin_fmaf(ar, bi, ai * br);
++    aOutput[i] = re;
++    aOutput[i + 1] = im;
++  }
++}
++#endif
++
 +template <class Arch>
 +struct EngineBatchArch {
 +  using type = Arch;
@@ -513,6 +562,11 @@ index 78a24ce7bf..10d664d2c0 100644
 +    aX.store_aligned(x);
 +    aY.store_aligned(y);
 +    aZ.store_aligned(z);
++    static_assert(EBatch<Arch>::size == 4);
++    if (NeonEmuHasFma()) {
++      NeonEmuFma4(x, y, z);
++      return EBatch<Arch>::load_aligned(x);
++    }
 +    for (size_t i = 0; i < EBatch<Arch>::size; ++i) {
 +      x[i] = std::fma(x[i], y[i], z[i]);
 +    }
@@ -544,7 +598,7 @@ index 78a24ce7bf..10d664d2c0 100644
  template <class Arch>
  static bool is_aligned(const void* ptr) {
    return (reinterpret_cast<uintptr_t>(ptr) &
-@@ -52,13 +117,13 @@ void Engine<Arch>::AudioBufferAddWithScale(const float* aInput, float aScale,
+@@ -52,13 +171,13 @@
    MOZ_ASSERT(is_aligned<Arch>(aInput), "aInput is aligned");
    MOZ_ASSERT(is_aligned<Arch>(aOutput), "aOutput is aligned");
  
@@ -563,7 +617,7 @@ index 78a24ce7bf..10d664d2c0 100644
      // Avoid xsimd::fma here: it lowers to vfmadd*ps on x86 FMA3 builds and
      // vfmaq_f32 on aarch64 NEON, an explicit single-rounded fused
      // multiply-add that bypasses the project-wide -ffp-contract=off and
-@@ -83,15 +148,15 @@ void Engine<Arch>::AudioBlockCopyChannelWithScale(const float* aInput,
+@@ -83,15 +202,15 @@
    MOZ_ASSERT(is_aligned<Arch>(aInput), "aInput is aligned");
    MOZ_ASSERT(is_aligned<Arch>(aOutput), "aOutput is aligned");
  
@@ -583,7 +637,7 @@ index 78a24ce7bf..10d664d2c0 100644
      auto vout = vin * vgain;
      vout.store_aligned(&aOutput[i]);
    }
-@@ -106,14 +171,14 @@ void Engine<Arch>::AudioBlockCopyChannelWithScale(
+@@ -106,14 +225,14 @@
    MOZ_ASSERT(is_aligned<Arch>(aOutput), "aOutput is aligned");
    MOZ_ASSERT(is_aligned<Arch>(aScale), "aScale is aligned");
  
@@ -602,7 +656,7 @@ index 78a24ce7bf..10d664d2c0 100644
      auto vout = vin * vscaled;
      vout.store_aligned(&aOutput[i]);
    }
-@@ -124,12 +189,12 @@ void Engine<Arch>::AudioBufferInPlaceScale(float* aBlock, float aScale,
+@@ -124,12 +243,12 @@
                                             uint32_t aSize) {
    MOZ_ASSERT(is_aligned<Arch>(aBlock), "aBlock is aligned");
  
@@ -619,7 +673,7 @@ index 78a24ce7bf..10d664d2c0 100644
      auto vout = vin * vgain;
      vout.store_aligned(&aBlock[i]);
    }
-@@ -142,11 +207,11 @@ void Engine<Arch>::AudioBufferInPlaceScale(float* aBlock, float* aScale,
+@@ -142,11 +261,11 @@
    MOZ_ASSERT(is_aligned<Arch>(aBlock), "aBlock is aligned");
    MOZ_ASSERT(is_aligned<Arch>(aScale), "aScale is aligned");
  
@@ -635,7 +689,7 @@ index 78a24ce7bf..10d664d2c0 100644
      auto vout = vin * vgain;
      vout.store_aligned(&aBlock[i]);
    }
-@@ -166,21 +231,21 @@ void Engine<Arch>::AudioBlockPanStereoToStereo(
+@@ -166,21 +285,21 @@
    MOZ_ASSERT(is_aligned<Arch>(aOutputL), "aOutputL is aligned");
    MOZ_ASSERT(is_aligned<Arch>(aOutputR), "aOutputR is aligned");
  
@@ -664,7 +718,7 @@ index 78a24ce7bf..10d664d2c0 100644
        vout.store_aligned(&aOutputL[i]);
  
        /* right channel : aOutputR = aInputR * gainR */
-@@ -190,16 +255,16 @@ void Engine<Arch>::AudioBlockPanStereoToStereo(
+@@ -190,16 +309,16 @@
    } else {
      MOZ_UNROLL(2)
      for (unsigned i = 0; i < WEBAUDIO_BLOCK_SIZE;
@@ -685,7 +739,7 @@ index 78a24ce7bf..10d664d2c0 100644
        vout.store_aligned(&aOutputR[i]);
      }
    }
-@@ -212,9 +277,37 @@ void Engine<Arch>::BufferComplexMultiply(const float* aInput,
+@@ -212,9 +331,41 @@
    MOZ_ASSERT(is_aligned<Arch>(aInput), "aInput is aligned");
    MOZ_ASSERT(is_aligned<Arch>(aOutput), "aOutput is aligned");
    MOZ_ASSERT(is_aligned<Arch>(aScale), "aScale is aligned");
@@ -697,6 +751,10 @@ index 78a24ce7bf..10d664d2c0 100644
 +  if constexpr (std::is_same_v<Arch, NeonEmuArch>) {
 +    // xsimd on NEON: re = vfmaq(-(ai*bi), ar, br), im = vfmaq(ai*br, ar, bi),
 +    // one rounding for the fused product.
++    if (NeonEmuHasFma()) {
++      NeonEmuComplexMultiplyFma(aInput, aScale, aOutput, aSize);
++      return;
++    }
 +    for (unsigned i = 0; i < aSize * 2; i += 2) {
 +      float ar = aInput[i], ai = aInput[i + 1];
 +      float br = aScale[i], bi = aScale[i + 1];
@@ -724,7 +782,7 @@ index 78a24ce7bf..10d664d2c0 100644
    MOZ_UNROLL(2)
    for (unsigned i = 0; i < aSize * 2;
         i += 2 * xsimd::batch<std::complex<float>, Arch>::size) {
-@@ -246,22 +339,22 @@ float Engine<Arch>::AudioBufferSumOfSquares(const float* aInput,
+@@ -246,22 +397,22 @@
    MOZ_ASSERT(is_aligned<Arch>(aInput), "aInput is aligned");
  
    constexpr uint32_t unroll_factor = 4;
@@ -754,7 +812,7 @@ index 78a24ce7bf..10d664d2c0 100644
    for (uint32_t i = vLength; i < aLength; ++i) sum += aInput[i] * aInput[i];
    return sum;
  };
-@@ -283,13 +376,13 @@ void Engine<Arch>::NaNToZeroInPlace(float* aSamples, size_t aCount) {
+@@ -283,13 +434,13 @@
  
    MOZ_ASSERT(is_aligned<Arch>(aSamples), "aSamples is aligned");
  
@@ -772,7 +830,7 @@ index 78a24ce7bf..10d664d2c0 100644
      vout.store_aligned(&aSamples[i]);
    }
  
-@@ -316,24 +409,24 @@ void Engine<Arch>::AudioBlockPanStereoToStereo(
+@@ -316,24 +467,24 @@
    MOZ_ASSERT(is_aligned<Arch>(aOutputL), "aOutputL is aligned");
    MOZ_ASSERT(is_aligned<Arch>(aOutputR), "aOutputR is aligned");
  
@@ -841,10 +899,10 @@ index 3bd802d715..826259a617 100644
      SOURCES["AudioNodeEngineSSE2.cpp"].flags += CONFIG["SSE2_FLAGS"]
      if CONFIG["SSE4_2_FLAGS"]:
 diff --git a/gfx/skia/moz.build b/gfx/skia/moz.build
-index 7c81493630..449db70aa9 100644
+index 7c81493630..3f171d0fa7 100644
 --- a/gfx/skia/moz.build
 +++ b/gfx/skia/moz.build
-@@ -508,6 +508,7 @@ SOURCES += [
+@@ -508,6 +508,7 @@
      'skia/src/pdf/SkPDFDevice.cpp',
      'skia/src/pdf/SkPDFFont.cpp',
      'skia/src/pdf/SkPDFType1Font.cpp',
@@ -852,7 +910,7 @@ index 7c81493630..449db70aa9 100644
      'skia/src/sksl/SkSLLexer.cpp',
      'skia/src/utils/SkParse.cpp',
      'skia/src/utils/SkParsePath.cpp',
-@@ -583,6 +584,38 @@ if CONFIG['INTEL_ARCHITECTURE']:
+@@ -583,6 +584,58 @@
      ]
      SOURCES['skia/modules/skcms/src/skcms_TransformHsw.cc'].flags += skia_opt_flags
      SOURCES['skia/src/opts/SkOpts_ml3.cpp'].flags += skia_opt_flags
@@ -868,6 +926,26 @@ index 7c81493630..449db70aa9 100644
 +    SOURCES += skia_neonemu_sources
 +    for f in skia_neonemu_sources:
 +        SOURCES[f].flags += skia_opt_flags
++    # The same files built for AVX2, FMA and F16C (SkCpu ML3), where
++    # SkNeonEmu.h runs its fast paths; chosen over them on such a CPU.
++    skia_neonemu_hsw_sources = [f.replace('_neonemu.cpp', '_neonemu_hsw.cpp')
++                                for f in skia_neonemu_sources]
++    SOURCES += skia_neonemu_hsw_sources
++    for f in skia_neonemu_hsw_sources:
++        SOURCES[f].flags += skia_opt_flags + ['-Dskvx=skvx_neonemu_hsw', '-mavx2',
++                                              '-mf16c', '-mfma']
++    # The raster pipeline at AVX2's width with the AArch64 helpers, chosen over
++    # the 4-wide emulated tier on such a CPU (SKRP_ARM_SEMANTICS).
++    SOURCES += ['skia/src/opts/SkOpts_armhsw.cpp']
++    SOURCES['skia/src/opts/SkOpts_armhsw.cpp'].flags += skia_opt_flags + [
++        '-Dskvx=skvx_hsw', '-mavx2', '-mf16c', '-mfma']
++    # The same with AVX-512 F/DQ/BW/VL: 32 vector registers and EVEX forms at
++    # 256 bits. Without AVX512CD Skia keeps its AVX2 tier (SkFeatures.h), and
++    # 256-bit vectors keep auto-vectorised loops off the 512-bit units.
++    SOURCES += ['skia/src/opts/SkOpts_armskx.cpp']
++    SOURCES['skia/src/opts/SkOpts_armskx.cpp'].flags += skia_opt_flags + [
++        '-Dskvx=skvx_armskx', '-mavx2', '-mf16c', '-mfma', '-mavx512f',
++        '-mavx512dq', '-mavx512bw', '-mavx512vl', '-mprefer-vector-width=256']
 +elif CONFIG['TARGET_CPU'] == 'aarch64':
 +    # general.cpu_identity = Intel or AMD: Skia's x86-64 code built against
 +    # simde's x86emu, chosen at startup. Each tier keeps its own skvx, as on x86.
@@ -932,7 +1010,7 @@ index 7dc4d8e24d..6607736e0b 100644
          return sk_bit_cast<Vec<N,float>>(vcvt_f32_f16(sk_bit_cast<float16x4_t>(x)));
      }
 diff --git a/gfx/skia/skia/src/core/SkBitmapProcState_opts.cpp b/gfx/skia/skia/src/core/SkBitmapProcState_opts.cpp
-index 58cbdda37b..1b4fc4d672 100644
+index 58cbdda37b..0d3514507d 100644
 --- a/gfx/skia/skia/src/core/SkBitmapProcState_opts.cpp
 +++ b/gfx/skia/skia/src/core/SkBitmapProcState_opts.cpp
 @@ -5,6 +5,7 @@
@@ -943,27 +1021,80 @@ index 58cbdda37b..1b4fc4d672 100644
  #include "include/private/base/SkFeatures.h"
  #include "src/core/SkBitmapProcState.h"
  #include "src/core/SkCpu.h"
-@@ -22,6 +23,8 @@ namespace SkOpts {
+@@ -20,8 +21,12 @@
+ namespace SkOpts {
+     DEFINE_DEFAULT(S32_alpha_D32_filter_DX);
      DEFINE_DEFAULT(S32_alpha_D32_filter_DXDY);
++    decltype(filter_affine_clamp) filter_affine_clamp = nullptr;
  
      void Init_BitmapProcState_ssse3();
 +    void Init_BitmapProcState_neonemu();
++    void Init_BitmapProcState_neonemu_hsw();
 +    void Init_BitmapProcState_x86emu();
      void Init_BitmapProcState_lasx();
  
      static bool init() {
-@@ -31,6 +34,11 @@ namespace SkOpts {
+@@ -31,6 +36,14 @@
          #if SK_CPU_X64_LEVEL < SK_CPU_X64_LEVEL_SSSE3
              if (SkCpu::Supports(SkX64::SSSE3)) { Init_BitmapProcState_ssse3(); }
          #endif
-+        // general.cpu_identity = ARM64: Skia's AArch64 code, emulated.
-+        if (sk_cpu_emulates_arm64()) { Init_BitmapProcState_neonemu(); }
++        // general.cpu_identity = ARM64: Skia's AArch64 code, emulated; the
++        // HSW build has the emulation's fast paths (SkNeonEmu.h).
++        if (sk_cpu_emulates_arm64()) {
++            if (SkCpu::Supports(SkX64::ML3)) { Init_BitmapProcState_neonemu_hsw(); } else { Init_BitmapProcState_neonemu(); }
++        }
 +    #elif defined(SK_CPU_ARM64)
 +        // general.cpu_identity = Intel or AMD: Skia's x86-64 code, emulated.
 +        if (sk_cpu_emulates_x86()) { Init_BitmapProcState_x86emu(); }
      #elif defined(SK_CPU_LOONGARCH)
          #if SK_CPU_LSX_LEVEL < SK_CPU_LSX_LEVEL_LASX
              if (SkCpu::Supports(SkLoongArch::ASX)) { Init_BitmapProcState_lasx(); }
+diff --git a/gfx/skia/skia/src/core/SkBitmapProcState.h b/gfx/skia/skia/src/core/SkBitmapProcState.h
+index 382683be79..6d95ce4bd1 100644
+--- a/gfx/skia/skia/src/core/SkBitmapProcState.h
++++ b/gfx/skia/skia/src/core/SkBitmapProcState.h
+@@ -210,6 +210,10 @@
+                                            const uint32_t* xy, int count, SkPMColor*);
+     extern void (*S32_alpha_D32_filter_DXDY)(const SkBitmapProcState&,
+                                              const uint32_t* xy, int count, SkPMColor*);
++    // filter_affine<clamp, clamp>'s loop from its mapped start, or null
++    // (general.cpu_identity = ARM64 on an AVX2 host: SkNeonEmuAffine.h).
++    extern void (*filter_affine_clamp)(uint32_t xy[], int count, SkFixed3232 fx, SkFixed3232 fy,
++                                       SkFixed3232 dx, SkFixed3232 dy, int maxX, int maxY);
+ 
+     void Init_BitmapProcState();
+ }  // namespace SkOpts
+diff --git a/gfx/skia/skia/src/core/SkBitmapProcState_matrixProcs.cpp b/gfx/skia/skia/src/core/SkBitmapProcState_matrixProcs.cpp
+index 95126546f7..64a9926363 100644
+--- a/gfx/skia/skia/src/core/SkBitmapProcState_matrixProcs.cpp
++++ b/gfx/skia/skia/src/core/SkBitmapProcState_matrixProcs.cpp
+@@ -287,6 +287,16 @@
+     return SkTPin(fx >> 16, 0, max);
+ }
+ 
++// filter_affine<clamp, clamp> with its loop in SkOpts::filter_affine_clamp;
++// the start is mapped here, in this file's code, as filter_affine maps it.
++static void filter_affine_clamp_opts(const SkBitmapProcState& s,
++                                     uint32_t xy[], int count, int x, int y) {
++    const SkBitmapProcStateAutoMapper mapper(s, x, y);
++    SkOpts::filter_affine_clamp(xy, count, mapper.fixed3232X(), mapper.fixed3232Y(),
++                                s.fInvSx, s.fInvKy,
++                                s.fPixmap.width() - 1, s.fPixmap.height() - 1);
++}
++
+ static const SkBitmapProcState::MatrixProc ClampX_ClampY_Procs[] = {
+     nofilter_scale <clamp, clamp, true>, filter_scale <clamp, clamp, extract_low_bits_clamp_clamp, true>,
+     nofilter_affine<clamp, clamp>,       filter_affine<clamp, clamp, extract_low_bits_clamp_clamp>,
+@@ -533,6 +543,9 @@
+             // clamp gets special version of filterOne, working in non-normalized space (allowing decal)
+             fFilterOneX = SK_Fixed1;
+             fFilterOneY = SK_Fixed1;
++            if (index == 3 && SkOpts::filter_affine_clamp) {
++                return filter_affine_clamp_opts;
++            }
+             return ClampX_ClampY_Procs[index];
+         }
+ 
 diff --git a/gfx/skia/skia/src/core/SkBitmapProcState_opts_ssse3_x86emu.cpp b/gfx/skia/skia/src/core/SkBitmapProcState_opts_ssse3_x86emu.cpp
 new file mode 100644
 index 0000000000..64b5530733
@@ -1012,7 +1143,7 @@ index 0000000000..18682487b7
 +    }
 +}  // namespace SkOpts
 diff --git a/gfx/skia/skia/src/core/SkBlitMask_opts.cpp b/gfx/skia/skia/src/core/SkBlitMask_opts.cpp
-index f98993139e..8aa01fb1ff 100644
+index f98993139e..cc6dfd3b0a 100644
 --- a/gfx/skia/skia/src/core/SkBlitMask_opts.cpp
 +++ b/gfx/skia/skia/src/core/SkBlitMask_opts.cpp
 @@ -5,6 +5,7 @@
@@ -1023,20 +1154,24 @@ index f98993139e..8aa01fb1ff 100644
  #include "include/private/base/SkFeatures.h"
  #include "src/core/SkBlitMask.h"
  #include "src/core/SkCpu.h"
-@@ -21,6 +22,7 @@ namespace SkOpts {
+@@ -21,6 +22,8 @@
      DEFINE_DEFAULT(blit_mask_d32_a8);
  
      void Init_BlitMask_ssse3();
 +    void Init_BlitMask_neonemu();
++    void Init_BlitMask_neonemu_hsw();
  
      static bool init() {
      #if defined(SK_ENABLE_OPTIMIZE_SIZE)
-@@ -29,6 +31,11 @@ namespace SkOpts {
+@@ -29,6 +32,14 @@
          #if SK_CPU_X64_LEVEL < SK_CPU_X64_LEVEL_SSSE3
              if (SkCpu::Supports(SkX64::SSSE3)) { Init_BlitMask_ssse3(); }
          #endif
-+        // general.cpu_identity = ARM64: Skia's AArch64 code, emulated.
-+        if (sk_cpu_emulates_arm64()) { Init_BlitMask_neonemu(); }
++        // general.cpu_identity = ARM64: Skia's AArch64 code, emulated; the
++        // HSW build has the emulation's fast paths (SkNeonEmu.h).
++        if (sk_cpu_emulates_arm64()) {
++            if (SkCpu::Supports(SkX64::ML3)) { Init_BlitMask_neonemu_hsw(); } else { Init_BlitMask_neonemu(); }
++        }
 +    #elif defined(SK_CPU_ARM64)
 +        // general.cpu_identity = Intel or AMD: Skia's x86-64 code, emulated.
 +        if (sk_cpu_emulates_x86()) { Init_BlitMask_ssse3(); }
@@ -1059,18 +1194,20 @@ index 0000000000..073ff1a898
 +
 +#include "src/core/SkBlitMask_opts_ssse3.cpp"
 diff --git a/gfx/skia/skia/src/core/SkBlitRow_D32.cpp b/gfx/skia/skia/src/core/SkBlitRow_D32.cpp
-index 27f0b4d229..ab64ad4c06 100644
+index 27f0b4d229..a1d78fb6af 100644
 --- a/gfx/skia/skia/src/core/SkBlitRow_D32.cpp
 +++ b/gfx/skia/skia/src/core/SkBlitRow_D32.cpp
-@@ -12,6 +12,7 @@
+@@ -11,7 +11,9 @@
+ #include "src/core/SkBlitRow.h"
  #include "src/core/SkColorData.h"
  #include "src/core/SkColorPriv.h"
++#include "src/core/SkCpu.h"
  #include "src/core/SkMemset.h"
 +#include "src/opts/SkCpuEstimates.h"
  
  #include <cstring>
  #include <iterator>
-@@ -33,250 +34,10 @@ static void blit_row_s32_opaque(SkPMColor* dst,
+@@ -33,250 +35,10 @@
  #if SK_CPU_X64_LEVEL >= SK_CPU_X64_LEVEL_SSE2
      #include <emmintrin.h>
      #include <xmmintrin.h>
@@ -1323,7 +1460,7 @@ index 27f0b4d229..ab64ad4c06 100644
  #elif SK_CPU_LSX_LEVEL >= SK_CPU_LSX_LEVEL_LASX
      #include <lasxintrin.h>
  
-@@ -537,6 +298,20 @@ static void blit_row_s32_opaque(SkPMColor* dst,
+@@ -537,6 +299,23 @@
      }
  #endif
  
@@ -1332,6 +1469,9 @@ index 27f0b4d229..ab64ad4c06 100644
 +    // SkBlitRow_opts_neonemu.cpp
 +    void neonemu_blit_row_s32_blend(SkPMColor*, const SkPMColor*, int, U8CPU);
 +    void neonemu_blit_row_s32a_blend(SkPMColor*, const SkPMColor*, int, U8CPU);
++    // SkBlitRow_opts_neonemu_hsw.cpp
++    void neonemu_blit_row_s32_blend_hsw(SkPMColor*, const SkPMColor*, int, U8CPU);
++    void neonemu_blit_row_s32a_blend_hsw(SkPMColor*, const SkPMColor*, int, U8CPU);
 +}  // namespace SkOpts
 +#elif defined(SK_CPU_ARM64) && !defined(SK_ENABLE_OPTIMIZE_SIZE)
 +namespace SkOpts {
@@ -1344,13 +1484,17 @@ index 27f0b4d229..ab64ad4c06 100644
  SkBlitRow::Proc32 SkBlitRow::Factory32(unsigned flags) {
      static const SkBlitRow::Proc32 kProcs[] = {
          blit_row_s32_opaque,
-@@ -548,6 +323,20 @@ SkBlitRow::Proc32 SkBlitRow::Factory32(unsigned flags) {
+@@ -548,6 +327,24 @@
      SkASSERT(flags < std::size(kProcs));
      flags &= std::size(kProcs) - 1;  // just to be safe
  
 +#if defined(SK_CPU_X86) && !defined(SK_ENABLE_OPTIMIZE_SIZE)
 +    // general.cpu_identity = ARM64: the NEON blends, emulated.
 +    if (sk_cpu_emulates_arm64() && (flags == 1 || flags == 3)) {
++        if (SkCpu::Supports(SkX64::ML3)) {
++            return flags == 1 ? SkOpts::neonemu_blit_row_s32_blend_hsw
++                              : SkOpts::neonemu_blit_row_s32a_blend_hsw;
++        }
 +        return flags == 1 ? SkOpts::neonemu_blit_row_s32_blend
 +                          : SkOpts::neonemu_blit_row_s32a_blend;
 +    }
@@ -1498,7 +1642,7 @@ index 0000000000..f6f8869525
 +        }
 +    }
 diff --git a/gfx/skia/skia/src/core/SkBlitRow_opts.cpp b/gfx/skia/skia/src/core/SkBlitRow_opts.cpp
-index da48a55d0c..6a2a0e9805 100644
+index da48a55d0c..d0f726d1fd 100644
 --- a/gfx/skia/skia/src/core/SkBlitRow_opts.cpp
 +++ b/gfx/skia/skia/src/core/SkBlitRow_opts.cpp
 @@ -5,6 +5,7 @@
@@ -1509,20 +1653,24 @@ index da48a55d0c..6a2a0e9805 100644
  #include "include/private/base/SkFeatures.h"
  #include "src/core/SkBlitRow.h"
  #include "src/core/SkCpu.h"
-@@ -22,6 +23,7 @@ namespace SkOpts {
+@@ -22,6 +23,8 @@
      DEFINE_DEFAULT(blit_row_s32a_opaque);
  
      void Init_BlitRow_ml3();
 +    void Init_BlitRow_neonemu();
++    void Init_BlitRow_neonemu_hsw();
      void Init_BlitRow_lasx();
  
      static bool init() {
-@@ -31,6 +33,11 @@ namespace SkOpts {
+@@ -31,6 +34,14 @@
          #if SK_CPU_X64_LEVEL < SK_CPU_X64_LEVEL_AVX2
              if (SkCpu::Supports(SkX64::ML3)) { Init_BlitRow_ml3(); }
          #endif
-+        // general.cpu_identity = ARM64: Skia's AArch64 code, emulated.
-+        if (sk_cpu_emulates_arm64()) { Init_BlitRow_neonemu(); }
++        // general.cpu_identity = ARM64: Skia's AArch64 code, emulated; the
++        // HSW build has the emulation's fast paths (SkNeonEmu.h).
++        if (sk_cpu_emulates_arm64()) {
++            if (SkCpu::Supports(SkX64::ML3)) { Init_BlitRow_neonemu_hsw(); } else { Init_BlitRow_neonemu(); }
++        }
 +    #elif defined(SK_CPU_ARM64)
 +        // general.cpu_identity = Intel or AMD: Skia's x86-64 code, emulated.
 +        if (sk_cpu_emulates_x86()) { Init_BlitRow_ml3(); }
@@ -1591,10 +1739,10 @@ index 7ae979a931..0f45ce3d08 100644
          steps.fFlags.encode) {
          return false;
 diff --git a/gfx/skia/skia/src/core/SkOpts.cpp b/gfx/skia/skia/src/core/SkOpts.cpp
-index adfbdc30f0..6245760d93 100644
+index adfbdc30f0..88e729ecf4 100644
 --- a/gfx/skia/skia/src/core/SkOpts.cpp
 +++ b/gfx/skia/skia/src/core/SkOpts.cpp
-@@ -4,6 +4,7 @@
+@@ -4,12 +4,15 @@
   * Use of this source code is governed by a BSD-style license that can be
   * found in the LICENSE file.
   */
@@ -1602,22 +1750,51 @@ index adfbdc30f0..6245760d93 100644
  #include "src/core/SkOpts.h"
  
  #include "include/private/base/SkFeatures.h"
-@@ -45,6 +46,7 @@ namespace SkOpts {
+ #include "src/core/SkCpu.h"
+ #include "src/core/SkOptsTargets.h"
+ 
++#include <stdlib.h>
++
+ #define SK_OPTS_TARGET SK_OPTS_TARGET_DEFAULT
+ #include "src/opts/SkOpts_SetTarget.h"
+ 
+@@ -45,6 +48,10 @@
  
      // Each Init_foo() is defined in src/opts/SkOpts_foo.cpp.
      void Init_ml3();
 +    void Init_neonemu();
++    void Init_neonemu_hsw();
++    void Init_armhsw();
++    void Init_armskx();
      void Init_ml4();
      void Init_lasx();
  
-@@ -63,6 +65,14 @@ namespace SkOpts {
+@@ -63,6 +70,32 @@
              #endif
          #endif
  
-+        // The vendor table the raster pipeline reads (sk_cpu_estimates_cached).
++        // general.cpu_identity = 1 or 2: the other x86 vendor's estimates.
 +        sk_cpu_estimates_init_pipeline();
-+        // general.cpu_identity = ARM64: Skia's AArch64 code, emulated.
-+        if (sk_cpu_emulates_arm64()) { Init_neonemu(); }
++        // general.cpu_identity = ARM64: Skia's AArch64 code, emulated; the
++        // HSW build has the emulation's fast paths (SkNeonEmu.h).
++        if (sk_cpu_emulates_arm64()) {
++            // With AVX2 the pipeline runs at AVX2's width with the AArch64
++            // helpers (SkOpts_armhsw.cpp): the same bits, at native speed.
++            // MOZ_CAMOUFOX_ARM_RASTER_NARROW keeps the 4-wide emulated tier,
++            // for checks that compare the two.
++            if (!SkCpu::Supports(SkX64::ML3)) {
++                Init_neonemu();
++            } else if (getenv("MOZ_CAMOUFOX_ARM_RASTER_NARROW")) {
++                Init_neonemu_hsw();
++            } else if (SkCpu::Supports(SkX64::AVX512F | SkX64::AVX512DQ | SkX64::AVX512BW |
++                                       SkX64::AVX512VL)) {
++                // The same tier with AVX-512VL's 32 vector registers
++                // (SkOpts_armskx.cpp).
++                Init_armskx();
++            } else {
++                Init_armhsw();
++            }
++        }
 +    #elif defined(SK_CPU_ARM64)
 +        sk_cpu_estimates_init_pipeline();
 +        // general.cpu_identity = Intel or AMD: Skia's x86-64 code, emulated.
@@ -1626,7 +1803,7 @@ index adfbdc30f0..6245760d93 100644
          #if SK_CPU_LSX_LEVEL < SK_CPU_LSX_LEVEL_LASX
              if (SkCpu::Supports(SkLoongArch::ASX)) { Init_lasx(); }
 diff --git a/gfx/skia/skia/src/core/SkSwizzler_opts.cpp b/gfx/skia/skia/src/core/SkSwizzler_opts.cpp
-index 6d37af434f..fc7709bd45 100644
+index 6d37af434f..2730941e79 100644
 --- a/gfx/skia/skia/src/core/SkSwizzler_opts.cpp
 +++ b/gfx/skia/skia/src/core/SkSwizzler_opts.cpp
 @@ -5,6 +5,7 @@
@@ -1637,21 +1814,25 @@ index 6d37af434f..fc7709bd45 100644
  #include "include/private/base/SkFeatures.h"
  #include "src/core/SkCpu.h"
  #include "src/core/SkOptsTargets.h"
-@@ -32,6 +33,8 @@ namespace SkOpts {
+@@ -32,6 +33,9 @@
      DEFINE_DEFAULT(inverted_CMYK_to_BGR1);
  
      void Init_Swizzler_ssse3();
 +    void Init_Swizzler_neonemu();
++    void Init_Swizzler_neonemu_hsw();
 +    void Init_Swizzler_x86emu();
      void Init_Swizzler_ml3();
      void Init_Swizzler_lasx();
  
-@@ -46,6 +49,11 @@ namespace SkOpts {
+@@ -46,6 +50,14 @@
          #if SK_CPU_X64_LEVEL < SK_CPU_X64_LEVEL_AVX2
              if (SkCpu::Supports(SkX64::ML3)) { Init_Swizzler_ml3(); }
          #endif
-+        // general.cpu_identity = ARM64: Skia's AArch64 code, emulated.
-+        if (sk_cpu_emulates_arm64()) { Init_Swizzler_neonemu(); }
++        // general.cpu_identity = ARM64: Skia's AArch64 code, emulated; the
++        // HSW build has the emulation's fast paths (SkNeonEmu.h).
++        if (sk_cpu_emulates_arm64()) {
++            if (SkCpu::Supports(SkX64::ML3)) { Init_Swizzler_neonemu_hsw(); } else { Init_Swizzler_neonemu(); }
++        }
 +    #elif defined(SK_CPU_ARM64)
 +        // general.cpu_identity = Intel or AMD: Skia's x86-64 code, emulated.
 +        if (sk_cpu_emulates_x86()) { Init_Swizzler_x86emu(); }
@@ -1767,22 +1948,42 @@ index 6b1aa74116..981c17df99 100644
  
  namespace SK_OPTS_NS {
 diff --git a/gfx/skia/skia/src/opts/SkBlitRow_opts.h b/gfx/skia/skia/src/opts/SkBlitRow_opts.h
-index 54de40498a..e7c5479b5b 100644
+index 54de40498a..f1403b71c5 100644
 --- a/gfx/skia/skia/src/opts/SkBlitRow_opts.h
 +++ b/gfx/skia/skia/src/opts/SkBlitRow_opts.h
-@@ -89,7 +89,11 @@
+@@ -89,7 +89,12 @@
  #endif
  
  #if defined(SK_ARM_HAS_NEON)
 -    #include <arm_neon.h>
 +    #if defined(SK_NEON_EMU)
 +        #include "src/opts/SkNeonEmu.h"
++        #include "src/opts/SkNeonEmuBlit.h"
 +    #else
 +        #include <arm_neon.h>
 +    #endif
  
      // SkMulDiv255Round() applied to each lane.
      static inline uint8x8_t SkMulDiv255Round_neon8(uint8x8_t x, uint8x8_t y) {
+@@ -187,6 +192,18 @@
+ #endif
+ 
+ #if defined(SK_ARM_HAS_NEON)
++  #if defined(SK_NEON_EMU) && defined(__AVX2__)
++    // The same bytes as SkPMSrcOver_neon8, 8 pixels per AVX2 register
++    // (SkNeonEmuBlit.h); the NEON loops below finish the row.
++    while (len >= 8) {
++        _mm256_storeu_si256((__m256i*)dst,
++                            sk_neon_emu_srcover_avx2(_mm256_loadu_si256((const __m256i*)src),
++                                                     _mm256_loadu_si256((const __m256i*)dst)));
++        src += 8;
++        dst += 8;
++        len -= 8;
++    }
++  #endif
+     while (len >= 8) {
+         vst4_u8((uint8_t*)dst, SkPMSrcOver_neon8(vld4_u8((const uint8_t*)dst),
+                                                  vld4_u8((const uint8_t*)src)));
 diff --git a/gfx/skia/skia/src/opts/SkOpts_RestoreTarget.h b/gfx/skia/skia/src/opts/SkOpts_RestoreTarget.h
 index e6fab59ac6..ae81feef2d 100644
 --- a/gfx/skia/skia/src/opts/SkOpts_RestoreTarget.h
@@ -1884,10 +2085,10 @@ index 0000000000..747ae8cd9f
 +
 +#include "src/opts/SkOpts_ml3.cpp"
 diff --git a/gfx/skia/skia/src/opts/SkRasterPipeline_opts.h b/gfx/skia/skia/src/opts/SkRasterPipeline_opts.h
-index 9a0edd9594..711a5501b6 100644
+index 9a0edd9594..953fb5fcae 100644
 --- a/gfx/skia/skia/src/opts/SkRasterPipeline_opts.h
 +++ b/gfx/skia/skia/src/opts/SkRasterPipeline_opts.h
-@@ -108,7 +108,11 @@ using NoCtx = const void*;
+@@ -108,7 +108,11 @@
  #if defined(SKRP_CPU_SCALAR)
      #include <math.h>
  #elif defined(SKRP_CPU_NEON)
@@ -1900,63 +2101,690 @@ index 9a0edd9594..711a5501b6 100644
  #elif defined(SKRP_CPU_LASX)
      #include <lasxintrin.h>
      #include <lsxintrin.h>
-@@ -116,6 +120,7 @@ using NoCtx = const void*;
+@@ -116,8 +120,19 @@
      #include <lsxintrin.h>
  #else
      #include <immintrin.h>
 +    #include "src/opts/SkCpuEstimates.h"
++    #if defined(SKRP_ARM_SEMANTICS)
++        #include "src/opts/SkNeonEmu.h"
++    #endif
  #endif
  
++// SKRP_ARM_SEMANTICS (SkOpts_armhsw.cpp, general.cpu_identity = ARM64): the
++// AVX2 tier computes what Skia's AArch64 tier computes. Pixels do not depend on
++// how many run at once, so the stages run 8 (highp) or 16 (lowp) wide; every
++// helper whose AArch64 definition differs from AVX2's is that definition, run
++// four lanes at a time through SkNeonEmu.h. Generic vector operators compile to
++// the same x86 instructions as in the 4-wide emulated tier (SkOpts_neonemu*).
++
  // Notes:
-@@ -608,8 +613,21 @@ namespace SK_OPTS_NS {
-     SI I32 abs_  (I32 v)     { return (I32)_mm256_abs_epi32((__m256i)v); }
+ // * rcp_fast and rcp_precise both produce a reciprocal, but rcp_fast is an estimate with at least
+ //   12 bits of precision while rcp_precise should be accurate for float size. For ARM rcp_precise
+@@ -594,22 +609,92 @@
+     using U16 = V<uint16_t>;
+     using U8  = V<uint8_t >;
+ 
++#if defined(SKRP_ARM_SEMANTICS)
++    // The AArch64 tier's helpers (the SKRP_CPU_NEON section), 8 lanes at a
++    // time (SkNeonEmuWide.h).
++    SI __m256 arm_m(F v) { return sk_bit_cast<__m256>(v); }
++    SI F arm_f(__m256 v) { return sk_bit_cast<F>(v); }
++    SI F   mad(F f, F m, F a) { return arm_f(neon_emu_fma8(arm_m(a), arm_m(f), arm_m(m))); }
++    SI F  nmad(F f, F m, F a) { return arm_f(neon_emu_fms8(arm_m(a), arm_m(f), arm_m(m))); }
++    SI F   min(F a, F b)      { return arm_f(neon_emu_min8(arm_m(a), arm_m(b))); }
++    SI F   max(F a, F b)      { return arm_f(neon_emu_max8(arm_m(a), arm_m(b))); }
++    SI F   abs_(F v)          { return arm_f(neon_emu_abs8(arm_m(v))); }
++    SI F   floor_(F v)        { return arm_f(neon_emu_floor8(arm_m(v))); }
++    SI F   ceil_(F v)         { return arm_f(neon_emu_ceil8(arm_m(v))); }
++    SI F   sqrt_(F v)         { return arm_f(neon_emu_sqrt8(arm_m(v))); }
++    // rcp_approx: vrecpeq, then vrecpsq(v, e) * e; rcp_precise one more step;
++    // rsqrt_approx: vrsqrteq, then vrsqrtsq(v, e*e) * e. The products are the
++    // NEON section's generic operators.
++    SI F   rcp_approx(F v) {
++        F e = arm_f(neon_emu_recpe8(arm_m(v)));
++        return arm_f(neon_emu_recps8(arm_m(v), arm_m(e))) * e;
++    }
++    SI F   rcp_precise(F v) {
++        F e = rcp_approx(v);
++        return arm_f(neon_emu_recps8(arm_m(v), arm_m(e))) * e;
++    }
++    SI F   rsqrt_approx(F v) {
++        F e = arm_f(neon_emu_rsqrte8(arm_m(v)));
++        return arm_f(neon_emu_rsqrts8(arm_m(v), arm_m(e * e))) * e;
++    }
++    SI I32 iround(F v) { return sk_bit_cast<I32>(neon_emu_cvtns8(arm_m(v))); }
++    SI U32 round(F v)  { return sk_bit_cast<U32>(neon_emu_cvtnu8(arm_m(v))); }
++    SI F arm_join(float32x4_t lo, float32x4_t hi) {
++        return __builtin_shufflevector(lo, hi, 0, 1, 2, 3, 4, 5, 6, 7);
++    }
++    SI float32x4_t arm_lo(F v) { return __builtin_shufflevector(v, v, 0, 1, 2, 3); }
++    SI float32x4_t arm_hi(F v) { return __builtin_shufflevector(v, v, 4, 5, 6, 7); }
++    // AArch64 truncates where AVX2's packs saturate.
++    SI U16 pack(U32 v) { return __builtin_convertvector(v, U16); }
++    SI U8  pack(U16 v) { return __builtin_convertvector(v,  U8); }
++    // BSL selects bit by bit.
++    SI F   if_then_else(I32 c, F t, F e) {
++        return sk_bit_cast<F>((sk_bit_cast<I32>(t) & c) | (sk_bit_cast<I32>(e) & ~c));
++    }
++    SI I32 if_then_else(I32 c, I32 t, I32 e) { return (t & c) | (e & ~c); }
++    // BSL with a compare's mask (each lane all ones or all zeros): one blend.
++    SI F   arm_sel(I32 c, F t, F e) {
++        return arm_f(_mm256_blendv_ps(arm_m(e), arm_m(t), sk_bit_cast<__m256>(c)));
++    }
++#else
+     SI F   mad(F f, F m, F a) { return _mm256_fmadd_ps(f, m, a); }
+     SI F  nmad(F f, F m, F a) { return _mm256_fnmadd_ps(f, m, a); }
+ 
+     SI F   min(F a, F b)     { return _mm256_min_ps(a,b);    }
+-    SI I32 min(I32 a, I32 b) { return (I32)_mm256_min_epi32((__m256i)a,(__m256i)b); }
+-    SI U32 min(U32 a, U32 b) { return (U32)_mm256_min_epu32((__m256i)a,(__m256i)b); }
+     SI F   max(F a, F b)     { return _mm256_max_ps(a,b);    }
+-    SI I32 max(I32 a, I32 b) { return (I32)_mm256_max_epi32((__m256i)a,(__m256i)b); }
+-    SI U32 max(U32 a, U32 b) { return (U32)_mm256_max_epu32((__m256i)a,(__m256i)b); }
+-
+     SI F   abs_  (F v)       { return _mm256_and_ps(v, 0-v); }
+-    SI I32 abs_  (I32 v)     { return (I32)_mm256_abs_epi32((__m256i)v); }
      SI F   floor_(F v)       { return _mm256_floor_ps(v);    }
      SI F   ceil_(F v)        { return _mm256_ceil_ps(v);     }
 -    SI F   rcp_approx(F v)   { return _mm256_rcp_ps  (v);    }  // use rcp_fast instead
 -    SI F   rsqrt_approx(F v) { return _mm256_rsqrt_ps(v);    }
 +    // Another vendor's estimates, when general.cpu_identity names one (SkCpuEstimates.h).
++#if defined(SK_X86EMU)
++    // x86emu on aarch64: the vector forms need a real SSE2/AVX2 target, so the
++    // table is read lane by lane; the same bits.
 +    template <uint32_t (*Op)(const uint32_t*, uint32_t)>
 +    SI F estimate_as(const uint32_t* table, F v) {
 +        U32 bits = sk_bit_cast<U32>(v);
 +        for (int i = 0; i < 8; i++) { bits[i] = Op(table, bits[i]); }
 +        return sk_bit_cast<F>(bits);
 +    }
++    #define SK_ESTIMATE_RCP   sk_cpu_estimate_rcp
++    #define SK_ESTIMATE_RSQRT sk_cpu_estimate_rsqrt
++#else
++    template <__m256i (*Op)(const uint32_t*, __m256i)>
++    SI F estimate_as(const uint32_t* table, F v) {
++        return sk_bit_cast<F>(Op(table, sk_bit_cast<__m256i>(v)));
++    }
++    #define SK_ESTIMATE_RCP   sk_cpu_estimate_rcp_avx2
++    #define SK_ESTIMATE_RSQRT sk_cpu_estimate_rsqrt_avx2
++#endif
 +    SI F   rcp_approx(F v)   {  // use rcp_fast instead
-+        if (const uint32_t* table = sk_cpu_estimates_cached()) { return estimate_as<sk_cpu_estimate_rcp>(table, v); }
++        if (const uint32_t* table = sk_cpu_estimates_cached()) { return estimate_as<SK_ESTIMATE_RCP>(table, v); }
 +        return _mm256_rcp_ps  (v);
 +    }
 +    SI F   rsqrt_approx(F v) {
-+        if (const uint32_t* table = sk_cpu_estimates_cached()) { return estimate_as<sk_cpu_estimate_rsqrt>(table, v); }
++        if (const uint32_t* table = sk_cpu_estimates_cached()) { return estimate_as<SK_ESTIMATE_RSQRT>(table, v); }
 +        return _mm256_rsqrt_ps(v);
 +    }
++    #undef SK_ESTIMATE_RCP
++    #undef SK_ESTIMATE_RSQRT
      SI F   sqrt_ (F v)       { return _mm256_sqrt_ps (v);    }
      SI F   rcp_precise (F v) {
          F e = rcp_approx(v);
-@@ -809,9 +827,22 @@ namespace SK_OPTS_NS {
+@@ -631,6 +716,13 @@
+     SI I32 if_then_else(I32 c, I32 t, I32 e) {
+         return (I32)_mm256_blendv_ps((__m256)e, (__m256)t, (__m256)c);
+     }
++#endif  // SKRP_ARM_SEMANTICS
++
++    SI I32 min(I32 a, I32 b) { return (I32)_mm256_min_epi32((__m256i)a,(__m256i)b); }
++    SI U32 min(U32 a, U32 b) { return (U32)_mm256_min_epu32((__m256i)a,(__m256i)b); }
++    SI I32 max(I32 a, I32 b) { return (I32)_mm256_max_epi32((__m256i)a,(__m256i)b); }
++    SI U32 max(U32 a, U32 b) { return (U32)_mm256_max_epu32((__m256i)a,(__m256i)b); }
++    SI I32 abs_  (I32 v)     { return (I32)_mm256_abs_epi32((__m256i)v); }
+ 
+     // NOTE: This version of 'all' only works with mask values (true == all bits set)
+     SI bool any(I32 c) { return !_mm256_testz_si256((__m256i)c, _mm256_set1_epi32(-1)); }
+@@ -809,9 +901,37 @@
  #else
      SI I32 abs_(I32 v)         { return max(v, -v); }
  #endif
 -    SI F   rcp_approx(F v)     { return _mm_rcp_ps  (v);    }  // use rcp_fast instead
 +    // Another vendor's estimates, when general.cpu_identity names one (SkCpuEstimates.h).
++#if defined(SK_X86EMU)
++    // x86emu on aarch64: the vector forms need a real SSE2/AVX2 target, so the
++    // table is read lane by lane; the same bits.
 +    template <uint32_t (*Op)(const uint32_t*, uint32_t)>
 +    SI F estimate_as(const uint32_t* table, F v) {
 +        U32 bits = sk_bit_cast<U32>(v);
 +        for (int i = 0; i < 4; i++) { bits[i] = Op(table, bits[i]); }
 +        return sk_bit_cast<F>(bits);
 +    }
++    #define SK_ESTIMATE_RCP   sk_cpu_estimate_rcp
++    #define SK_ESTIMATE_RSQRT sk_cpu_estimate_rsqrt
++#else
++    template <__m128i (*Op)(const uint32_t*, __m128i)>
++    SI F estimate_as(const uint32_t* table, F v) {
++        return sk_bit_cast<F>(Op(table, sk_bit_cast<__m128i>(v)));
++    }
++    #define SK_ESTIMATE_RCP   sk_cpu_estimate_rcp_sse2
++    #define SK_ESTIMATE_RSQRT sk_cpu_estimate_rsqrt_sse2
++#endif
 +    SI F   rcp_approx(F v)     {  // use rcp_fast instead
-+        if (const uint32_t* table = sk_cpu_estimates_cached()) { return estimate_as<sk_cpu_estimate_rcp>(table, v); }
++        if (const uint32_t* table = sk_cpu_estimates_cached()) { return estimate_as<SK_ESTIMATE_RCP>(table, v); }
 +        return _mm_rcp_ps  (v);
 +    }
      SI F   rcp_precise (F v)   { F e = rcp_approx(v); return e * (2.0f - v * e); }
 -    SI F   rsqrt_approx(F v)   { return _mm_rsqrt_ps(v);    }
 +    SI F   rsqrt_approx(F v)   {
-+        if (const uint32_t* table = sk_cpu_estimates_cached()) { return estimate_as<sk_cpu_estimate_rsqrt>(table, v); }
++        if (const uint32_t* table = sk_cpu_estimates_cached()) { return estimate_as<SK_ESTIMATE_RSQRT>(table, v); }
 +        return _mm_rsqrt_ps(v);
 +    }
++    #undef SK_ESTIMATE_RCP
++    #undef SK_ESTIMATE_RSQRT
      SI F    sqrt_(F v)         { return _mm_sqrt_ps (v);    }
  
      SI I32 iround(F v)         { return (I32)_mm_cvtps_epi32(v); }
+@@ -1427,6 +1547,10 @@
+ #if defined(SKRP_CPU_NEON) && defined(SK_CPU_ARM64)
+     return vcvt_f32_f16((float16x4_t)h);
+ 
++#elif defined(SKRP_ARM_SEMANTICS)
++    return arm_join(vcvt_f32_f16(__builtin_shufflevector(h, h, 0, 1, 2, 3)),
++                    vcvt_f32_f16(__builtin_shufflevector(h, h, 4, 5, 6, 7)));
++
+ #elif defined(SKRP_CPU_ML4)
+     return _mm512_cvtph_ps((__m256i)h);
+ 
+@@ -1450,6 +1574,10 @@
+ #if defined(SKRP_CPU_NEON) && defined(SK_CPU_ARM64)
+     return (U16)vcvt_f16_f32(f);
+ 
++#elif defined(SKRP_ARM_SEMANTICS)
++    return __builtin_shufflevector(vcvt_f16_f32(arm_lo(f)), vcvt_f16_f32(arm_hi(f)),
++                                   0, 1, 2, 3, 4, 5, 6, 7);
++
+ #elif defined(SKRP_CPU_ML4)
+     return (U16)_mm512_cvtps_ph(f, _MM_FROUND_CUR_DIRECTION);
+ 
+@@ -2042,8 +2170,13 @@
+ // In most cases bias is 0 and the max value equals `scale`, but you can adjust the expected input
+ // by tweaking `maxI` relative to `scale`.
+ SI U32 to_unorm(F v, float scale, float bias, int maxI) {
++#if defined(SKRP_ARM_SEMANTICS)
++    // The same FMLA, FMAX, FMIN and FCVTNU, at AVX2's cost (SkNeonEmuWide.h).
++    return sk_bit_cast<U32>(neon_emu_unorm8(arm_m(v), scale, bias, (float) maxI));
++#else
+     // Any time we use round() we probably want to use to_unorm().
+     return round(min(max(0.0f, mad(v, scale, bias)), (float) maxI));
++#endif
+ }
+ SI U32 to_unorm(F v, int scale) {
+     return to_unorm(v, (float) scale, /*bias=*/0.f, /*maxI=*/scale);
+@@ -2213,6 +2346,18 @@
+ SI F inv(F x) { return 1.0f - x; }
+ SI F two(F x) { return x + x; }
+ 
++// rcp_fast(v) where a select after it keeps the product, 1/1 in the lanes it
++// drops. SKRP_ARM_SEMANTICS: those lanes are mostly 1/0, and the infinity
++// times zero after it makes NaNs that cost the emulated Arm NaN rules on every
++// pixel of a grey layer; the lanes kept give the same bits either way.
++SI F rcp_fast_unless(I32 dropped, F v) {
++#if defined(SKRP_ARM_SEMANTICS)
++    return rcp_fast(arm_sel(dropped, F1, v));
++#else
++    return rcp_fast(v);
++#endif
++}
++
+ BLEND_MODE(clear)    { return F0; }
+ BLEND_MODE(srcatop)  { return mad(s, da, d*inv(sa)); }
+ BLEND_MODE(dstatop)  { return mad(d, sa, s*inv(da)); }
+@@ -2246,6 +2391,195 @@
+ BLEND_MODE(difference) { return s + d - two(min(s*da, d*sa)); }
+ BLEND_MODE(exclusion)  { return s + d - two(s*d); }
+ 
++#if defined(SKRP_ARM_SEMANTICS)
++// The non-separable modes run every pixel through about forty FMIN, FMAX and
++// FMLA and three FRECPE/FRECPS, dodge and burn through FMIN and FRECPE/FRECPS
++// per channel, and each emulated one checks its lanes and branches. Here the
++// stage runs first with unchecked forms (ArmUnchecked), each exact for
++// operands that are not NaN: FMLA is FMA; FMIN is the OR of both MINPS
++// orders (which also gives -0 for +0 against -0, and a NaN for a NaN
++// operand); FMAX is the AND of both MAXPS orders (+0 for the tie); FMAX
++// against 0 is MAXPS(0, v + 0), exact for every v (-0 + 0 is +0, and a NaN
++// stays one); FRECPE is SkNeonEmuWide.h's form and FRECPS one FNMADD, exact
++// while the divisor's exponent field is 1..252, and a lane outside that marks
++// the vector bad. Selects, compares and the other arithmetic are IEEE on both
++// ISAs. So until a lane first holds a NaN it has AArch64's bits, and that
++// first NaN comes from arithmetic both compute alike. After it, the forms
++// differ from AArch64 only where a NaN reaches FMAX's AND, which can drop it;
++// in these stages every FMAX operand is a colour channel or a destination
++// channel, and each of those reaches its own output through FMAs, selects
++// with it in both arms, and the FMAX against 0, so that output is a NaN too.
++// When nothing is marked bad and no output lane is a NaN the outputs are
++// exact; otherwise the stage runs again, out of line, with the emulated
++// helpers (ArmChecked).
++struct ArmChecked {
++    F min(F a, F b)         { return SK_OPTS_NS::min(a, b); }
++    F max(F a, F b)         { return SK_OPTS_NS::max(a, b); }
++    F max0(F v)             { return SK_OPTS_NS::max(v, 0.0f); }
++    F mad(F f, F m, F a)    { return SK_OPTS_NS::mad(f, m, a); }
++    F nmad(F f, F m, F a)   { return SK_OPTS_NS::nmad(f, m, a); }
++    F rcp(I32 dropped, F v) { return rcp_fast_unless(dropped, v); }
++    void dst_alpha(F) {}
++};
++struct ArmUnchecked {
++    // The smallest and largest divisor exponent fields so far; a lane is
++    // out of range if either is (bad()).
++    __m256i exlo = _mm256_set1_epi32(0x7f800000),
++            exhi = _mm256_setzero_si256();
++    __m256 bad() const {
++        return _mm256_castsi256_ps(_mm256_or_si256(
++                _mm256_cmpeq_epi32(exlo, _mm256_setzero_si256()),
++                _mm256_cmpgt_epi32(exhi, _mm256_set1_epi32(252 << 23))));
++    }
++
++    F min(F a, F b) {
++        __m256 x = arm_m(a), y = arm_m(b);
++        return arm_f(_mm256_or_ps(_mm256_min_ps(x, y), _mm256_min_ps(y, x)));
++    }
++    F max(F a, F b) {
++        __m256 x = arm_m(a), y = arm_m(b);
++        return arm_f(_mm256_and_ps(_mm256_max_ps(x, y), _mm256_max_ps(y, x)));
++    }
++    F max0(F v) {
++        __m256 z = _mm256_setzero_ps();
++        return arm_f(_mm256_max_ps(z, _mm256_add_ps(arm_m(v), z)));
++    }
++    F mad(F f, F m, F a)  { return arm_f(_mm256_fmadd_ps(arm_m(f), arm_m(m), arm_m(a))); }
++    F nmad(F f, F m, F a) { return arm_f(_mm256_fnmadd_ps(arm_m(f), arm_m(m), arm_m(a))); }
++    // rcp_fast_unless: vrecpsq(v, e) * e with e = vrecpeq(v). Every caller
++    // selects the product away in the dropped lanes, so when all eight are
++    // dropped (clip_color on a pixel run with nothing to clip, set_sat on a
++    // grey one) the value is never used and is not computed; 1/1 there would
++    // not mark the vector bad either.
++    F rcp(I32 dropped, F v) {
++        __m256i d = sk_bit_cast<__m256i>(dropped);
++        if (_mm256_testc_si256(d, _mm256_set1_epi32(-1))) {
++            return F1;
++        }
++        return rcp_lanes(dropped, v);
++    }
++    F rcp_lanes(I32 dropped, F v) {
++        __m256 x = arm_m(arm_sel(dropped, F1, v));
++        __m256i u = _mm256_castps_si256(x),
++                ex = _mm256_and_si256(u, _mm256_set1_epi32(0x7f800000));
++        exlo = _mm256_min_epu32(exlo, ex);
++        exhi = _mm256_max_epu32(exhi, ex);
++        __m256 e = _mm256_castsi256_ps(neon_emu_recpe8_normal(u));
++        return arm_f(_mm256_mul_ps(_mm256_fnmadd_ps(x, e, _mm256_set1_ps(2.0f)), e));
++    }
++};
++
++// The non-separable modes' unchecked forms: FMIN and FMAX are one MINPS or
++// MAXPS, which differ from them only in a zero's sign and in dropping a NaN.
++// Every FMIN and FMAX operand there is a colour or destination channel, and
++// a NaN in one reaches its output, as above. For the sign: with operands
++// equal up to the sign of a zero, every step here gives results equal up to
++// that sign -- arithmetic, compares, selects (on the same masks), and the
++// reciprocals, which see a zero only in lanes a select drops; every colour
++// channel then goes through clip_channel's FMAX against 0, which makes any
++// zero +0, before the final FMAs. So the outputs are the same bits. Dodge
++// and burn have no such step and keep ArmUnchecked's exact forms.
++// Dodge and burn: their one FMIN is min(da, x), and MINPS(da, x) gives
++// FMIN's bits except for da = -0 against x = +0, so a -0 da marks the lane
++// bad (the exponent field 0 that bad() looks for). A NaN x comes back as the
++// second operand; a NaN da is dropped, but da reaches the output through
++// s*inv(da) in the arm that uses the FMIN.
++struct ArmUncheckedSep : ArmUnchecked {
++    F min(F da, F x) { return arm_f(_mm256_min_ps(arm_m(da), arm_m(x))); }
++    // Dodge and burn drop all eight lanes only where every pixel has s == sa
++    // (dodge) or s == 0 (burn), so the early-out's test and branch would cost
++    // each channel for nothing.
++    F rcp(I32 dropped, F v) { return rcp_lanes(dropped, v); }
++    void dst_alpha(F da) {
++        exlo = _mm256_min_epu32(exlo, _mm256_xor_si256(sk_bit_cast<__m256i>(da),
++                                                       _mm256_set1_epi32((int)0x80000000u)));
++    }
++};
++
++struct ArmUncheckedNonSep : ArmUnchecked {
++    F min(F a, F b) { return arm_f(_mm256_min_ps(arm_m(a), arm_m(b))); }
++    F max(F a, F b) { return arm_f(_mm256_max_ps(arm_m(a), arm_m(b))); }
++};
++
++// A stage: the fast forms, and when their result can't be trusted a tail
++// call to the same stage with the emulated helpers, out of line and cold.
++// The redo is a jump, not a call, so the fast path saves no registers and
++// keeps no stack frame of its own (a call there cost four GPR saves and a
++// realigned frame per pixel run, about a sixth of dodge's instructions).
++#if SKRP_NARROW_STAGES
++    #define SKRP_ARM_STAGE_PARAMS Params* params, SkRasterPipelineStage* program, \
++                                  F r, F g, F b, F a
++    #define SKRP_ARM_STAGE_DST F dr = params->dr, dg = params->dg, db = params->db, \
++                                 da = params->da;
++    #define SKRP_ARM_STAGE_ARGS(R, G, B, A) params, program, R, G, B, A
++#else
++    #define SKRP_ARM_STAGE_PARAMS SkRasterPipelineStage* program, const size_t dx, \
++                                  const size_t dy, std::byte* base, F r, F g, F b, F a, \
++                                  F dr, F dg, F db, F da
++    #define SKRP_ARM_STAGE_DST
++    #define SKRP_ARM_STAGE_ARGS(R, G, B, A) program, dx, dy, base, R, G, B, A, dr, dg, db, da
++#endif
++template <class Body>
++static __attribute__((noinline, cold)) void ABI arm_checked_stage(SKRP_ARM_STAGE_PARAMS) {
++    SKRP_ARM_STAGE_DST
++    ArmChecked p;
++    Body::run(p, r, g, b, a, dr, dg, db, da);
++    ++program;
++    auto fn = (Stage)program->fn;
++    SKRP_MUSTTAIL return fn(SKRP_ARM_STAGE_ARGS(r, g, b, a));
++}
++// The fast forms on r, g, b, a; true when the stage must run again checked.
++template <class Body>
++SI bool arm_fast(F& r, F& g, F& b, F& a, F dr, F dg, F db, F da) {
++    typename Body::Fast p;
++    Body::run(p, r, g, b, a, dr, dg, db, da);
++    __m256 redo = _mm256_or_ps(
++            _mm256_or_ps(_mm256_cmp_ps(arm_m(r), arm_m(g), _CMP_UNORD_Q),
++                         _mm256_cmp_ps(arm_m(b), arm_m(a), _CMP_UNORD_Q)),
++            p.bad());
++    return _mm256_movemask_ps(redo) != 0;
++}
++#define SKRP_ARM_VERIFIED_STAGE(name, Body)                                              \
++    static void ABI name(SKRP_ARM_STAGE_PARAMS) {                                       \
++        SKRP_ARM_STAGE_DST                                                              \
++        F R = r, G = g, B = b, A = a;                                                   \
++        if (__builtin_expect(arm_fast<Body>(R, G, B, A, dr, dg, db, da), 0)) {          \
++            SKRP_MUSTTAIL return arm_checked_stage<Body>(SKRP_ARM_STAGE_ARGS(r, g, b, a)); \
++        }                                                                               \
++        ++program;                                                                      \
++        auto fn = (Stage)program->fn;                                                   \
++        SKRP_MUSTTAIL return fn(SKRP_ARM_STAGE_ARGS(R, G, B, A));                       \
++    }
++
++// colorburn and colordodge (below, without SKRP_ARM_SEMANTICS) through the
++// policy; the selects are on compares, one blend each instead of BSL's three.
++template <class P> SI F arm_colorburn(P& p, F s, F d, F sa, F da) {
++    return arm_sel(d == da,    d +    s*inv(da),
++           arm_sel(s ==  0, /* s + */ d*inv(sa),
++                            sa*(da - p.min(da, (da-d)*sa*p.rcp(s == 0, s))) + s*inv(da) + d*inv(sa)));
++}
++template <class P> SI F arm_colordodge(P& p, F s, F d, F sa, F da) {
++    return arm_sel(d ==  0, /* d + */ s*inv(da),
++           arm_sel(s == sa,    s +    d*inv(sa),
++                            sa*p.min(da, (d*sa)*p.rcp(s == sa, sa - s)) + s*inv(da) + d*inv(sa)));
++}
++#define SKRP_ARM_SEP_BODY(name)                                                         \
++    struct Arm_##name {                                                                 \
++        using Fast = ArmUncheckedSep;                                                   \
++        template <class P>                                                              \
++        static void run(P& p, F& r, F& g, F& b, F& a, F dr, F dg, F db, F da) {         \
++            p.dst_alpha(da);                                                            \
++            r = arm_##name(p, r, dr, a, da);                                            \
++            g = arm_##name(p, g, dg, a, da);                                            \
++            b = arm_##name(p, b, db, a, da);                                            \
++            a = p.mad(da, inv(a), a);                                                   \
++        }                                                                               \
++    };                                                                                  \
++    SKRP_ARM_VERIFIED_STAGE(name, Arm_##name)
++SKRP_ARM_SEP_BODY(colorburn)
++SKRP_ARM_SEP_BODY(colordodge)
++#undef SKRP_ARM_SEP_BODY
++#else
+ BLEND_MODE(colorburn) {
+     return if_then_else(d == da,    d +    s*inv(da),
+            if_then_else(s ==  0, /* s + */ d*inv(sa),
+@@ -2256,6 +2590,7 @@
+            if_then_else(s == sa,    s +    d*inv(sa),
+                                  sa*min(da, (d*sa)*rcp_fast(sa - s)) + s*inv(da) + d*inv(sa)));
+ }
++#endif
+ BLEND_MODE(hardlight) {
+     return s*inv(da) + d*inv(sa)
+          + if_then_else(two(s) <= sa, two(s*d), sa*da - two((da-d)*(sa-s)));
+@@ -2299,7 +2634,7 @@
+       sat = mx - mn;
+ 
+     // Map min channel to 0, max channel to s, and scale the middle proportionally.
+-    s = if_then_else(sat == 0.0f, 0.0f, s * rcp_fast(sat));
++    s = if_then_else(sat == 0.0f, 0.0f, s * rcp_fast_unless(sat == 0.0f, sat));
+     *r = (*r - mn) * s;
+     *g = (*g - mn) * s;
+     *b = (*b - mn) * s;
+@@ -2319,17 +2654,103 @@
+ SI void clip_color(F* r, F* g, F* b, F a) {
+     F   mn        = min(*r, min(*g, *b)),
+         mx        = max(*r, max(*g, *b)),
+-        l         = lum(*r, *g, *b),
+-        mn_scale  = (    l) * rcp_fast(l - mn),
+-        mx_scale  = (a - l) * rcp_fast(mx - l);
++        l         = lum(*r, *g, *b);
+     I32 clip_low  = cond_to_mask(mn < 0 && l != mn),
+         clip_high = cond_to_mask(mx > a && l != mx);
++    F   mn_scale  = (    l) * rcp_fast_unless(~clip_low,  l - mn),
++        mx_scale  = (a - l) * rcp_fast_unless(~clip_high, mx - l);
+ 
+     *r = clip_channel(*r, l, clip_low, clip_high, mn_scale, mx_scale);
+     *g = clip_channel(*g, l, clip_low, clip_high, mn_scale, mx_scale);
+     *b = clip_channel(*b, l, clip_low, clip_high, mn_scale, mx_scale);
+ }
+ 
++#if defined(SKRP_ARM_SEMANTICS)
++template <class P> SI F arm_sat(P& p, F r, F g, F b) { return p.max(r, p.max(g,b)) - p.min(r, p.min(g,b)); }
++template <class P> SI F arm_lum(P& p, F r, F g, F b) { return p.mad(r, 0.30f, p.mad(g, 0.59f, b*0.11f)); }
++
++template <class P> SI void arm_set_sat(P& p, F* r, F* g, F* b, F s) {
++    F mn  = p.min(*r, p.min(*g,*b)),
++      mx  = p.max(*r, p.max(*g,*b)),
++      sat = mx - mn;
++
++    // Map min channel to 0, max channel to s, and scale the middle proportionally.
++    s = arm_sel(sat == 0.0f, 0.0f, s * p.rcp(sat == 0.0f, sat));
++    *r = (*r - mn) * s;
++    *g = (*g - mn) * s;
++    *b = (*b - mn) * s;
++}
++template <class P> SI void arm_set_lum(P& p, F* r, F* g, F* b, F l) {
++    F diff = l - arm_lum(p, *r, *g, *b);
++    *r += diff;
++    *g += diff;
++    *b += diff;
++}
++template <class P> SI F arm_clip_channel(P& p, F c, F l, I32 clip_low, I32 clip_high, F mn_scale, F mx_scale) {
++    c = arm_sel(clip_low,  p.mad(mn_scale, c - l, l), c);
++    c = arm_sel(clip_high, p.mad(mx_scale, c - l, l), c);
++    c = p.max0(c);  // Sometimes without this we may dip just a little negative.
++    return c;
++}
++template <class P> SI void arm_clip_color(P& p, F* r, F* g, F* b, F a) {
++    F   mn        = p.min(*r, p.min(*g, *b)),
++        mx        = p.max(*r, p.max(*g, *b)),
++        l         = arm_lum(p, *r, *g, *b);
++    I32 clip_low  = cond_to_mask(mn < 0 && l != mn),
++        clip_high = cond_to_mask(mx > a && l != mx);
++    F   mn_scale  = (    l) * p.rcp(~clip_low,  l - mn),
++        mx_scale  = (a - l) * p.rcp(~clip_high, mx - l);
++
++    *r = arm_clip_channel(p, *r, l, clip_low, clip_high, mn_scale, mx_scale);
++    *g = arm_clip_channel(p, *g, l, clip_low, clip_high, mn_scale, mx_scale);
++    *b = arm_clip_channel(p, *b, l, clip_low, clip_high, mn_scale, mx_scale);
++}
++
++enum class ArmNonSep { Hue, Saturation, Color, Luminosity };
++template <ArmNonSep M, class P>
++SI void arm_nonsep_body(P& p, F& r, F& g, F& b, F& a, F dr, F dg, F db, F da) {
++    F R, G, B;
++    if constexpr (M == ArmNonSep::Hue) {
++        R = r*a;
++        G = g*a;
++        B = b*a;
++        arm_set_sat(p, &R, &G, &B, arm_sat(p, dr,dg,db)*a);
++        arm_set_lum(p, &R, &G, &B, arm_lum(p, dr,dg,db)*a);
++    } else if constexpr (M == ArmNonSep::Saturation) {
++        R = dr*a;
++        G = dg*a;
++        B = db*a;
++        arm_set_sat(p, &R, &G, &B, arm_sat(p,  r, g, b)*da);
++        arm_set_lum(p, &R, &G, &B, arm_lum(p, dr,dg,db)* a);  // (This is not redundant.)
++    } else if constexpr (M == ArmNonSep::Color) {
++        R = r*da;
++        G = g*da;
++        B = b*da;
++        arm_set_lum(p, &R, &G, &B, arm_lum(p, dr,dg,db)*a);
++    } else {
++        R = dr*a;
++        G = dg*a;
++        B = db*a;
++        arm_set_lum(p, &R, &G, &B, arm_lum(p, r,g,b)*da);
++    }
++    arm_clip_color(p, &R,&G,&B, a*da);
++
++    r = p.mad(r, inv(da), p.mad(dr, inv(a), R));
++    g = p.mad(g, inv(da), p.mad(dg, inv(a), G));
++    b = p.mad(b, inv(da), p.mad(db, inv(a), B));
++    a = a + p.nmad(a, da, da);
++}
++template <ArmNonSep M> struct ArmNonSepBody {
++    using Fast = ArmUncheckedNonSep;
++    template <class P> static void run(P& p, F& r, F& g, F& b, F& a, F dr, F dg, F db, F da) {
++        arm_nonsep_body<M>(p, r, g, b, a, dr, dg, db, da);
++    }
++};
++#endif  // SKRP_ARM_SEMANTICS
++
++#if defined(SKRP_ARM_SEMANTICS)
++SKRP_ARM_VERIFIED_STAGE(hue, ArmNonSepBody<ArmNonSep::Hue>)
++#else
+ HIGHP_STAGE(hue, NoCtx) {
+     F R = r*a,
+       G = g*a,
+@@ -2344,6 +2765,10 @@
+     b = mad(b, inv(da), mad(db, inv(a), B));
+     a = a + nmad(a, da, da);
+ }
++#endif
++#if defined(SKRP_ARM_SEMANTICS)
++SKRP_ARM_VERIFIED_STAGE(saturation, ArmNonSepBody<ArmNonSep::Saturation>)
++#else
+ HIGHP_STAGE(saturation, NoCtx) {
+     F R = dr*a,
+       G = dg*a,
+@@ -2358,6 +2783,10 @@
+     b = mad(b, inv(da), mad(db, inv(a), B));
+     a = a + nmad(a, da, da);
+ }
++#endif
++#if defined(SKRP_ARM_SEMANTICS)
++SKRP_ARM_VERIFIED_STAGE(color, ArmNonSepBody<ArmNonSep::Color>)
++#else
+ HIGHP_STAGE(color, NoCtx) {
+     F R = r*da,
+       G = g*da,
+@@ -2371,6 +2800,10 @@
+     b = mad(b, inv(da), mad(db, inv(a), B));
+     a = a + nmad(a, da, da);
+ }
++#endif
++#if defined(SKRP_ARM_SEMANTICS)
++SKRP_ARM_VERIFIED_STAGE(luminosity, ArmNonSepBody<ArmNonSep::Luminosity>)
++#else
+ HIGHP_STAGE(luminosity, NoCtx) {
+     F R = dr*a,
+       G = dg*a,
+@@ -2384,6 +2817,7 @@
+     b = mad(b, inv(da), mad(db, inv(a), B));
+     a = a + nmad(a, da, da);
+ }
++#endif
+ 
+ HIGHP_STAGE(srcover_rgba_8888, const SkRasterPipelineContexts::MemoryCtx* ctx) {
+     auto ptr = ptr_at_xy<uint32_t>(ctx, dx,dy);
+@@ -2410,7 +2844,11 @@
+     store(ptr, dst);
+ }
+ 
++#if defined(SKRP_ARM_SEMANTICS)
++SI F clamp_01_(F v) { return arm_f(neon_emu_clamp01_8(arm_m(v))); }
++#else
+ SI F clamp_01_(F v) { return min(max(0.0f, v), 1.0f); }
++#endif
+ 
+ HIGHP_STAGE(clamp_01, NoCtx) {
+     r = clamp_01_(r);
+@@ -5476,6 +5914,10 @@
+     // With NEON we can compute [2] just as fast as [3], so let's be correct.
+     // First we compute v + ((v+128)>>8), then one more round of (...+128)>>8 to finish up:
+     return vrshrq_n_u16(vrsraq_n_u16(v, v, 8), 8);
++#elif defined(SKRP_ARM_SEMANTICS)
++    // The same VRSRA and VRSHR, each a PAVGW in the lane width (SkNeonEmuWide.h).
++    static_assert(sizeof(U16) == 32, "lowp runs 16 lanes at AVX2's width");
++    return sk_bit_cast<U16>(neon_emu_div255_16(sk_bit_cast<__m256i>(v)));
+ #else
+     // Otherwise, use [3], which is never wrong by more than 1:
+     return (v+255)/256;
+@@ -5486,7 +5928,7 @@
+  * div255_accurate guarantees the right answer on all platforms, at the expense of performance.
+  */
+ SI U16 div255_accurate(U16 v) {
+-#if defined(SKRP_CPU_NEON)
++#if defined(SKRP_CPU_NEON) || defined(SKRP_ARM_SEMANTICS)
+     // Our NEON implementation of div255 is already correct for all inputs:
+     return div255(v);
+ #else
+@@ -5600,9 +6042,22 @@
+ 
+ SI U32 trunc_(F x) { return (U32)cast<I32>(x); }
+ 
++#if defined(SKRP_ARM_SEMANTICS)
++// A 16-lane float through an 8-lane AArch64 helper of the highp tier, a half
++// at a time.
++template <typename Fn> SI F arm_halves(F x, Fn fn) {
++    using F8 = SK_OPTS_NS::F;
++    F8 lo = fn(F8(__builtin_shufflevector(x, x, 0, 1, 2, 3, 4, 5, 6, 7))),
++       hi = fn(F8(__builtin_shufflevector(x, x, 8, 9, 10, 11, 12, 13, 14, 15)));
++    return __builtin_shufflevector(lo, hi, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15);
++}
++#endif
++
+ // Use approximate instructions and one Newton-Raphson step to calculate 1/x.
+ SI F rcp_precise(F x) {
+-#if defined(SKRP_CPU_ML4)
++#if defined(SKRP_ARM_SEMANTICS)
++    return arm_halves(x, [](SK_OPTS_NS::F v) { return SK_OPTS_NS::rcp_precise(v); });
++#elif defined(SKRP_CPU_ML4)
+     F e = _mm512_rcp14_ps(x);
+     return _mm512_fnmadd_ps(x, e, _mm512_set1_ps(2.0f)) * e;
+ #elif defined(SKRP_CPU_AVX2)
+@@ -5630,7 +6085,9 @@
+ #endif
+ }
+ SI F sqrt_(F x) {
+-#if defined(SKRP_CPU_ML4)
++#if defined(SKRP_ARM_SEMANTICS)
++    return arm_halves(x, [](SK_OPTS_NS::F v) { return SK_OPTS_NS::sqrt_(v); });
++#elif defined(SKRP_CPU_ML4)
+     return _mm512_sqrt_ps(x);
+ #elif defined(SKRP_CPU_AVX2)
+     __m256 lo,hi;
+@@ -5675,6 +6132,8 @@
+     float32x4_t lo,hi;
+     split(x, &lo,&hi);
+     return join<F>(vrndmq_f32(lo), vrndmq_f32(hi));
++#elif defined(SKRP_ARM_SEMANTICS)
++    return arm_halves(x, [](SK_OPTS_NS::F v) { return SK_OPTS_NS::floor_(v); });
+ #elif defined(SKRP_CPU_ML4)
+     return _mm512_floor_ps(x);
+ #elif defined(SKRP_CPU_AVX2)
+@@ -5705,7 +6164,15 @@
+ // The result is a number on [-1, 1).
+ // Note: on neon this is a saturating multiply while the others are not.
+ SI I16 scaled_mult(I16 a, I16 b) {
+-#if defined(SKRP_CPU_ML4)
++#if defined(SKRP_ARM_SEMANTICS)
++    // SQRDMULH saturates the one product PMULHRSW wraps.
++    return __builtin_shufflevector(
++            vqrdmulhq_s16(__builtin_shufflevector(a, a, 0, 1, 2, 3, 4, 5, 6, 7),
++                          __builtin_shufflevector(b, b, 0, 1, 2, 3, 4, 5, 6, 7)),
++            vqrdmulhq_s16(__builtin_shufflevector(a, a, 8, 9, 10, 11, 12, 13, 14, 15),
++                          __builtin_shufflevector(b, b, 8, 9, 10, 11, 12, 13, 14, 15)),
++            0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15);
++#elif defined(SKRP_CPU_ML4)
+     return (I16)_mm256_mulhrs_epi16((__m256i)a, (__m256i)b);
+ #elif defined(SKRP_CPU_AVX2)
+     return (I16)_mm256_mulhrs_epi16((__m256i)a, (__m256i)b);
 diff --git a/gfx/skia/skia/src/opts/SkSwizzler_opts.inc b/gfx/skia/skia/src/opts/SkSwizzler_opts.inc
 index e5c506b55e..695820d10b 100644
 --- a/gfx/skia/skia/src/opts/SkSwizzler_opts.inc
@@ -26854,14 +27682,15 @@ index d03c9f0b5d..dd84f90e94 100644
  av_vk_frame_alloc
  av_vk_get_optional_device_extensions
 diff --git a/media/ffvpx/libavutil/tx.c b/media/ffvpx/libavutil/tx.c
-index 54660c9079..ddd50454a1 100644
+index 54660c9079..57daf171b3 100644
 --- a/media/ffvpx/libavutil/tx.c
 +++ b/media/ffvpx/libavutil/tx.c
-@@ -344,13 +344,62 @@ static const FFTXCodelet * const * const codelet_list[] = {
+@@ -344,13 +344,75 @@
      ff_tx_null_list,
  #if HAVE_X86ASM
      ff_tx_codelet_list_float_x86,
 +    ff_tx_codelet_list_float_neonemu,
++    ff_tx_codelet_list_float_neonemu_fma,
  #endif
  #if ARCH_AARCH64
      ff_tx_codelet_list_float_aarch64,
@@ -26887,13 +27716,25 @@ index 54660c9079..ddd50454a1 100644
 +    tx_emulate_x86 = !!on;
 +}
 +
++#if HAVE_X86ASM
++/* The same codelets built for AVX2 and FMA (x86/tx_float_neonemu_fma.c),
++ * where FMLA is one instruction; the same bits. */
++static int tx_neonemu_fma(void)
++{
++    int need = AV_CPU_FLAG_AVX2 | AV_CPU_FLAG_FMA3;
++    return (av_get_cpu_flags() & need) == need;
++}
++#endif
++
 +static int tx_list_skipped(const FFTXCodelet * const * list)
 +{
 +#if HAVE_X86ASM
 +    if (list == ff_tx_codelet_list_float_x86)
 +        return tx_emulate_arm64;
 +    if (list == ff_tx_codelet_list_float_neonemu)
-+        return !tx_emulate_arm64;
++        return !tx_emulate_arm64 || tx_neonemu_fma();
++    if (list == ff_tx_codelet_list_float_neonemu_fma)
++        return !tx_emulate_arm64 || !tx_neonemu_fma();
 +#endif
 +#if ARCH_AARCH64
 +    if (list == ff_tx_codelet_list_float_aarch64)
@@ -26920,7 +27761,7 @@ index 54660c9079..ddd50454a1 100644
  static const int cpu_slow_mask = AV_CPU_FLAG_SSE2SLOW | AV_CPU_FLAG_SSE3SLOW  |
                                   AV_CPU_FLAG_ATOM     | AV_CPU_FLAG_SSSE3SLOW |
                                   AV_CPU_FLAG_AVXSLOW  | AV_CPU_FLAG_SLOW_GATHER;
-@@ -416,7 +465,7 @@ int ff_tx_decompose_length(int dst[TX_MAX_DECOMPOSITIONS], enum AVTXType type,
+@@ -416,7 +478,7 @@
      FFTXLenDecomp ld[TX_MAX_DECOMPOSITIONS];
      int codelet_list_idx = codelet_list_num;
  
@@ -26929,7 +27770,7 @@ index 54660c9079..ddd50454a1 100644
  
      /* Loop through all codelets in all codelet lists to find matches
       * to the requirements */
-@@ -424,6 +473,10 @@ int ff_tx_decompose_length(int dst[TX_MAX_DECOMPOSITIONS], enum AVTXType type,
+@@ -424,6 +486,10 @@
          const FFTXCodelet * const * list = codelet_list[codelet_list_idx];
          const FFTXCodelet *cd = NULL;
  
@@ -26940,7 +27781,7 @@ index 54660c9079..ddd50454a1 100644
          while ((cd = *list++)) {
              int fl = len;
              int skip = 0, prio;
-@@ -725,7 +778,7 @@ av_cold int ff_tx_init_subtx(AVTXContext *s, enum AVTXType type,
+@@ -725,7 +791,7 @@
  
      /* We still accept functions marked with SLOW, even if the CPU is
       * marked with the same flag, but we give them lower priority. */
@@ -26949,7 +27790,7 @@ index 54660c9079..ddd50454a1 100644
  
      /* Flags the transform wants */
      uint64_t req_flags = flags;
-@@ -753,6 +806,10 @@ av_cold int ff_tx_init_subtx(AVTXContext *s, enum AVTXType type,
+@@ -753,6 +819,10 @@
          const FFTXCodelet * const * list = codelet_list[codelet_list_idx];
          const FFTXCodelet *cd = NULL;
  
@@ -26986,30 +27827,34 @@ index c950095735..37621c995a 100644
   * Initialize a transform context with the given configuration
   * (i)MDCTs with an odd length are currently not supported.
 diff --git a/media/ffvpx/libavutil/tx_priv.h b/media/ffvpx/libavutil/tx_priv.h
-index d3fcdbf563..be8d29c27f 100644
+index d3fcdbf563..6fd35cb53c 100644
 --- a/media/ffvpx/libavutil/tx_priv.h
 +++ b/media/ffvpx/libavutil/tx_priv.h
-@@ -384,6 +384,8 @@ int ff_tx_mdct_gen_exp_int32 (AVTXContext *s, int *pre_tab);
+@@ -384,6 +384,9 @@
  extern const FFTXCodelet * const ff_tx_codelet_list_float_c       [];
  extern const FFTXCodelet * const ff_tx_codelet_list_float_x86     [];
  extern const FFTXCodelet * const ff_tx_codelet_list_float_aarch64 [];
 +extern const FFTXCodelet * const ff_tx_codelet_list_float_neonemu [];
++extern const FFTXCodelet * const ff_tx_codelet_list_float_neonemu_fma [];
 +extern const FFTXCodelet * const ff_tx_codelet_list_float_x86emu  [];
  
  extern const FFTXCodelet * const ff_tx_codelet_list_double_c      [];
  
 diff --git a/media/ffvpx/libavutil/x86/moz.build b/media/ffvpx/libavutil/x86/moz.build
-index 8a2116cdc4..8de0a5d45d 100644
+index 8a2116cdc4..e5a61666f2 100644
 --- a/media/ffvpx/libavutil/x86/moz.build
 +++ b/media/ffvpx/libavutil/x86/moz.build
-@@ -17,6 +17,7 @@ SOURCES += [
+@@ -17,7 +17,10 @@
      'pixelutils.asm',
      'tx_float.asm',
      'tx_float_init.c',
 +    'tx_float_neonemu.c',
++    'tx_float_neonemu_fma.c',
  ]
++SOURCES['tx_float_neonemu_fma.c'].flags += ['-mavx2', '-mfma']
  
  FINAL_LIBRARY = 'mozavutil'
+ 
 diff --git a/media/libopus/celt/arm/celt_x86emu.c b/media/libopus/celt/arm/celt_x86emu.c
 new file mode 100644
 index 0000000000..7d18005d74
@@ -27279,10 +28124,10 @@ index 07fa44abef..da78c9443c 100644
  #define op_pvq_search(x, iy, K, N, arch) \
      (op_pvq_search_c(x, iy, K, N, arch))
 diff --git a/media/libopus/celt/x86/vq_sse2.c b/media/libopus/celt/x86/vq_sse2.c
-index 4c4ebf8e2d..848c726b22 100644
+index 4c4ebf8e2d..a4be7cbc63 100644
 --- a/media/libopus/celt/x86/vq_sse2.c
 +++ b/media/libopus/celt/x86/vq_sse2.c
-@@ -37,10 +37,26 @@
+@@ -37,10 +37,24 @@
  #include "mathops.h"
  #include "vq.h"
  #include "x86cpu.h"
@@ -27296,20 +28141,18 @@ index 4c4ebf8e2d..848c726b22 100644
 +static __m128 estimate_as(__m128 v, int rsqrt)
 +{
 +   const uint32_t *table = opus_mozilla_cpu_estimates();
-+   uint32_t b[4];
-+   int i;
++   __m128i b;
 +   if (!table)
 +      return rsqrt ? _mm_rsqrt_ps(v) : _mm_rcp_ps(v);
-+   _mm_storeu_ps((float*)(void*)b, v);
-+   for (i=0;i<4;i++)
-+      b[i] = rsqrt ? sk_cpu_estimate_rsqrt(table, b[i]) : sk_cpu_estimate_rcp(table, b[i]);
-+   return _mm_loadu_ps((float*)(void*)b);
++   b = _mm_castps_si128(v);
++   b = rsqrt ? sk_cpu_estimate_rsqrt_sse2(table, b) : sk_cpu_estimate_rcp_sse2(table, b);
++   return _mm_castsi128_ps(b);
 +}
 +
  opus_val16 op_pvq_search_sse2(celt_norm *_X, int *iy, int K, int N, int arch)
  {
     int i, j;
-@@ -105,7 +121,7 @@ opus_val16 op_pvq_search_sse2(celt_norm *_X, int *iy, int K, int N, int arch)
+@@ -105,7 +119,7 @@
           sums = _mm_set_ps1(1.f);
        }
        /* Using K+e with e < 1 guarantees we cannot get more than K pulses. */
@@ -27318,7 +28161,7 @@ index 4c4ebf8e2d..848c726b22 100644
        xy4 = yy4 = _mm_setzero_ps();
        pulses_sum = _mm_setzero_si128();
        for (j=0;j<N;j+=4)
-@@ -170,7 +186,7 @@ opus_val16 op_pvq_search_sse2(celt_norm *_X, int *iy, int K, int N, int arch)
+@@ -170,7 +184,7 @@
           y4 = _mm_loadu_ps(&y[j]);
           x4 = _mm_add_ps(x4, xy4);
           y4 = _mm_add_ps(y4, yy4);
@@ -27437,18 +28280,19 @@ index ba8eafe6ad..f89b1e9d74 100644
  #endif
  
 diff --git a/media/libopus/celt/x86/x86cpu.c b/media/libopus/celt/x86/x86cpu.c
-index 2e7c32aeec..7ac5c476a9 100644
+index 2e7c32aeec..0c297d7462 100644
 --- a/media/libopus/celt/x86/x86cpu.c
 +++ b/media/libopus/celt/x86/x86cpu.c
-@@ -34,6 +34,7 @@
+@@ -34,6 +34,8 @@
  #include "main.h"
  #include "pitch.h"
  #include "x86cpu.h"
 +#include "opus_cpu_estimates.h"
++#include "x86/celt_neonemu.h"
  
  #if defined(OPUS_HAVE_RTCD) && \
    ((defined(OPUS_X86_MAY_HAVE_SSE) && !defined(OPUS_X86_PRESUME_SSE)) || \
-@@ -173,7 +174,11 @@ static int opus_select_arch_impl(void)
+@@ -173,7 +175,11 @@
  }
  
  int opus_select_arch(void) {
@@ -27461,11 +28305,28 @@ index 2e7c32aeec..7ac5c476a9 100644
  #ifdef FUZZING
      /* Randomly downgrade the architecture. */
      arch = rand()%(arch+1);
+@@ -181,4 +187,16 @@
+     return arch;
+ }
+ 
++#if defined(OPUS_X86_NEONEMU)
++/* Whether the emulated aarch64 kernels may run their AVX2/FMA build
++   (celt_neonemu.h): the CPU has what arch 4 (AVX2 with FMA) needs. */
++int celt_neonemu_use_fma(void) {
++    static int use = -1;
++    if (use < 0) {
++        use = opus_select_arch_impl() >= 4;
++    }
++    return use;
++}
++#endif
++
+ #endif
 diff --git a/media/libopus/moz.build b/media/libopus/moz.build
-index e140171d13..eaae48b464 100644
+index e140171d13..677f790ba7 100644
 --- a/media/libopus/moz.build
 +++ b/media/libopus/moz.build
-@@ -7,6 +7,7 @@ with Files("*"):
+@@ -7,6 +7,7 @@
  
  EXPORTS.opus += [
      "include/opus.h",
@@ -27473,7 +28334,7 @@ index e140171d13..eaae48b464 100644
      "include/opus_defines.h",
      "include/opus_multistream.h",
      "include/opus_types.h",
-@@ -70,6 +71,9 @@ LOCAL_INCLUDES += [
+@@ -70,6 +71,9 @@
      "src",
  ]
  
@@ -27483,7 +28344,7 @@ index e140171d13..eaae48b464 100644
  # sources.mozbuild is generated from gen-sources.py when a new libopus is
  # imported.
  include("sources.mozbuild")
-@@ -78,6 +82,7 @@ UNIFIED_SOURCES += celt_sources
+@@ -78,6 +82,7 @@
  UNIFIED_SOURCES += silk_sources
  UNIFIED_SOURCES += opus_sources
  SOURCES += opus_nonunified_sources
@@ -27491,23 +28352,27 @@ index e140171d13..eaae48b464 100644
  
  if CONFIG["MOZ_SAMPLE_TYPE_FLOAT32"]:
      UNIFIED_SOURCES += silk_sources_float
-@@ -98,6 +103,15 @@ if CONFIG["TARGET_CPU"] in ("x86", "x86_64"):
+@@ -98,6 +103,19 @@
      SOURCES += celt_sources_sse4_1
      SOURCES += silk_sources_x86_rtcd
      SOURCES += silk_sources_sse4_1
 +    # aarch64 kernels for general.cpu_identity = arm64
-+    SOURCES += ["celt/x86/celt_neonemu.c"]
++    SOURCES += ["celt/x86/celt_neonemu.c", "celt/x86/celt_neonemu_fma.c"]
++    # The same kernels with FMA as an instruction (celt_neonemu_use_fma()).
++    SOURCES["celt/x86/celt_neonemu_fma.c"].flags += ["-mavx2", "-mfma"]
 +    if CONFIG["TARGET_CPU"] == "x86_64" and CONFIG["MOZ_SAMPLE_TYPE_FLOAT32"]:
 +        # aarch64's inverse MDCT, translated from celt/arm/celt_tx_neon.S
 +        DEFINES["OPUS_X86_NEONEMU_MDCT"] = True
 +        SOURCES += [
 +            "celt/x86/celt_mdct_neonemu.c",
 +            "celt/x86/celt_tx_neonemu.c",
++            "celt/x86/celt_tx_neonemu_fma.c",
 +        ]
++        SOURCES["celt/x86/celt_tx_neonemu_fma.c"].flags += ["-mavx2", "-mfma"]
      if not CONFIG["MOZ_SAMPLE_TYPE_FLOAT32"]:
          SOURCES += silk_sources_fixed_sse4_1
      for f in SOURCES:
-@@ -153,6 +167,14 @@ if CONFIG["TARGET_CPU"] == "aarch64" and CONFIG["CC_TYPE"] in ("clang", "gcc"):
+@@ -153,6 +171,14 @@
      if CONFIG["MOZ_SAMPLE_TYPE_FLOAT32"]:
          DEFINES["OPUS_ARM_MAY_HAVE_NEON"] = True
          DEFINES["OPUS_ARM_MAY_HAVE_NEON_INTR"] = True

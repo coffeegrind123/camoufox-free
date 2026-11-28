@@ -32,11 +32,31 @@
 #include "src/opts/SkOpts_NeonEmuTarget.h"
 
 #include "src/opts/SkBitmapProcState_opts.h"
+#include "src/opts/SkNeonEmuAffine.h"
+
+#include <cstdlib>
+
+#if defined(SK_NEON_EMU_HSW) && defined(__AVX2__)
+static void S32_alpha_D32_filter_DXDY_avx2(const SkBitmapProcState& s,
+                                           const uint32_t* xy, int count, SkPMColor* colors) {
+    sk_neon_emu_filter_dxdy((const char*)s.fPixmap.addr(), s.fPixmap.rowBytes(), xy, count, colors,
+                            s.fAlphaScale);
+}
+#endif
 
 namespace SkOpts {
-    void Init_BitmapProcState_neonemu() {
-        S32_alpha_D32_filter_DX   = neonemu::S32_alpha_D32_filter_DX;
-        S32_alpha_D32_filter_DXDY = neonemu::S32_alpha_D32_filter_DXDY;
+    void SK_NEON_EMU_NAME(Init_BitmapProcState_neonemu)() {
+        S32_alpha_D32_filter_DX   = SK_OPTS_NS::S32_alpha_D32_filter_DX;
+        S32_alpha_D32_filter_DXDY = SK_OPTS_NS::S32_alpha_D32_filter_DXDY;
+#if defined(SK_NEON_EMU_HSW) && defined(__AVX2__)
+        // Rotated and skewed draws, 4 pixels at a time (SkNeonEmuAffine.h).
+        // MOZ_CAMOUFOX_ARM_RASTER_NARROW keeps the emulated ones, as it keeps
+        // the 4-wide pipeline, for cpu-arm-raster-wide to compare.
+        if (!getenv("MOZ_CAMOUFOX_ARM_RASTER_NARROW")) {
+            filter_affine_clamp = sk_neon_emu_filter_affine_clamp;
+            S32_alpha_D32_filter_DXDY = S32_alpha_D32_filter_DXDY_avx2;
+        }
+#endif
     }
 }  // namespace SkOpts
 
